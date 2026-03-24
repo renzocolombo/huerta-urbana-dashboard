@@ -1,15 +1,16 @@
 import { useState } from 'react';
-import { Leaf, Lock, User, AlertCircle } from 'lucide-react';
+import { Leaf, Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
 
-// Credenciales de acceso (mock)
-const USUARIO = 'admin';
-const CLAVE = 'huerta2024';
+// Credenciales de acceso
+const USUARIOS_VALIDOS = ['Renzo', 'Nati'];
+const CLAVE_VALIDA = 'huerta2026';
 
 export default function Login({ onLogin }) {
   const [usuario, setUsuario] = useState('');
   const [clave, setClave] = useState('');
   const [error, setError] = useState('');
   const [cargando, setCargando] = useState(false);
+  const [mostrarClave, setMostrarClave] = useState(false);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -17,7 +18,7 @@ export default function Login({ onLogin }) {
     setCargando(true);
     // Simular delay de autenticación
     setTimeout(() => {
-      if (usuario === USUARIO && clave === CLAVE) {
+      if (USUARIOS_VALIDOS.includes(usuario) && clave === CLAVE_VALIDA) {
         onLogin();
       } else {
         setError('Usuario o contraseña incorrectos');
@@ -59,8 +60,8 @@ export default function Login({ onLogin }) {
                   type="text"
                   value={usuario}
                   onChange={e => setUsuario(e.target.value)}
-                  placeholder="admin"
-                  className="w-full bg-[#111827] border border-gray-700 text-white rounded-lg pl-9 pr-4 py-2.5 text-sm transition-all"
+                  placeholder="Renzo"
+                  className="w-full bg-[#111827] border border-gray-700 text-white rounded-lg pl-9 pr-4 py-2.5 text-sm transition-all focus:border-green-500"
                   autoFocus
                 />
               </div>
@@ -72,13 +73,23 @@ export default function Login({ onLogin }) {
               <div className="relative">
                 <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
                 <input
-                  type="password"
+                  type={mostrarClave ? "text" : "password"}
                   value={clave}
                   onChange={e => setClave(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full bg-[#111827] border border-gray-700 text-white rounded-lg pl-9 pr-4 py-2.5 text-sm transition-all"
+                  className="w-full bg-[#111827] border border-gray-700 text-white rounded-lg pl-9 pr-10 py-2.5 text-sm transition-all focus:border-green-500"
                 />
+                <button
+                  type="button"
+                  onClick={() => setMostrarClave(!mostrarClave)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+                >
+                  {mostrarClave ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
               </div>
+              <p className="text-[10px] text-gray-500 mt-1.5 ml-1">
+                La contraseña distingue mayúsculas y minúsculas
+              </p>
             </div>
 
             {/* Error */}
@@ -101,7 +112,7 @@ export default function Login({ onLogin }) {
 
           {/* Hint */}
           <p className="text-center text-xs text-gray-600 mt-4">
-            admin / huerta2024
+            Renzo | Nati
           </p>
         </div>
 
