@@ -1,16 +1,38 @@
-# React + Vite
+# 🥦 Huerta Urbana Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Panel de administración para el negocio de frutas y verduras **Huerta Urbana**, Pilar, Buenos Aires.
 
-Currently, two official plugins are available:
+## Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **React 19** + **Vite 8**
+- **Tailwind CSS 3**
+- **Recharts** — gráficos
+- **Lucide React** — iconos
 
-## React Compiler
+## Funcionalidades
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- 🔐 Login con autenticación (admin / huerta2024)
+- 📊 Resumen con KPIs (pedidos, facturación, ganancia estimada 60%)
+- 📈 Gráficos: pedidos por día, facturación semanal, productos, localidades
+- 📦 Pedidos del día con alertas de pendientes >2h y botón WhatsApp
+- 🗂 Historial filtrable por fecha, localidad, producto y estado
+- 👥 Clientes únicos con historial de compras
+- 🗓 Agenda de entregas por día y localidad
+- 🗺 Ruta optimizada desde Tortuguitas + imprimir recorrido
+- 💰 Panel de costos editable con margen automático 60%
+- 📦 Control de stock semanal con alertas de alta demanda
+- 📄 Reportes exportables a PDF por período
+- 🤖 Asistente IA flotante con contexto del negocio
 
-## Expanding the ESLint configuration
+## Localidades
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Del Viso, Pilar, Manuel Alberti, Presidente Derqui, Villa Rosa, La Lonja, Zelaya, Fátima, Manzanares, Villa Astolfi, Manzone
+
+## Instalación
+
+```bash
+npm install
+npm run dev
+```
+
+Abrir en: http://localhost:5173
