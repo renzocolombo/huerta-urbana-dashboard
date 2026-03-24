@@ -60,7 +60,7 @@ export default function Login({ onLogin }) {
                   type="text"
                   value={usuario}
                   onChange={e => setUsuario(e.target.value)}
-                  placeholder="Renzo"
+                  placeholder="Usuario"
                   className="w-full bg-[#111827] border border-gray-700 text-white rounded-lg pl-9 pr-4 py-2.5 text-sm transition-all focus:border-green-500"
                   autoFocus
                 />
@@ -76,7 +76,7 @@ export default function Login({ onLogin }) {
                   type={mostrarClave ? "text" : "password"}
                   value={clave}
                   onChange={e => setClave(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="Contraseña"
                   className="w-full bg-[#111827] border border-gray-700 text-white rounded-lg pl-9 pr-10 py-2.5 text-sm transition-all focus:border-green-500"
                 />
                 <button
