@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { MapPin, Navigation, Printer } from 'lucide-react';
+import { MapPin, Navigation, Printer, AlertCircle } from 'lucide-react';
 import { PEDIDOS, HOY } from '../data/mockData';
 
 // Orden aproximado de zonas desde Tortuguitas, Pilar (distancia estimada)
@@ -25,7 +25,7 @@ export default function RutaOptimizada() {
 
   const imprimir = () => {
     const contenido = ruta
-      .map((p, i) => `${i + 1}. ${p.nombre} - ${p.direccion} (${p.localidad}) - ${p.producto} x${p.cantidades} - ${p.horario_entrega}`)
+      .map((p, i) => `${i + 1}. ${p.nombre} - ${p.direccion} (${p.localidad}) - ${p.producto} x${p.cantidades} - ${p.horario_entrega}${p.observaciones ? `\n   OBS: ${p.observaciones}` : ''}`)
       .join('\n');
     const win = window.open('', '_blank');
     win.document.write(`
@@ -39,6 +39,7 @@ export default function RutaOptimizada() {
           <strong>${i + 1}. ${p.nombre}</strong><br/>
           📍 ${p.direccion}<br/>
           🕐 ${p.horario_entrega} · 📦 ${p.producto} x${p.cantidades}
+          ${p.observaciones ? `<br/><span style="color:#b45309;font-size:0.9em;font-weight:bold;">⚠️ OBS: ${p.observaciones}</span>` : ''}
         </div>
       `).join('')}
       </body></html>
@@ -95,10 +96,16 @@ export default function RutaOptimizada() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="font-semibold text-white text-sm">{p.nombre}</p>
-                    <div className="flex items-center gap-1 mt-0.5">
+                    <div className="flex items-center gap-1 mt-0.5 mb-2">
                       <MapPin size={11} className="text-gray-500 shrink-0" />
                       <p className="text-xs text-gray-400 truncate">{p.direccion}</p>
                     </div>
+                    {p.observaciones && (
+                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5 flex items-start gap-2 mb-2">
+                        <AlertCircle size={14} className="text-amber-400 shrink-0 mt-0.5" />
+                        <p className="text-xs text-amber-200/90 leading-relaxed font-medium">"{p.observaciones}"</p>
+                      </div>
+                    )}
                   </div>
                   <span className="shrink-0 text-xs bg-[#111827] text-gray-400 border border-gray-700 px-2 py-0.5 rounded-lg">
                     {p.horario_entrega}
