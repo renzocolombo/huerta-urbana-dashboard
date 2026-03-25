@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { MapPin, ChevronRight } from 'lucide-react';
+import { MapPin, ChevronRight, Sun, Sunset } from 'lucide-react';
 import { PEDIDOS, HOY } from '../data/mockData';
 
 const DIAS_SEMANA = ['Martes', 'Jueves'];
@@ -8,23 +8,69 @@ export default function AgendaEntregas() {
   const [diaSeleccionado, setDiaSeleccionado] = useState(DIAS_SEMANA[0]);
 
   const agrupado = useMemo(() => {
-    // Agrupar todos los pedidos (no solo hoy) por dia_entrega → localidad
+    // Agrupar todos los pedidos por dia_entrega → turno → localidad
     const pedidosDia = PEDIDOS.filter(p => p.dia_entrega === diaSeleccionado);
-    const mapa = {};
+    
+    const mapa = {
+      Manana: {},
+      Tarde: {}
+    };
+
     pedidosDia.forEach(p => {
-      if (!mapa[p.localidad]) mapa[p.localidad] = [];
-      mapa[p.localidad].push(p);
+      // Determinamos turno según la hora de inicio (Mocks: 09:00, 12:00, 15:00, 18:00)
+      const horaInicio = parseInt(p.horario_entrega.split(':')[0], 10);
+      const isManana = isNaN(horaInicio) || horaInicio < 13; // < 13 hrs goes to Morning 
+      const turnoKey = isManana ? 'Manana' : 'Tarde';
+
+      if (!mapa[turnoKey][p.localidad]) mapa[turnoKey][p.localidad] = [];
+      mapa[turnoKey][p.localidad].push(p);
     });
     return mapa;
   }, [diaSeleccionado]);
 
-  const totalDia = Object.values(agrupado).flat().length;
+  const totalDia = Object.values(agrupado.Manana).flat().length + Object.values(agrupado.Tarde).flat().length;
+  const sinEntregas = Object.keys(agrupado.Manana).length === 0 && Object.keys(agrupado.Tarde).length === 0;
+
+  const renderLocalidades = (localidadesMap) => (
+    <div className="space-y-4">
+      {Object.entries(localidadesMap).map(([localidad, pedidos]) => (
+        <div key={localidad} className="bg-[#1f2937] border border-gray-800 rounded-2xl overflow-hidden fade-in">
+          {/* Header localidad */}
+          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800 bg-[#111827]/50">
+            <div className="flex items-center gap-2">
+              <MapPin size={15} className="text-green-400" />
+              <span className="font-semibold text-white text-sm">{localidad}</span>
+            </div>
+            <span className="text-xs bg-green-500/15 text-green-400 border border-green-500/30 px-2 py-0.5 rounded-full">
+              {pedidos.length} pedido{pedidos.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+
+          {/* Pedidos */}
+          <div className="divide-y divide-gray-800/50">
+            {pedidos.map(p => (
+              <div key={p.numero_pedido} className="flex items-center justify-between px-5 py-3 hover:bg-gray-800/20">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-white font-medium">{p.nombre}</p>
+                  <p className="text-xs text-gray-500 truncate">{p.direccion}</p>
+                </div>
+                <div className="text-right ml-4 shrink-0">
+                  <p className="text-xs text-gray-400 font-medium">{p.horario_entrega}</p>
+                  <p className="text-xs text-gray-600">{p.producto.slice(0,15)}...</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 
   return (
     <div>
       <div className="mb-6">
         <h2 className="text-xl font-bold text-white">Agenda de entregas</h2>
-        <p className="text-gray-500 text-sm mt-1">Pedidos agrupados por día y localidad</p>
+        <p className="text-gray-500 text-sm mt-1">Pedidos agrupados por turno y localidad</p>
       </div>
 
       {/* Tabs de días */}
@@ -48,43 +94,32 @@ export default function AgendaEntregas() {
         <span className="text-sm text-gray-400">{totalDia} pedidos para el {diaSeleccionado}</span>
       </div>
 
-      {Object.keys(agrupado).length === 0 ? (
+      {sinEntregas ? (
         <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-12 text-center">
           <MapPin size={32} className="text-gray-600 mx-auto mb-3" />
           <p className="text-gray-500">Sin entregas para este día</p>
         </div>
       ) : (
-        <div className="space-y-4">
-          {Object.entries(agrupado).map(([localidad, pedidos]) => (
-            <div key={localidad} className="bg-[#1f2937] border border-gray-800 rounded-2xl overflow-hidden fade-in">
-              {/* Header localidad */}
-              <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800 bg-[#111827]/50">
-                <div className="flex items-center gap-2">
-                  <MapPin size={15} className="text-green-400" />
-                  <span className="font-semibold text-white text-sm">{localidad}</span>
-                </div>
-                <span className="text-xs bg-green-500/15 text-green-400 border border-green-500/30 px-2 py-0.5 rounded-full">
-                  {pedidos.length} pedido{pedidos.length !== 1 ? 's' : ''}
-                </span>
-              </div>
-
-              {/* Pedidos */}
-              <div className="divide-y divide-gray-800/50">
-                {pedidos.map(p => (
-                  <div key={p.numero_pedido} className="flex items-center justify-between px-5 py-3 hover:bg-gray-800/20">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-white font-medium">{p.nombre}</p>
-                      <p className="text-xs text-gray-500 truncate">{p.direccion}</p>
-                    </div>
-                    <div className="text-right ml-4 shrink-0">
-                      <p className="text-xs text-gray-400 font-medium">{p.horario_entrega}</p>
-                      <p className="text-xs text-gray-600">{p.producto.slice(0,15)}...</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
+        <div className="space-y-8">
+          {Object.keys(agrupado.Manana).length > 0 && (
+            <div>
+              <h3 className="text-lg font-bold text-amber-500 mb-4 flex items-center gap-2">
+                <Sun size={20} />
+                Turno Mañana: 8 a 12 hs
+              </h3>
+              {renderLocalidades(agrupado.Manana)}
             </div>
-          ))}
+          )}
+
+          {Object.keys(agrupado.Tarde).length > 0 && (
+            <div>
+              <h3 className="text-lg font-bold text-indigo-400 mb-4 flex items-center gap-2">
+                <Sunset size={20} />
+                Turno Tarde: 14 a 18 hs
+              </h3>
+              {renderLocalidades(agrupado.Tarde)}
+            </div>
+          )}
         </div>
       )}
     </div>
