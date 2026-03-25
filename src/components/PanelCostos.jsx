@@ -169,6 +169,7 @@ export default function PanelCostos() {
 
   const guardarNuevoProd = () => {
     if (!tempProd.nombre) return alert("El nombre es obligatorio");
+    if (!tempProd.cantidadCajon || tempProd.cantidadCajon <= 0) return alert("Los Kilos por cajón son obligatorios");
     const nuevo = { 
       ...tempProd,
       id: Date.now(), 
@@ -563,7 +564,7 @@ export default function PanelCostos() {
                   </div>
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Cantidad</label>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Kilos por cajón</label>
                   <input 
                     type="number" 
                     value={tempProd.cantidadCajon}
