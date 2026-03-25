@@ -55,7 +55,17 @@ export default function PanelCostos() {
   const [montoMinimo, setMontoMinimo] = useState(45000);
   const [mensajeMinimo, setMensajeMinimo] = useState("Compra mínima $45.000 para envío sin cargo");
   const [publicando, setPublicando] = useState(false);
-  const [editandoProd, setEditandoProd] = useState(null);
+  
+  // Estados para el Modal de Combos
+  const [showModalCombo, setShowModalCombo] = useState(false);
+  const [comboEditando, setComboEditando] = useState(null);
+  const [tempCombo, setTempCombo] = useState({
+    nombre: '',
+    descripcion: '',
+    productos: [],
+    descuento: 0,
+    activo: true
+  });
 
   // Lógica de cálculo de precios
   const productosCalculados = useMemo(() => {
@@ -130,6 +140,51 @@ export default function PanelCostos() {
       precioJumbo: null, precioMaxManual: null, activo: true 
     };
     setProductos([...productos, nuevo]);
+  };
+
+  const abrirModalNuevo = () => {
+    setComboEditando(null);
+    setTempCombo({ nombre: '', descripcion: '', productos: [], descuento: 0, activo: true });
+    setShowModalCombo(true);
+  };
+
+  const abrirModalEditar = (combo) => {
+    setComboEditando(combo.id);
+    setTempCombo({ ...combo });
+    setShowModalCombo(true);
+  };
+
+  const guardarCombo = () => {
+    if (!tempCombo.nombre) return alert("El nombre es obligatorio");
+    
+    if (comboEditando) {
+      setCombos(prev => prev.map(c => c.id === comboEditando ? { ...tempCombo, id: c.id } : c));
+    } else {
+      setCombos([...combos, { ...tempCombo, id: Date.now() }]);
+    }
+    setShowModalCombo(false);
+  };
+
+  const eliminarCombo = (id) => {
+    if (window.confirm("¿Segur@ que querés eliminar este combo?")) {
+      setCombos(prev => prev.filter(c => c.id !== id));
+    }
+  };
+
+  const toggleProdEnCombo = (prodId) => {
+    const existe = tempCombo.productos.find(p => p.id === prodId);
+    if (existe) {
+      setTempCombo({ ...tempCombo, productos: tempCombo.productos.filter(p => p.id !== prodId) });
+    } else {
+      setTempCombo({ ...tempCombo, productos: [...tempCombo.productos, { id: prodId, cantidad: 1 }] });
+    }
+  };
+
+  const updateCantProdEnCombo = (prodId, cant) => {
+    setTempCombo({
+      ...tempCombo,
+      productos: tempCombo.productos.map(p => p.id === prodId ? { ...p, cantidad: Number(cant) } : p)
+    });
   };
 
   const publicar = () => {
@@ -298,7 +353,10 @@ export default function PanelCostos() {
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <ShoppingCart size={20} className="text-amber-500" /> ARMADOR DE COMBOS
             </h3>
-            <button className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white text-xs px-4 py-2 rounded-xl transition-all">
+            <button 
+              onClick={abrirModalNuevo}
+              className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white text-xs px-4 py-2 rounded-xl transition-all"
+            >
               <Plus size={16} /> Crear combo
             </button>
           </div>
@@ -308,6 +366,7 @@ export default function PanelCostos() {
                 <div className="flex justify-between items-start mb-3">
                   <div>
                     <h4 className="font-bold text-white text-md">{c.nombre}</h4>
+                    <p className="text-[10px] text-gray-500 italic mt-0.5">{c.descripcion || 'Sin descripción'}</p>
                     {c.alertaProdOff && (
                       <p className="flex items-center gap-1 text-[10px] text-amber-500 font-bold mt-1">
                         <AlertTriangle size={10} /> HAY PRODUCTOS INACTIVOS EN ESTE COMBO
@@ -315,10 +374,21 @@ export default function PanelCostos() {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-600">Off</span>
+                    <button 
+                      onClick={() => abrirModalEditar(c)}
+                      className="p-1.5 text-gray-500 hover:text-blue-400 transition-colors"
+                    >
+                      <Edit2 size={14} />
+                    </button>
+                    <button 
+                      onClick={() => eliminarCombo(c.id)}
+                      className="p-1.5 text-gray-500 hover:text-red-400 transition-colors"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                     <button 
                       onClick={() => setCombos(prev => prev.map(item => item.id === c.id ? {...item, activo: !item.activo} : item))}
-                      className={`w-8 h-4 rounded-full relative transition-all ${c.activo ? 'bg-amber-600' : 'bg-gray-800'}`}
+                      className={`w-8 h-4 rounded-full relative transition-all ml-2 ${c.activo ? 'bg-amber-600' : 'bg-gray-800'}`}
                     >
                       <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${c.activo ? 'right-0.5' : 'left-0.5'}`} />
                     </button>
@@ -395,6 +465,124 @@ function ResumenCard({ titulo, valor, sub, icon: Icon, color }) {
       <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">{titulo}</p>
       <p className="text-xl font-black text-white mt-1">{valor}</p>
       <p className="text-[10px] text-gray-600 font-medium mt-1">{sub}</p>
+      {/* MODAL COMBO */}
+      {showModalCombo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm shadow-2xl">
+          <div className="bg-[#1f2937] border border-gray-800 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col slide-in">
+            <div className="p-6 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
+              <h3 className="text-lg font-bold text-white">
+                {comboEditando ? 'EDITAR COMBO' : 'CREAR NUEVO COMBO'}
+              </h3>
+              <button onClick={() => setShowModalCombo(false)} className="text-gray-500 hover:text-white transition-colors">
+                <Trash2 size={20} />
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-8 space-y-6 custom-scrollbar">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Nombre del combo</label>
+                  <input 
+                    type="text" 
+                    value={tempCombo.nombre}
+                    onChange={(e) => setTempCombo({...tempCombo, nombre: e.target.value})}
+                    placeholder="Ej: Combo Semanal"
+                    className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3 text-sm focus:border-green-500 outline-none transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Descuento %</label>
+                  <input 
+                    type="number" 
+                    value={tempCombo.descuento}
+                    onChange={(e) => setTempCombo({...tempCombo, descuento: Number(e.target.value)})}
+                    className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3 text-sm focus:border-green-500 outline-none transition-all"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Descripción corta</label>
+                <input 
+                  type="text" 
+                  value={tempCombo.descripcion}
+                  onChange={(e) => setTempCombo({...tempCombo, descripcion: e.target.value})}
+                  placeholder="Ej: Fruta de estación para toda la semana"
+                  className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3 text-sm focus:border-green-500 outline-none transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-4">Seleccionar Productos</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
+                  {productosCalculados.map(p => {
+                    const seleccionado = tempCombo.productos.find(item => item.id === p.id);
+                    return (
+                      <div 
+                        key={p.id} 
+                        className={`flex items-center justify-between p-3 rounded-xl border transition-all ${seleccionado ? 'bg-green-500/10 border-green-500/30' : 'bg-[#111827] border-gray-800 hover:border-gray-700'}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input 
+                            type="checkbox" 
+                            checked={!!seleccionado} 
+                            onChange={() => toggleProdEnCombo(p.id)}
+                            className="accent-green-500 w-4 h-4"
+                          />
+                          <div>
+                            <p className="text-xs font-bold text-white">{p.nombre}</p>
+                            <p className="text-[10px] text-gray-600">{$$(p.precioFinal)}/{p.unidad}</p>
+                          </div>
+                        </div>
+                        {seleccionado && (
+                          <input 
+                            type="number" 
+                            value={seleccionado.cantidad}
+                            onChange={(e) => updateCantProdEnCombo(p.id, e.target.value)}
+                            className="w-12 bg-gray-900 border border-gray-700 text-white text-xs rounded px-1.5 py-1 text-center"
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Vista Previa Precio */}
+              <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Precio Final Estimado</p>
+                  <p className="text-3xl font-black text-amber-500">
+                    {$$(tempCombo.productos.reduce((sum, item) => {
+                      const p = productosCalculados.find(prod => prod.id === item.id);
+                      return sum + (p ? p.precioFinal * item.cantidad : 0);
+                    }, 0) * (1 - tempCombo.descuento / 100))}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Ahorro %</p>
+                  <p className="text-xl font-bold text-green-400">{tempCombo.descuento}%</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-gray-800 flex gap-3">
+              <button 
+                onClick={() => setShowModalCombo(false)}
+                className="flex-1 bg-gray-800 hover:bg-gray-700 text-white font-bold py-3 rounded-2xl transition-all"
+              >
+                Cancelar
+              </button>
+              <button 
+                onClick={guardarCombo}
+                className="flex-[2] bg-green-500 hover:bg-green-400 text-white font-bold py-3 rounded-2xl transition-all shadow-lg shadow-green-500/20 flex items-center justify-center gap-2"
+              >
+                <Save size={18} /> Guardar Combo
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
