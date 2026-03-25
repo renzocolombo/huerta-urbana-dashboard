@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, CheckCircle, Sun, Sunset, Printer, FileText, User } from 'lucide-react';
+import { MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, CheckCircle, Sun, Sunset, Printer, FileText, User, Clock } from 'lucide-react';
 import { PEDIDOS, HOY } from '../data/mockData';
 
 const DIAS_SEMANA = ['Martes', 'Jueves'];
