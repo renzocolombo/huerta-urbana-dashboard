@@ -1,8 +1,10 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { 
   Plus, Edit2, Check, Trash2, Package, ShoppingCart, 
-  Settings, TrendingUp, AlertTriangle, Save, Globe, Lock
+  Settings, TrendingUp, AlertTriangle, Save, Globe, Lock, X
 } from 'lucide-react';
+
+const STORAGE_KEY = 'huerta_data_costos_v1';
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
@@ -44,27 +46,54 @@ const PRODUCTOS_INICIALES = [
   { id: 31, nombre: 'Miel pura', categoria: 'Otro', cantidadCajon: 1, unidad: 'kg', precioCajon: 8000, margen: 60, precioJumbo: null, precioMaxManual: 11000, activo: true },
 ];
 
+const COMBOS_INICIALES = [
+  { id: 101, nombre: 'Combo Familiar', productos: [], descuento: 0, activo: true },
+  { id: 102, nombre: 'Combo Premium', productos: [], descuento: 0, activo: true },
+  { id: 103, nombre: 'Combo Básico', productos: [], descuento: 0, activo: true },
+  { id: 104, nombre: 'Combo Fit', productos: [], descuento: 0, activo: true },
+];
+
 export default function PanelCostos() {
-  const [productos, setProductos] = useState(PRODUCTOS_INICIALES);
-  const [combos, setCombos] = useState([
-    { id: 101, nombre: 'Combo Familiar', productos: [], descuento: 0, activo: true },
-    { id: 102, nombre: 'Combo Premium', productos: [], descuento: 0, activo: true },
-    { id: 103, nombre: 'Combo Básico', productos: [], descuento: 0, activo: true },
-    { id: 104, nombre: 'Combo Fit', productos: [], descuento: 0, activo: true },
-  ]);
-  const [montoMinimo, setMontoMinimo] = useState(45000);
-  const [mensajeMinimo, setMensajeMinimo] = useState("Compra mínima $45.000 para envío sin cargo");
+  // Persistencia: Inicialización
+  const [productos, setProductos] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY + '_productos');
+    return saved ? JSON.parse(saved) : PRODUCTOS_INICIALES;
+  });
+  const [combos, setCombos] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY + '_combos');
+    return saved ? JSON.parse(saved) : COMBOS_INICIALES;
+  });
+  const [montoMinimo, setMontoMinimo] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY + '_minimo');
+    return saved ? JSON.parse(saved) : 45000;
+  });
+  const [mensajeMinimo, setMensajeMinimo] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY + '_msg');
+    return saved ? JSON.parse(saved) : "Compra mínima $45.000 para envío sin cargo";
+  });
+
+  // Persistencia: Autoguardado
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY + '_productos', JSON.stringify(productos));
+    localStorage.setItem(STORAGE_KEY + '_combos', JSON.stringify(combos));
+    localStorage.setItem(STORAGE_KEY + '_minimo', JSON.stringify(montoMinimo));
+    localStorage.setItem(STORAGE_KEY + '_msg', JSON.stringify(mensajeMinimo));
+  }, [productos, combos, montoMinimo, mensajeMinimo]);
+
   const [publicando, setPublicando] = useState(false);
   
+  // Estados para el Modal de Producto
+  const [showModalProd, setShowModalProd] = useState(false);
+  const [tempProd, setTempProd] = useState({
+    nombre: '', categoria: 'Verdura', cantidadCajon: 1, unidad: 'kg', 
+    precioCajon: 0, margen: 60, precioMaxManual: ''
+  });
+
   // Estados para el Modal de Combos
   const [showModalCombo, setShowModalCombo] = useState(false);
   const [comboEditando, setComboEditando] = useState(null);
   const [tempCombo, setTempCombo] = useState({
-    nombre: '',
-    descripcion: '',
-    productos: [],
-    descuento: 0,
-    activo: true
+    nombre: '', descripcion: '', productos: [], descuento: 0, activo: true
   });
 
   // Lógica de cálculo de precios
@@ -134,12 +163,31 @@ export default function PanelCostos() {
   };
 
   const agregarProducto = () => {
+    setTempProd({ nombre: '', categoria: 'Verdura', cantidadCajon: 1, unidad: 'kg', precioCajon: 0, margen: 60, precioMaxManual: '' });
+    setShowModalProd(true);
+  };
+
+  const guardarNuevoProd = () => {
+    if (!tempProd.nombre) return alert("El nombre es obligatorio");
     const nuevo = { 
-      id: Date.now(), nombre: 'Nuevo producto', categoria: 'Verdura', 
-      cantidadCajon: 1, unidad: 'kg', precioCajon: 0, margen: 60, 
-      precioJumbo: null, precioMaxManual: null, activo: true 
+      ...tempProd,
+      id: Date.now(), 
+      precioMaxManual: tempProd.precioMaxManual !== '' ? Number(tempProd.precioMaxManual) : null,
+      precioJumbo: null,
+      activo: true 
     };
     setProductos([...productos, nuevo]);
+    setShowModalProd(false);
+  };
+
+  const eliminarProducto = (id) => {
+    if (window.confirm("¿Eliminar este producto?")) {
+      setProductos(prev => prev.filter(p => p.id !== id));
+      // También limpiarlo de combos
+      setCombos(prev => prev.map(c => ({
+        ...c, productos: c.productos.filter(cp => cp.id !== id)
+      })));
+    }
   };
 
   const abrirModalNuevo = () => {
@@ -274,11 +322,21 @@ export default function PanelCostos() {
                   <td className="px-6 py-4 text-gray-400">
                     <input 
                       type="number" 
-                      className="bg-gray-900 border border-gray-800 rounded-lg w-16 px-1 mb-1 focus:border-green-500 outline-none"
+                      className="bg-gray-900 border border-gray-800 rounded-lg w-20 px-2 py-1 mb-1 focus:border-green-500 outline-none text-white block"
                       value={p.precioCajon}
                       onChange={(e) => actualizarProducto(p.id, 'precioCajon', Number(e.target.value))}
-                    /> $ <br/>
-                    {p.cantidadCajon} {p.unidad}
+                      title="Precio Cajón"
+                    />
+                    <div className="flex items-center gap-1 mt-1">
+                      <input 
+                        type="number" 
+                        className="bg-gray-900 border border-gray-800 rounded-lg w-12 px-1 focus:border-green-500 outline-none text-white"
+                        value={p.cantidadCajon}
+                        onChange={(e) => actualizarProducto(p.id, 'cantidadCajon', Number(e.target.value))}
+                        title="Cantidad por cajón"
+                      />
+                      <span className="text-[10px] text-gray-500 tracking-tighter uppercase">{p.unidad}</span>
+                    </div>
                   </td>
                   <td className="px-6 py-4 font-mono text-gray-400">{$$(p.costoUnitario.toFixed(0))}</td>
                   <td className="px-6 py-4">
@@ -331,12 +389,19 @@ export default function PanelCostos() {
                     </span>
                   </td>
                   <td className="px-6 py-4 font-mono text-gray-500">+$ {p.gananciaUnidad.toFixed(0)}</td>
-                  <td className="px-6 py-4">
+                  <td className="px-6 py-4 flex items-center gap-3">
                     <button 
                       onClick={() => actualizarProducto(p.id, 'activo', !p.activo)}
-                      className={`w-10 h-5 rounded-full transition-all relative ${p.activo ? 'bg-green-600' : 'bg-gray-700'}`}
+                      className={`w-10 h-5 shrink-0 rounded-full transition-all relative ${p.activo ? 'bg-green-600' : 'bg-gray-700'}`}
                     >
                       <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${p.activo ? 'right-1' : 'left-1'}`} />
+                    </button>
+                    <button
+                      onClick={() => eliminarProducto(p.id)}
+                      className="p-1.5 text-gray-500 hover:text-red-400 transition-colors"
+                      title="Eliminar producto"
+                    >
+                      <Trash2 size={16} />
                     </button>
                   </td>
                 </tr>
@@ -446,6 +511,155 @@ export default function PanelCostos() {
           </div>
         </div>
       </div>
+
+      {/* MODAL PRODUCTO */}
+      {showModalProd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm shadow-2xl">
+          <div className="bg-[#1f2937] border border-gray-800 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col slide-in">
+            <div className="p-6 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
+              <h3 className="text-lg font-bold text-white">AGREGAR NUEVO PRODUCTO</h3>
+              <button onClick={() => setShowModalProd(false)} className="text-gray-500 hover:text-white transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-8 space-y-6 custom-scrollbar">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Nombre del producto</label>
+                  <input 
+                    type="text" 
+                    value={tempProd.nombre}
+                    onChange={(e) => setTempProd({...tempProd, nombre: e.target.value})}
+                    placeholder="Ej: Papa Blanca"
+                    className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3 text-sm focus:border-green-500 outline-none transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Categoría</label>
+                  <select 
+                    value={tempProd.categoria}
+                    onChange={(e) => setTempProd({...tempProd, categoria: e.target.value})}
+                    className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3 text-sm focus:border-green-500 outline-none transition-all"
+                  >
+                    <option value="Verdura">Verdura</option>
+                    <option value="Fruta">Fruta</option>
+                    <option value="Otro">Otro</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Precio del Cajón / Unidad Mayor</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-500 font-bold">$</span>
+                    <input 
+                      type="number" 
+                      value={tempProd.precioCajon}
+                      onChange={(e) => setTempProd({...tempProd, precioCajon: Number(e.target.value)})}
+                      className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3 text-sm focus:border-green-500 outline-none transition-all"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Cantidad</label>
+                  <input 
+                    type="number" 
+                    value={tempProd.cantidadCajon}
+                    onChange={(e) => setTempProd({...tempProd, cantidadCajon: Number(e.target.value)})}
+                    className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3 text-sm focus:border-green-500 outline-none transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Unidad</label>
+                  <select 
+                    value={tempProd.unidad}
+                    onChange={(e) => setTempProd({...tempProd, unidad: e.target.value})}
+                    className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3 text-sm focus:border-green-500 outline-none transition-all"
+                  >
+                    <option value="kg">kg</option>
+                    <option value="unidad">unidad</option>
+                    <option value="bandeja">bandeja</option>
+                    <option value="maple">maple</option>
+                    <option value="litro">litro</option>
+                    <option value="atado">atado</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Margen deseado %</label>
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="number" 
+                      value={tempProd.margen}
+                      onChange={(e) => setTempProd({...tempProd, margen: Number(e.target.value)})}
+                      className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3 text-sm focus:border-green-500 outline-none transition-all"
+                    />
+                    <span className="text-gray-500 font-bold">%</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Tope Máximo Manual (Opcional)</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-500 font-bold">$</span>
+                    <input 
+                      type="number" 
+                      value={tempProd.precioMaxManual}
+                      onChange={(e) => setTempProd({...tempProd, precioMaxManual: e.target.value})}
+                      placeholder="Sin tope"
+                      className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3 text-sm focus:border-amber-500 outline-none transition-all"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Vista Previa Cálculos */}
+              <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50">
+                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-4">Proyección en tiempo real</p>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Costo Unitario</p>
+                    <p className="text-lg font-bold text-gray-300">{$$(tempProd.precioCajon / tempProd.cantidadCajon || 0)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Precio Venta (Est.)</p>
+                    <p className="text-lg font-bold text-blue-400">
+                      {$$( (tempProd.precioCajon / tempProd.cantidadCajon || 0) * (1 + tempProd.margen / 100) )}
+                    </p>
+                  </div>
+                  <div className="text-right border-l border-gray-800 pl-4">
+                    <p className="text-[10px] text-green-500 font-bold uppercase mb-1">Margen Real</p>
+                    <p className="text-xl font-black text-green-400">
+                      {tempProd.precioMaxManual && Number(tempProd.precioMaxManual) < ((tempProd.precioCajon / tempProd.cantidadCajon) * (1+tempProd.margen/100))
+                        ? (((Number(tempProd.precioMaxManual) - (tempProd.precioCajon / tempProd.cantidadCajon)) / Number(tempProd.precioMaxManual))*100).toFixed(1)
+                        : tempProd.margen}%
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-gray-800 flex gap-3">
+              <button 
+                onClick={() => setShowModalProd(false)}
+                className="flex-1 bg-gray-800 hover:bg-gray-700 text-white font-bold py-3 rounded-2xl transition-all"
+              >
+                Cancelar
+              </button>
+              <button 
+                onClick={guardarNuevoProd}
+                className="flex-[2] bg-green-500 hover:bg-green-400 text-white font-bold py-3 rounded-2xl transition-all shadow-lg shadow-green-500/20 flex items-center justify-center gap-2"
+              >
+                <Save size={18} /> Guardar Producto
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL COMBO */}
       {showModalCombo && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm shadow-2xl">
