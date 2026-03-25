@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { MapPin, ChevronRight } from 'lucide-react';
 import { PEDIDOS, HOY } from '../data/mockData';
 
-const DIAS_SEMANA = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+const DIAS_SEMANA = ['Martes', 'Jueves'];
 
 export default function AgendaEntregas() {
   const [diaSeleccionado, setDiaSeleccionado] = useState(DIAS_SEMANA[0]);
