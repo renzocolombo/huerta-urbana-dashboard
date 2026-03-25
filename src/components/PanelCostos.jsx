@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { 
   Plus, Edit2, Check, Trash2, Package, ShoppingCart, 
-  Settings, TrendingUp, AlertTriangle, Save, Globe 
+  Settings, TrendingUp, AlertTriangle, Save, Globe, Lock
 } from 'lucide-react';
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
@@ -385,7 +385,7 @@ function ResumenCard({ titulo, valor, sub, icon: Icon, color }) {
     green: 'bg-green-500/10 text-green-500 border-green-500/20',
     blue: 'bg-blue-500/10 text-blue-500 border-blue-500/20',
     amber: 'bg-amber-500/10 text-amber-500 border-amber-500/20',
-    purple: 'bg-purple-500/10 text-purple-512 border-purple-500/20',
+    purple: 'bg-purple-500/10 text-purple-500 border-purple-500/20',
   };
   return (
     <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-5 hover:border-gray-700 transition-all group">
