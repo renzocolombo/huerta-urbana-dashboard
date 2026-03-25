@@ -1,5 +1,4 @@
-import { useState, useMemo } from 'react';
-import { ShoppingCart, TrendingUp, Calendar, DollarSign, ArrowUp, ArrowDown, Settings2, Package, Percent } from 'lucide-react';
+import { ShoppingCart, TrendingUp, Calendar, DollarSign, ArrowUp, ArrowDown, Settings2, Package, Percent, Edit2 } from 'lucide-react';
 import { HOY, PEDIDOS } from '../data/mockData';
 
 // Formatea moneda argentina
@@ -186,21 +185,62 @@ export default function Resumen() {
               <span className="text-gray-400">Facturación Bruta (Ventas Mes)</span>
               <span className="font-mono text-white">{$$(stats.facturacionMesBruta)}</span>
             </div>
-            <div className="flex justify-between items-center text-sm">
-              <span className="text-gray-400 flex items-center gap-2">Comisión MP ({config.comisionMP}%)</span>
-              <span className="font-mono text-red-400/80">- {$$(stats.comisionMPTotal)}</span>
+            
+            {/* Comisión MP Editable */}
+            <div className="flex justify-between items-center text-sm group">
+              <span className="text-gray-400 flex items-center gap-2">
+                Comisión MP
+                <button 
+                  onClick={() => setShowConfig(true)} 
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-800 rounded transition-all text-gray-500"
+                  title="Editar en panel"
+                >
+                  <Edit2 size={12} />
+                </button>
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-600">({config.comisionMP}%)</span>
+                <span className="font-mono text-red-400/80">- {$$(stats.comisionMPTotal)}</span>
+              </div>
             </div>
+
+            {/* Costo Bolsas Editable */}
+            <div className="flex justify-between items-center text-sm group">
+              <span className="text-gray-400 flex items-center gap-2">
+                Bolsas y Bandejas
+                <button 
+                  onClick={() => setShowConfig(true)} 
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-800 rounded transition-all text-gray-500"
+                  title="Editar en panel"
+                >
+                  <Edit2 size={12} />
+                </button>
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-600">({$$(config.costobolsas)} p/ped)</span>
+                <span className="font-mono text-red-400/80">- {$$(stats.costoInsumosTotal)}</span>
+              </div>
+            </div>
+
+            {/* Monotributo Editable */}
+            <div className="flex justify-between items-center text-sm group">
+              <span className="text-gray-400 flex items-center gap-2">
+                Monotributo Mensual
+                <button 
+                  onClick={() => setShowConfig(true)} 
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-800 rounded transition-all text-gray-500"
+                  title="Editar en panel"
+                >
+                  <Edit2 size={12} />
+                </button>
+              </span>
+              <span className="font-mono text-red-400/80">- {$$(config.monotributo)}</span>
+            </div>
+
+            {/* Costo Mercadería (No editable por ahora según pedido, pero visible) */}
             <div className="flex justify-between items-center text-sm">
               <span className="text-gray-400">Costo Mercadería (Inversión)</span>
               <span className="font-mono text-red-400/80">- {$$(stats.costoMercaderiaTotal)}</span>
-            </div>
-            <div className="flex justify-between items-center text-sm">
-              <span className="text-gray-400 flex items-center gap-2">Bolsas y Bandejas ({$$(config.costobolsas)} p/ped)</span>
-              <span className="font-mono text-red-400/80">- {$$(stats.costoInsumosTotal)}</span>
-            </div>
-            <div className="flex justify-between items-center text-sm">
-              <span className="text-gray-400">Monotributo Mensual</span>
-              <span className="font-mono text-red-400/80">- {$$(config.monotributo)}</span>
             </div>
           </div>
 

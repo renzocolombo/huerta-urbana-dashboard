@@ -446,25 +446,6 @@ export default function PanelCostos() {
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function ResumenCard({ titulo, valor, sub, icon: Icon, color }) {
-  const colors = {
-    green: 'bg-green-500/10 text-green-500 border-green-500/20',
-    blue: 'bg-blue-500/10 text-blue-500 border-blue-500/20',
-    amber: 'bg-amber-500/10 text-amber-500 border-amber-500/20',
-    purple: 'bg-purple-500/10 text-purple-500 border-purple-500/20',
-  };
-  return (
-    <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-5 hover:border-gray-700 transition-all group">
-      <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-4 border ${colors[color]}`}>
-        <Icon size={18} />
-      </div>
-      <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">{titulo}</p>
-      <p className="text-xl font-black text-white mt-1">{valor}</p>
-      <p className="text-[10px] text-gray-600 font-medium mt-1">{sub}</p>
       {/* MODAL COMBO */}
       {showModalCombo && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm shadow-2xl">
@@ -583,6 +564,25 @@ function ResumenCard({ titulo, valor, sub, icon: Icon, color }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ResumenCard({ titulo, valor, sub, icon: Icon, color }) {
+  const colors = {
+    green: 'bg-green-500/10 text-green-500 border-green-500/20',
+    blue: 'bg-blue-500/10 text-blue-500 border-blue-500/20',
+    amber: 'bg-amber-500/10 text-amber-500 border-amber-500/20',
+    purple: 'bg-purple-500/10 text-purple-500 border-purple-500/20',
+  };
+  return (
+    <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-5 hover:border-gray-700 transition-all group">
+      <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-4 border ${colors[color]}`}>
+        <Icon size={18} />
+      </div>
+      <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">{titulo}</p>
+      <p className="text-xl font-black text-white mt-1">{valor}</p>
+      <p className="text-[10px] text-gray-600 font-medium mt-1">{sub}</p>
     </div>
   );
 }
