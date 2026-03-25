@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Leaf, LayoutDashboard, ShoppingCart, Clock, Users, MapPin, Route, DollarSign, Package, FileText, Menu, X, LogOut } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -107,6 +108,3 @@ export default function Header({ seccion, onNav, onLogout }) {
     </>
   );
 }
-
-// Import faltante — se importa acá para mantener el componente compacto
-import { useState } from 'react';

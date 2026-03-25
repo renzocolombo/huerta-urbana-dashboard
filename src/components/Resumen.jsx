@@ -1,3 +1,4 @@
+import { useState, useMemo } from 'react';
 import { ShoppingCart, TrendingUp, Calendar, DollarSign, ArrowUp, ArrowDown, Settings2, Package, Percent, Edit2 } from 'lucide-react';
 import { HOY, PEDIDOS } from '../data/mockData';
 
