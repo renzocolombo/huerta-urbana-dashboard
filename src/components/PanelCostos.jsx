@@ -226,7 +226,7 @@ export default function PanelCostos() {
           className="flex items-center gap-2 bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white font-bold px-6 py-3 rounded-2xl transition-all shadow-lg hover:shadow-green-500/20"
         >
           {publicando ? <Settings className="animate-spin" size={20} /> : <Globe size={20} />}
-          Publicar precios.json
+          {publicando ? 'Publicando...' : 'Publicar precios'}
         </button>
       </div>
 
