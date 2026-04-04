@@ -189,15 +189,16 @@ export default function AgendaEntregas({ rol }) {
             };
             const conf = configEstado[estadoActual] || configEstado.pendiente;
 
+            // Estética Rider Premium (Aura de Color Total)
             let riderBg = '';
             if (rol === 'repartidor') {
-              if (estadoActual === 'entregado') riderBg = 'bg-[#dcfce7] text-black border-green-200';
-              else if (estadoActual === 'no_entregado') riderBg = 'bg-[#fee2e2] text-black border-red-200';
-              else riderBg = 'bg-[#fef9c3] text-black border-yellow-200'; // Preparado default
+              if (estadoActual === 'entregado') riderBg = 'bg-green-500/15 border-green-500/40 text-green-400';
+              else if (estadoActual === 'no_entregado') riderBg = 'bg-red-500/15 border-red-500/40 text-red-500';
+              else riderBg = 'bg-amber-500/15 border-amber-500/40 text-amber-500'; // Dorado Premium (Oro)
             }
 
             return (
-              <div key={p.numero_pedido} className={`transition-all duration-300 rounded-2xl overflow-hidden border ${riderBg || conf.bg} ${isOpen ? 'ring-1 ring-white/10' : (riderBg ? '' : conf.border)} ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'opacity-80' : ''}`}>
+              <div key={p.numero_pedido} className={`transition-all duration-300 rounded-2xl overflow-hidden border ${riderBg || (conf.bg + ' ' + conf.border)} ${isOpen ? 'ring-2 ring-white/10' : ''} ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'opacity-80' : ''}`}>
                 <div className="px-4 py-4 flex items-center justify-between cursor-pointer" onClick={() => toggleAcordeon(p.numero_pedido)}>
                   <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${riderBg ? 'bg-white/40 border-black/10' : 'bg-black/40 border-white/10'}`}>
@@ -205,17 +206,17 @@ export default function AgendaEntregas({ rol }) {
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <p className={`font-bold ${riderBg ? 'text-black text-lg' : 'text-white text-sm'} ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'text-gray-400 line-through decoration-green-500/50' : ''}`}>
+                        <p className={`font-bold ${riderBg ? 'text-lg' : 'text-sm'} ${riderBg ? 'text-inherit' : 'text-white'} ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'text-gray-400 line-through decoration-green-500/50' : ''}`}>
                           {p.nombre}
                         </p>
-                        <span className={`text-[10px] font-black uppercase px-1.5 py-0.5 rounded border ${riderBg ? 'border-black/20 text-black/80 bg-white/40' : (conf.color + ' ' + conf.border + ' bg-black/20')}`}>
+                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border ${riderBg ? 'bg-transparent border-current opacity-80' : (conf.color + ' ' + conf.border + ' bg-black/20')}`}>
                           {conf.icon} {conf.label}
                         </span>
                       </div>
-                      <p className={`text-[11px] ${riderBg ? 'text-black/60' : 'text-gray-500'}`}>{p.direccion} • {p.localidad}</p>
+                      <p className={`text-[11px] font-medium ${riderBg ? 'opacity-80' : 'text-gray-500'}`}>{p.direccion} • {p.localidad}</p>
                     </div>
                   </div>
-                  <div className={riderBg ? 'text-black' : 'text-gray-500'}>{isOpen ? <ChevronUp /> : <ChevronDown />}</div>
+                  <div className={riderBg ? 'text-inherit' : 'text-gray-500'}>{isOpen ? <ChevronUp /> : <ChevronDown />}</div>
                 </div>
 
                 {isOpen && (
@@ -239,12 +240,20 @@ export default function AgendaEntregas({ rol }) {
                     </div>
 
                     {rol === 'repartidor' ? (
-                      <div className="flex gap-3 pt-2">
-                        <button onClick={() => actualizarEstado(p.numero_pedido, 'entregado')} className={`flex-1 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-md transition-all active:scale-95 ${estadoActual === 'entregado' ? 'bg-green-600 text-white' : 'bg-green-500 text-white'}`}>
-                          ✅ Entregado
+                      <div className="flex justify-center gap-4 pt-4 border-t border-white/5">
+                        <button 
+                          onClick={() => actualizarEstado(p.numero_pedido, 'entregado')} 
+                          className={`w-14 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 shadow-lg transition-all active:scale-95 ${estadoActual === 'entregado' ? 'bg-green-500 text-white shadow-green-500/30 ring-2 ring-white/20' : 'bg-gray-800 text-green-400 border border-green-500/20 hover:bg-green-500/10'}`}
+                        >
+                          <span className="text-xl">✅</span>
+                          <span className="text-[8px] font-black uppercase">Entr</span>
                         </button>
-                        <button onClick={() => actualizarEstado(p.numero_pedido, 'no_entregado')} className={`flex-1 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-md transition-all active:scale-95 ${estadoActual === 'no_entregado' ? 'bg-red-600 text-white' : 'bg-red-500 text-white'}`}>
-                          ❌ No entregado
+                        <button 
+                          onClick={() => actualizarEstado(p.numero_pedido, 'no_entregado')} 
+                          className={`w-14 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 shadow-lg transition-all active:scale-95 ${estadoActual === 'no_entregado' ? 'bg-red-500 text-white shadow-red-500/30 ring-2 ring-white/20' : 'bg-gray-800 text-red-400 border border-red-500/20 hover:bg-red-500/10'}`}
+                        >
+                          <span className="text-xl">❌</span>
+                          <span className="text-[8px] font-black uppercase">No Entr</span>
                         </button>
                       </div>
                     ) : (
