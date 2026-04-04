@@ -189,34 +189,36 @@ export default function AgendaEntregas({ rol }) {
             };
             const conf = configEstado[estadoActual] || configEstado.pendiente;
 
-            // Estética Rider Premium (Aura de Color Total)
-            let riderBg = '';
-            if (rol === 'repartidor') {
-              if (estadoActual === 'entregado') riderBg = 'bg-green-500/15 border-green-500/40 text-green-400';
-              else if (estadoActual === 'no_entregado') riderBg = 'bg-red-500/15 border-red-500/40 text-red-500';
-              else riderBg = 'bg-amber-500/15 border-amber-500/40 text-amber-500'; // Dorado Premium (Oro)
-            }
+            // Estilo Glow Premium (Dark Theme con acentos fluorescentes)
+            const glowStyles = {
+              pendiente:    { border: 'border-amber-500/30',  text: 'text-amber-500',  shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
+              preparado:    { border: 'border-amber-500/30',  text: 'text-amber-500',  shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
+              listo:        { border: 'border-amber-500/30',  text: 'text-amber-500',  shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
+              entregado:    { border: 'border-green-500/30',  text: 'text-green-500',  shadow: 'shadow-[0_0_15px_rgba(34,197,94,0.1)]'   },
+              no_entregado: { border: 'border-red-500/30',    text: 'text-red-500',    shadow: 'shadow-[0_0_15px_rgba(239,68,68,0.1)]'   },
+            };
+            const glow = glowStyles[estadoActual] || glowStyles.pendiente;
 
             return (
-              <div key={p.numero_pedido} className={`transition-all duration-300 rounded-2xl overflow-hidden border ${riderBg || (conf.bg + ' ' + conf.border)} ${isOpen ? 'ring-2 ring-white/10' : ''} ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'opacity-80' : ''}`}>
+              <div key={p.numero_pedido} className={`transition-all duration-300 rounded-2xl overflow-hidden border ${glow.border} ${glow.shadow} bg-[#0a0a0a]/90 ${isOpen ? 'ring-2 ring-white/10' : ''} ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'opacity-80' : ''}`}>
                 <div className="px-4 py-4 flex items-center justify-between cursor-pointer" onClick={() => toggleAcordeon(p.numero_pedido)}>
                   <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${riderBg ? 'bg-white/40 border-black/10' : 'bg-black/40 border-white/10'}`}>
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center border bg-black/40 border-white/10">
                        {conf.icon}
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <p className={`font-bold ${riderBg ? 'text-lg' : 'text-sm'} ${riderBg ? 'text-inherit' : 'text-white'} ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'text-gray-400 line-through decoration-green-500/50' : ''}`}>
+                        <p className={`font-bold text-sm text-white ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'text-gray-400 line-through decoration-green-500/50' : ''}`}>
                           {p.nombre}
                         </p>
-                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border ${riderBg ? 'bg-transparent border-current opacity-80' : (conf.color + ' ' + conf.border + ' bg-black/20')}`}>
+                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border bg-black/40 ${glow.border} ${glow.text}`}>
                           {conf.icon} {conf.label}
                         </span>
                       </div>
-                      <p className={`text-[11px] font-medium ${riderBg ? 'opacity-80' : 'text-gray-500'}`}>{p.direccion} • {p.localidad}</p>
+                      <p className={`text-[11px] font-medium text-gray-500`}>{p.direccion} • {p.localidad}</p>
                     </div>
                   </div>
-                  <div className={riderBg ? 'text-inherit' : 'text-gray-500'}>{isOpen ? <ChevronUp /> : <ChevronDown />}</div>
+                  <div className="text-gray-500">{isOpen ? <ChevronUp /> : <ChevronDown />}</div>
                 </div>
 
                 {isOpen && (
@@ -227,33 +229,33 @@ export default function AgendaEntregas({ rol }) {
                       {p.observaciones && <p className="mt-2 text-sm italic opacity-80">"{p.observaciones}"</p>}
                     </div>
 
-                    <div className="flex gap-2">
-                      <button onClick={() => abrirWhatsApp(p.telefono, p.nombre, p.producto)} className="flex-1 flex items-center justify-center gap-2 bg-[#25D366] text-white font-bold py-3 rounded-xl shadow-lg">
-                        <MessageCircle size={18} /> WhatsApp
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <button onClick={() => abrirWhatsApp(p.telefono, p.nombre, p.producto)} className="flex items-center gap-2 bg-[#25D366]/10 hover:bg-[#25D366]/20 border border-[#25D366]/30 text-[#25D366] font-bold px-3 py-1.5 rounded-lg text-xs transition-all">
+                        <MessageCircle size={14} /> WhatsApp
                       </button>
                       {rol !== 'repartidor' && (
-                        <div className="bg-black/40 border border-white/10 p-3 rounded-xl flex-1 text-right">
-                          <p className="text-[10px] text-gray-500 uppercase">Total</p>
-                          <p className="text-xl font-bold text-white">${p.total}</p>
+                        <div className="bg-black/40 border border-white/10 px-3 py-1 rounded-xl ml-auto flex items-center gap-3">
+                          <span className="text-[10px] text-gray-500 uppercase">Total:</span>
+                          <span className="text-lg font-bold text-white">${p.total}</span>
                         </div>
                       )}
                     </div>
 
                     {rol === 'repartidor' ? (
-                      <div className="flex justify-center gap-4 pt-4 border-t border-white/5">
+                      <div className="flex justify-center gap-3 pt-4 border-t border-white/5">
                         <button 
                           onClick={() => actualizarEstado(p.numero_pedido, 'entregado')} 
-                          className={`w-14 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 shadow-lg transition-all active:scale-95 ${estadoActual === 'entregado' ? 'bg-green-500 text-white shadow-green-500/30 ring-2 ring-white/20' : 'bg-gray-800 text-green-400 border border-green-500/20 hover:bg-green-500/10'}`}
+                          className={`flex-1 h-16 rounded-2xl flex flex-col items-center justify-center gap-1 shadow-lg transition-all active:scale-95 ${estadoActual === 'entregado' ? 'bg-green-500 text-white shadow-green-500/30' : 'bg-gray-800 text-green-500 border border-green-500/30 hover:bg-green-500/10'}`}
                         >
                           <span className="text-xl">✅</span>
-                          <span className="text-[8px] font-black uppercase">Entr</span>
+                          <span className="text-[9px] font-black uppercase">Entregado</span>
                         </button>
                         <button 
                           onClick={() => actualizarEstado(p.numero_pedido, 'no_entregado')} 
-                          className={`w-14 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 shadow-lg transition-all active:scale-95 ${estadoActual === 'no_entregado' ? 'bg-red-500 text-white shadow-red-500/30 ring-2 ring-white/20' : 'bg-gray-800 text-red-400 border border-red-500/20 hover:bg-red-500/10'}`}
+                          className={`flex-1 h-16 rounded-2xl flex flex-col items-center justify-center gap-1 shadow-lg transition-all active:scale-95 ${estadoActual === 'no_entregado' ? 'bg-red-500 text-white shadow-red-500/30' : 'bg-gray-800 text-red-500 border border-red-500/30 hover:bg-red-500/10'}`}
                         >
                           <span className="text-xl">❌</span>
-                          <span className="text-[8px] font-black uppercase">No Entr</span>
+                          <span className="text-[9px] font-black uppercase">No Entregado</span>
                         </button>
                       </div>
                     ) : (
