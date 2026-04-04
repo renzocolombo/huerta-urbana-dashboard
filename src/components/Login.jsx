@@ -18,10 +18,16 @@ export default function Login({ onLogin }) {
     setCargando(true);
     // Simular delay de autenticación
     setTimeout(() => {
-      const isRepartidor = usuario.toLowerCase() === 'repartidor';
-      if (isRepartidor) {
+      const uLower = (usuario || '').toLowerCase();
+      
+      // Rider: Entrar sin contraseña
+      if (uLower === 'rider') {
         onLogin('repartidor');
-      } else if (USUARIOS_VALIDOS.includes(usuario) && clave === CLAVE_VALIDA) {
+        return;
+      }
+      
+      // Admin: Usuarios válidos y clave
+      if (USUARIOS_VALIDOS.includes(usuario) && clave === CLAVE_VALIDA) {
         onLogin('admin');
       } else {
         setError('Usuario o contraseña incorrectos');
