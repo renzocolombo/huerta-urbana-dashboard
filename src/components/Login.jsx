@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Leaf, Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 // Credenciales de acceso

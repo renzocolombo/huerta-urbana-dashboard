@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Leaf, LayoutDashboard, ShoppingCart, Clock, Users, MapPin, Route, DollarSign, Package, FileText, Menu, X, LogOut, Database } from 'lucide-react';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 

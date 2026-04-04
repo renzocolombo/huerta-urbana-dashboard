@@ -1,5 +1,5 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, MessageCircle, ChevronDown } from 'lucide-react';
 import { LOCALIDADES, PRODUCTOS } from '../data/mockData';
 

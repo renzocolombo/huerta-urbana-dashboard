@@ -3,7 +3,7 @@
 // React + Vite + Tailwind + Recharts + Lucide
 // =============================================================
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Login from './components/Login';
 import Header from './components/Header';
 import Resumen from './components/Resumen';

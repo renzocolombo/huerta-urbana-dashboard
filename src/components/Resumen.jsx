@@ -1,5 +1,5 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ShoppingCart, TrendingUp, Calendar, DollarSign, ArrowUp, ArrowDown, Settings2, Package, Percent, Edit2, ExternalLink, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { HOY } from '../data/mockData';
 

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   Plus, Edit2, Check, Trash2, Package, ShoppingCart, 
   Settings, TrendingUp, AlertTriangle, Save, Globe, Lock, X

@@ -1,5 +1,5 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { X, Send, Leaf } from 'lucide-react';
 import { HOY } from '../data/mockData';
 import { KEYS } from '../config/keys';
