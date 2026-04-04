@@ -39,7 +39,7 @@ export default function AgendaEntregas({ rol }) {
     if (pedidosDelTurno.length === 0) return;
     const origen = 'Labarden 4252, Tortuguitas, Pilar, Buenos Aires';
     const destinos = pedidosDelTurno
-      .map(p => `${p.direccion || ''}, ${p.localidad || ''}, Partido de Pilar, Buenos Aires`)
+      .map(p => encodeURIComponent(`${p.direccion || ''}, ${p.localidad || ''}, Partido de Pilar, Buenos Aires`))
       .join('/');
     const url = `https://www.google.com/maps/dir/${encodeURIComponent(origen)}/${destinos}`;
     window.open(url, '_blank');
@@ -223,7 +223,7 @@ export default function AgendaEntregas({ rol }) {
 
                 {isOpen && (
                   <div className="px-4 pb-5 pt-2 border-t border-black/5 space-y-4">
-                    <div className={`p-3 rounded-xl border ${riderBg ? 'bg-white/40 border-black/10 text-black' : 'bg-black/40 border-white/10 text-white'}`}>
+                    <div className="p-3 rounded-xl border bg-black/40 border-white/10 text-white">
                       <p className="text-xs font-bold uppercase opacity-60 mb-1">Pedido</p>
                       <p className="font-semibold">{p.producto} x{p.cantidades}</p>
                       {p.observaciones && <p className="mt-2 text-sm italic opacity-80">"{p.observaciones}"</p>}
