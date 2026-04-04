@@ -191,12 +191,13 @@ export default function AgendaEntregas({ rol }) {
 
             let riderBg = '';
             if (rol === 'repartidor') {
-              if (estadoActual === 'entregado') riderBg = 'bg-[#dcfce7] !text-black';
-              else if (estadoActual === 'no_entregado') riderBg = 'bg-[#fee2e2] !text-black';
+              if (estadoActual === 'entregado') riderBg = 'bg-[#dcfce7] text-black border-green-200';
+              else if (estadoActual === 'no_entregado') riderBg = 'bg-[#fee2e2] text-black border-red-200';
+              else riderBg = 'bg-[#fef9c3] text-black border-yellow-200'; // Preparado default
             }
 
             return (
-              <div key={p.numero_pedido} className={`transition-all rounded-2xl overflow-hidden border ${riderBg || conf.bg} ${conf.border}`}>
+              <div key={p.numero_pedido} className={`transition-all duration-300 rounded-2xl overflow-hidden border ${riderBg || conf.bg} ${isOpen ? 'ring-1 ring-white/10' : (riderBg ? '' : conf.border)} ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'opacity-80' : ''}`}>
                 <div className="px-4 py-4 flex items-center justify-between cursor-pointer" onClick={() => toggleAcordeon(p.numero_pedido)}>
                   <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${riderBg ? 'bg-white/40 border-black/10' : 'bg-black/40 border-white/10'}`}>
@@ -204,8 +205,10 @@ export default function AgendaEntregas({ rol }) {
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <p className={`font-bold ${riderBg ? 'text-black text-lg' : 'text-white text-sm'}`}>{p.nombre}</p>
-                        <span className={`text-[10px] font-black uppercase px-1.5 py-0.5 rounded border ${riderBg ? 'border-black/20 text-black bg-white/40' : 'bg-black/20 border-white/10 text-white'}`}>
+                        <p className={`font-bold ${riderBg ? 'text-black text-lg' : 'text-white text-sm'} ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'text-gray-400 line-through decoration-green-500/50' : ''}`}>
+                          {p.nombre}
+                        </p>
+                        <span className={`text-[10px] font-black uppercase px-1.5 py-0.5 rounded border ${riderBg ? 'border-black/20 text-black/80 bg-white/40' : (conf.color + ' ' + conf.border + ' bg-black/20')}`}>
                           {conf.icon} {conf.label}
                         </span>
                       </div>
@@ -236,12 +239,12 @@ export default function AgendaEntregas({ rol }) {
                     </div>
 
                     {rol === 'repartidor' ? (
-                      <div className="flex flex-col gap-3 pt-2">
-                        <button onClick={() => actualizarEstado(p.numero_pedido, 'entregado')} className={`py-5 rounded-2xl font-black text-lg flex items-center justify-center gap-3 shadow-md transition-all active:scale-95 ${estadoActual === 'entregado' ? 'bg-green-600 text-white' : 'bg-green-500 text-white border-b-4 border-green-700'}`}>
-                          ✅ ENTREGADO
+                      <div className="flex gap-3 pt-2">
+                        <button onClick={() => actualizarEstado(p.numero_pedido, 'entregado')} className={`flex-1 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-md transition-all active:scale-95 ${estadoActual === 'entregado' ? 'bg-green-600 text-white' : 'bg-green-500 text-white'}`}>
+                          ✅ Entregado
                         </button>
-                        <button onClick={() => actualizarEstado(p.numero_pedido, 'no_entregado')} className={`py-5 rounded-2xl font-black text-lg flex items-center justify-center gap-3 shadow-md transition-all active:scale-95 ${estadoActual === 'no_entregado' ? 'bg-red-600 text-white' : 'bg-red-500 text-white border-b-4 border-red-700'}`}>
-                          ❌ NO ENTREGADO
+                        <button onClick={() => actualizarEstado(p.numero_pedido, 'no_entregado')} className={`flex-1 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-md transition-all active:scale-95 ${estadoActual === 'no_entregado' ? 'bg-red-600 text-white' : 'bg-red-500 text-white'}`}>
+                          ❌ No entregado
                         </button>
                       </div>
                     ) : (
