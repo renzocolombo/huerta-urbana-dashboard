@@ -1,10 +1,13 @@
+import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useMemo } from 'react';
 import { Search, Filter, MessageCircle, ChevronDown } from 'lucide-react';
-import { PEDIDOS, LOCALIDADES, PRODUCTOS } from '../data/mockData';
+import { LOCALIDADES, PRODUCTOS } from '../data/mockData';
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
 export default function Historial() {
+  const { pedidos: PEDIDOS } = useGoogleSheets();
+
   const [busqueda, setBusqueda] = useState('');
   const [localidad, setLocalidad] = useState('');
   const [producto, setProducto] = useState('');

@@ -1,10 +1,13 @@
+import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState } from 'react';
 import { FileText, Download, Calendar } from 'lucide-react';
-import { PEDIDOS } from '../data/mockData';
+
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
 export default function Reportes() {
+  const { pedidos: PEDIDOS } = useGoogleSheets();
+
   const hoy = new Date().toISOString().split('T')[0];
   const haceTreinta = new Date(); haceTreinta.setDate(haceTreinta.getDate() - 30);
   const [desde, setDesde] = useState(haceTreinta.toISOString().split('T')[0]);

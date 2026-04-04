@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Leaf, Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 // Credenciales de acceso
-const USUARIOS_VALIDOS = ['Renzo', 'Nati'];
+const USUARIOS_VALIDOS = ['Ren', 'Nati'];
 const CLAVE_VALIDA = 'huerta2026';
 
 export default function Login({ onLogin }) {
@@ -18,8 +18,11 @@ export default function Login({ onLogin }) {
     setCargando(true);
     // Simular delay de autenticación
     setTimeout(() => {
-      if (USUARIOS_VALIDOS.includes(usuario) && clave === CLAVE_VALIDA) {
-        onLogin();
+      const isRepartidor = usuario.toLowerCase() === 'repartidor';
+      if (isRepartidor) {
+        onLogin('repartidor');
+      } else if (USUARIOS_VALIDOS.includes(usuario) && clave === CLAVE_VALIDA) {
+        onLogin('admin');
       } else {
         setError('Usuario o contraseña incorrectos');
         setCargando(false);
@@ -112,7 +115,7 @@ export default function Login({ onLogin }) {
 
           {/* Hint */}
           <p className="text-center text-xs text-gray-600 mt-4">
-            Renzo | Nati
+            Ren | Nati
           </p>
         </div>
 

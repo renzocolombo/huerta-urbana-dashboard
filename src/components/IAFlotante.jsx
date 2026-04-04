@@ -1,64 +1,33 @@
+import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useRef, useEffect } from 'react';
-import { Bot, X, Send, Leaf } from 'lucide-react';
-import { PEDIDOS, HOY } from '../data/mockData';
+import { X, Send, Leaf } from 'lucide-react';
+import { HOY } from '../data/mockData';
+import { KEYS } from '../config/keys';
 
-// Contexto del negocio para la IA mock
-function generarContexto() {
-  const hoy = PEDIDOS.filter(p => p.fecha === HOY);
+// Contexto optimizado para la IA
+function generarContexto(pedidos) {
+  const hoy = pedidos.filter(p => p.fecha === HOY);
   const facturacionHoy = hoy.reduce((s, p) => s + p.total, 0);
-  const pendientes = hoy.filter(p => p.estado === 'pendiente').length;
-  return { totalPedidos: PEDIDOS.length, pedidosHoy: hoy.length, facturacionHoy, pendientes };
-}
-
-// Respuestas mock inteligentes
-function obtenerRespuesta(pregunta) {
-  const p = pregunta.toLowerCase();
-  const ctx = generarContexto();
-  const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
-
-  if (p.includes('pedido') && (p.includes('hoy') || p.includes('día'))) {
-    return `Hoy hay **${ctx.pedidosHoy} pedidos** registrados. ${ctx.pendientes > 0 ? `⚠️ ${ctx.pendientes} están pendientes de preparación.` : '✅ Todos en proceso o entregados.'} La facturación del día es de **${$$(ctx.facturacionHoy)}**.`;
-  }
-  if (p.includes('facturación') || p.includes('ventas') || p.includes('plata')) {
-    return `La facturación de hoy es **${$$(ctx.facturacionHoy)}**. En total tenés **${ctx.totalPedidos} pedidos** registrados en el sistema. ¿Querés que analice algún período en particular?`;
-  }
-  if (p.includes('producto') && p.includes('más') || p.includes('popular')) {
-    const conteo = {};
-    PEDIDOS.forEach(p => { conteo[p.producto] = (conteo[p.producto] || 0) + p.cantidades; });
-    const top = Object.entries(conteo).sort((a,b)=>b[1]-a[1])[0];
-    return `El producto más vendido es **${top[0]}** con ${top[1]} unidades vendidas. Le siguen los demás combos. ¿Querés ver el detalle en Control de Stock?`;
-  }
-  if (p.includes('localidad') || p.includes('zona')) {
-    const conteo = {};
-    PEDIDOS.forEach(p => { conteo[p.localidad] = (conteo[p.localidad] || 0) + 1; });
-    const top = Object.entries(conteo).sort((a,b)=>b[1]-a[1])[0];
-    return `La zona con más pedidos es **${top[0]}** con ${top[1]} pedidos. Las localidades más activas son Del Viso, Pilar, Manuel Alberti y Presidente Derqui.`;
-  }
-  if (p.includes('cliente')) {
-    const unicos = new Set(PEDIDOS.map(p => p.email)).size;
-    return `Tenés **${unicos} clientes únicos** en la base de datos. El ticket promedio es de $${(PEDIDOS.reduce((s,p)=>s+p.total,0)/PEDIDOS.length).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,',')}. ¿Querés saber quiénes son los que más compraron?`;
-  }
-  if (p.includes('stock') || p.includes('reponer')) {
-    return `📦 Te recomendaría revisar el **Panel de Stock** para ver qué productos tuvieron alta rotación esta semana. Los combos más vendidos pueden necesitar reposición próximamente.`;
-  }
-  if (p.includes('ganancia') || p.includes('margen')) {
-    const total = PEDIDOS.reduce((s,p)=>s+p.total,0);
-    return `Con un margen del 60%, la ganancia estimada sobre $${$$(total)} de facturación total sería de aproximadamente **${$$(Math.round(total*0.6))}**. ¿Querés analizar la rentabilidad por producto específico?`;
-  }
-  if (p.includes('gracias') || p.includes('ok') || p.includes('perfecto')) {
-    return `¡De nada! 😊 Estoy aquí para ayudarte con cualquier análisis de tu negocio. ¿Hay algo más que quieras saber sobre Huerta Urbana?`;
-  }
-  if (p.includes('hola') || p.includes('buenas') || p.includes('hey')) {
-    return `¡Hola! 👋 Soy tu asistente de Huerta Urbana. Puedo ayudarte a analizar pedidos, clientes, ventas, stock, y más. ¿Qué necesitás saber hoy?`;
-  }
-  // Respuesta genérica
-  return `Entendido. Basándome en los datos de Huerta Urbana: tenés **${ctx.totalPedidos} pedidos** registrados, **${ctx.pedidosHoy} hoy**, y la facturación diaria es de **${$$(ctx.facturacionHoy)}**. Si necesitás un análisis más específico, preguntame sobre pedidos, clientes, productos, localidades o márgenes.`;
+  
+  const ventas = {};
+  hoy.forEach(p => {
+    ventas[p.producto] = (ventas[p.producto] || 0) + p.cantidades;
+  });
+  const topProduct = Object.entries(ventas).sort((a, b) => b[1] - a[1])[0];
+  
+  return { 
+    totalPedidos: hoy.length, 
+    facturacionHoy, 
+    productoEstrella: topProduct ? `${topProduct[0]} (${topProduct[1]} unidades)` : 'N/A' 
+  };
 }
 
 export default function IAFlotante() {
+  const { pedidos: PEDIDOS } = useGoogleSheets();
+
   const [abierto, setAbierto] = useState(false);
   const [mensajes, setMensajes] = useState([
-    { rol: 'ia', texto: '¡Hola! 🌱 Soy tu asistente de Huerta Urbana. Tengo acceso a todos los datos del negocio. ¿En qué te ayudo hoy?' }
+    { rol: 'ia', texto: '¡Hola! Soy Luma 🌿, la asistente de Huerta Urbana. ¿En qué te puedo ayudar hoy?' }
   ]);
   const [input, setInput] = useState('');
   const [cargando, setCargando] = useState(false);
@@ -68,21 +37,84 @@ export default function IAFlotante() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [mensajes]);
 
-  const enviar = () => {
+  // Escuchar evento desde el Header (mobile)
+  useEffect(() => {
+    const handleOpen = () => setAbierto(true);
+    window.addEventListener('abrir-luma', handleOpen);
+    return () => window.removeEventListener('abrir-luma', handleOpen);
+  }, []);
+
+  const enviar = async () => {
     if (!input.trim() || cargando) return;
     const pregunta = input.trim();
     setInput('');
-    setMensajes(prev => [...prev, { rol: 'usuario', texto: pregunta }]);
+    
+    const nuevosMensajes = [...mensajes, { rol: 'usuario', texto: pregunta }];
+    setMensajes(nuevosMensajes);
     setCargando(true);
-    setTimeout(() => {
-      setMensajes(prev => [...prev, { rol: 'ia', texto: obtenerRespuesta(pregunta) }]);
+    
+    const apiKey = KEYS.GROQ;
+
+    if (!apiKey) {
+      setMensajes(prev => [...prev, { rol: 'ia', texto: '⚠️ Configurá la variable VITE_GROQ_API_KEY para usar la IA.' }]);
       setCargando(false);
-    }, 700 + Math.random() * 600);
+      return;
+    }
+
+    try {
+      const quiereResumen = /hoy|voy|resumen|ventas|cuanto/i.test(pregunta);
+      let contextExtra = "";
+      
+      if (quiereResumen) {
+        const stats = generarContexto(PEDIDOS);
+        contextExtra = `\nREPORTE ACTUAL DEL DÍA: Pedidos: ${stats.totalPedidos}, Facturado: $${stats.facturacionHoy.toLocaleString('es-AR')}, Producto estrella: ${stats.productoEstrella}.`;
+      }
+
+      const historialCorte = nuevosMensajes.slice(-10).map(m => ({
+        role: m.rol === 'ia' ? 'assistant' : 'user',
+        content: m.texto
+      }));
+
+      const response = await fetch(
+        'https://api.groq.com/openai/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: 'llama-3.3-70b-versatile',
+            messages: [
+              {
+                role: 'system',
+                content: `Soy Luma 🌿, la asistente inteligente de Huerta Urbana, negocio de frutas y verduras a domicilio en Pilar, Buenos Aires. Entregas martes y jueves en dos turnos. Monto mínimo $45.000. Respondé directo y en español argentino informal.${contextExtra}`
+              },
+              ...historialCorte
+            ],
+            max_tokens: 800,
+            temperature: 0.7
+          })
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Error API: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const respuestaTexto = data.choices[0].message.content;
+      setMensajes(prev => [...prev, { rol: 'ia', texto: respuestaTexto }]);
+    } catch (error) {
+      console.error('Error IA:', error);
+      setMensajes(prev => [...prev, { rol: 'ia', texto: '⚠️ Error conectando con la IA.' }]);
+    } finally {
+      setCargando(false);
+    }
   };
 
   const handleKey = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar(); } };
 
-  // Render texto con **bold**
   const renderTexto = (texto) => {
     const partes = texto.split(/\*\*(.*?)\*\*/g);
     return partes.map((parte, i) =>
@@ -92,21 +124,33 @@ export default function IAFlotante() {
 
   return (
     <>
-      {/* Chat panel */}
+      {/* Chat panel — visible solo cuando abierto */}
       {abierto && (
-        <div className="fixed bottom-20 right-4 w-80 sm:w-96 bg-[#1f2937] border border-gray-700 rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden slide-in" style={{ maxHeight: '70vh' }}>
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 bg-[#111827]">
+        <div
+          className="fixed z-[9999] flex flex-col overflow-hidden rounded-2xl border border-gray-700 bg-[#1f2937] shadow-2xl slide-in"
+          style={{
+            bottom: '20px',
+            right: '20px',
+            width: 'min(calc(100vw - 40px), 384px)',
+            maxHeight: '70vh',
+          }}
+        >
+          {/* Header con único botón X */}
+          <div className="flex items-center justify-between border-b border-gray-800 bg-[#111827] px-4 py-3">
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 bg-green-500 rounded-lg flex items-center justify-center">
-                <Bot size={15} className="text-white" />
+              <div className="w-8 h-8 rounded-full overflow-hidden border border-green-500/30">
+                <img src="/luma-avatar.png" alt="Luma" className="w-full h-full object-cover" />
               </div>
               <div>
-                <p className="text-sm font-semibold text-white">Asistente IA</p>
-                <p className="text-[10px] text-green-400">● En línea · Huerta Urbana</p>
+                <p className="text-sm font-semibold text-white">Luma</p>
+                <p className="text-[10px] text-green-400">● En línea · Asistente IA</p>
               </div>
             </div>
-            <button onClick={() => setAbierto(false)} className="text-gray-500 hover:text-white transition-colors">
+            <button
+              onClick={() => setAbierto(false)}
+              className="text-gray-500 hover:text-white transition-colors p-1 rounded-lg hover:bg-gray-800"
+              aria-label="Cerrar chat"
+            >
               <X size={16} />
             </button>
           </div>
@@ -143,7 +187,7 @@ export default function IAFlotante() {
           </div>
 
           {/* Input */}
-          <div className="p-3 border-t border-gray-800 bg-[#111827]">
+          <div className="border-t border-gray-800 bg-[#111827] p-3">
             <div className="flex gap-2">
               <input
                 type="text"
@@ -151,7 +195,7 @@ export default function IAFlotante() {
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKey}
                 placeholder="Preguntame sobre el negocio..."
-                className="flex-1 bg-[#1f2937] border border-gray-700 text-white text-sm rounded-xl px-3 py-2 placeholder-gray-600"
+                className="flex-1 bg-[#1f2937] border border-gray-700 text-white text-sm rounded-xl px-3 py-2 placeholder-gray-600 outline-none focus:border-green-500/50"
               />
               <button
                 onClick={enviar}
@@ -165,14 +209,34 @@ export default function IAFlotante() {
         </div>
       )}
 
-      {/* FAB */}
-      <button
-        onClick={() => setAbierto(!abierto)}
-        className="fixed bottom-4 right-4 w-14 h-14 bg-green-500 hover:bg-green-400 text-white rounded-2xl shadow-lg flex items-center justify-center z-50 transition-all duration-200 pulse-green"
-        title="Asistente IA"
-      >
-        {abierto ? <X size={22} /> : <Bot size={22} />}
-      </button>
+      {/* Botón flotante Luma — Solo visible en Desktop y cuando el chat está cerrado */}
+      {!abierto && (
+        <button
+          onClick={() => setAbierto(true)}
+          aria-label="Abrir asistente Luma"
+          style={{
+            position: 'fixed',
+            bottom: '20px',
+            right: '-8px',
+            width: '120px',
+            height: '120px',
+            background: 'transparent',
+            border: 'none',
+            boxShadow: 'none',
+            outline: 'none',
+            padding: 0,
+            cursor: 'pointer',
+            zIndex: 9999,
+          }}
+          className="hidden md:block transition-transform duration-200 hover:scale-110 active:scale-95"
+        >
+          <img
+            src="/luma-avatar.png"
+            alt="Luma"
+            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+          />
+        </button>
+      )}
     </>
   );
 }

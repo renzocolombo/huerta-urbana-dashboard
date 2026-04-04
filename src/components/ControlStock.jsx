@@ -1,12 +1,15 @@
+import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useMemo } from 'react';
 import { AlertTriangle, TrendingUp, Package } from 'lucide-react';
-import { PEDIDOS, PRODUCTOS } from '../data/mockData';
+import { PRODUCTOS } from '../data/mockData';
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
 const UMBRAL_ALERTA = 20; // Si se vendieron más de N unidades esta semana, alerta
 
 export default function ControlStock() {
+  const { pedidos: PEDIDOS } = useGoogleSheets();
+
   const stats = useMemo(() => {
     const hoy = new Date();
     const haceSiete = new Date(hoy); haceSiete.setDate(hoy.getDate() - 7);

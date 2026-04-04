@@ -1,6 +1,7 @@
+import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useMemo } from 'react';
 import { AlertCircle, Clock, Package } from 'lucide-react';
-import { PEDIDOS, HOY } from '../data/mockData';
+import { HOY } from '../data/mockData';
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
@@ -28,6 +29,8 @@ function Badge({ config }) {
 }
 
 export default function PedidosDelDia() {
+  const { pedidos: PEDIDOS } = useGoogleSheets();
+
   const pedidosHoy = useMemo(() =>
     PEDIDOS.filter(p => p.fecha === HOY).sort((a, b) => (a.estado === 'pendiente' ? -1 : 1)),
   []);

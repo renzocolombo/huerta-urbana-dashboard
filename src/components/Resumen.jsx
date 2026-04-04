@@ -1,6 +1,7 @@
+import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useMemo } from 'react';
-import { ShoppingCart, TrendingUp, Calendar, DollarSign, ArrowUp, ArrowDown, Settings2, Package, Percent, Edit2 } from 'lucide-react';
-import { HOY, PEDIDOS } from '../data/mockData';
+import { ShoppingCart, TrendingUp, Calendar, DollarSign, ArrowUp, ArrowDown, Settings2, Package, Percent, Edit2, ExternalLink, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { HOY } from '../data/mockData';
 
 // Formatea moneda argentina
 const $$ = (n) => `$${Number(Math.abs(n)).toLocaleString('es-AR')}`;
@@ -35,6 +36,8 @@ function KpiCard({ titulo, valor, subtitulo, icono: Icon, color = 'green', cambi
 }
 
 export default function Resumen() {
+  const { pedidos: PEDIDOS, urlSheet, error, cargando, conectado } = useGoogleSheets();
+
   const [config, setConfig] = useState({
     comisionMP: 8,
     costobolsas: 500,
@@ -52,13 +55,27 @@ export default function Resumen() {
     const facturacionHoy = hoy.reduce((sum, p) => sum + p.total, 0);
     const pedidosMes = mesActualPedidos.length;
     
-    // Cálculos financieros mes (Bruto)
+    // --- CÁLCULO MES (Bruto) ---
     const facturacionMesBruta = mesActualPedidos.reduce((sum, p) => sum + p.total, 0);
-    const comisionMPTotal = Math.round(facturacionMesBruta * (config.comisionMP / 100));
-    const costoMercaderiaTotal = Math.round(facturacionMesBruta * 0.40); // Asumimos costo 40% (margen 60%)
-    const costoInsumosTotal = pedidosMes * config.costobolsas;
-    const gananciaNetaMes = facturacionMesBruta - comisionMPTotal - costoMercaderiaTotal - costoInsumosTotal - config.monotributo;
-    const margenRealPct = facturacionMesBruta > 0 ? (gananciaNetaMes / facturacionMesBruta) * 100 : 0;
+    const hasFacturacionMes = facturacionMesBruta > 0;
+
+    const comisionMPTotal = hasFacturacionMes ? Math.round(facturacionMesBruta * (config.comisionMP / 100)) : 0;
+    const costoMercaderiaTotal = hasFacturacionMes ? Math.round(facturacionMesBruta * 0.40) : 0;
+    const costoInsumosTotal = hasFacturacionMes ? pedidosMes * config.costobolsas : 0;
+    const monotributoAplicado = hasFacturacionMes ? config.monotributo : 0;
+    
+    const gananciaNetaMes = hasFacturacionMes ? (facturacionMesBruta - comisionMPTotal - costoMercaderiaTotal - costoInsumosTotal - monotributoAplicado) : 0;
+    const margenRealPct = hasFacturacionMes ? (gananciaNetaMes / facturacionMesBruta) * 100 : 0;
+
+    // --- CÁLCULO DÍA (Preciso según feedback) ---
+    let gananciaNetaDia = 0;
+    if (facturacionHoy > 0) {
+      const comisionDia = facturacionHoy * (config.comisionMP / 100);
+      const mercaderiaDia = facturacionHoy * 0.40;
+      const bolsasDia = pedidosHoy * config.costobolsas;
+      const monotributoDiario = config.monotributo / 30;
+      gananciaNetaDia = facturacionHoy - comisionDia - mercaderiaDia - bolsasDia - monotributoDiario;
+    }
 
     return { 
       pedidosHoy, 
@@ -68,10 +85,12 @@ export default function Resumen() {
       comisionMPTotal, 
       costoMercaderiaTotal, 
       costoInsumosTotal, 
+      monotributoAplicado,
       gananciaNetaMes, 
-      margenRealPct 
+      margenRealPct,
+      gananciaNetaDia
     };
-  }, [config]);
+  }, [config, PEDIDOS]);
 
   return (
     <div className="space-y-6">
@@ -80,13 +99,16 @@ export default function Resumen() {
           <h2 className="text-xl font-bold text-white">Resumen</h2>
           <p className="text-gray-500 text-sm mt-1">Indicadores clave y desglose financiero</p>
         </div>
-        <button 
-          onClick={() => setShowConfig(!showConfig)}
-          className={`flex items-center gap-2 text-xs font-semibold px-4 py-2 rounded-xl border transition-all ${showConfig ? 'bg-green-500/10 border-green-500/40 text-green-400' : 'bg-[#1f2937] border-gray-800 text-gray-400 hover:text-white'}`}
-        >
-          <Settings2 size={14} />
-          Configurar variables
-        </button>
+        
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={() => setShowConfig(!showConfig)}
+            className={`flex items-center gap-2 text-xs font-semibold px-4 py-2 rounded-xl border transition-all ${showConfig ? 'bg-green-500/10 border-green-500/40 text-green-400' : 'bg-[#1f2937] border-gray-800 text-gray-400 hover:text-white'}`}
+          >
+            <Settings2 size={14} />
+            Configurar
+          </button>
+        </div>
       </div>
 
       {showConfig && (
@@ -157,8 +179,8 @@ export default function Resumen() {
         />
         <KpiCard
           titulo="Ganancia estimada"
-          valor={$$(stats.gananciaNetaMes)}
-          subtitulo="Neto real acumulado"
+          valor={$$(stats.gananciaNetaDia)}
+          subtitulo="Neto real del día"
           icono={TrendingUp}
           color="amber"
           cambio={18}
@@ -235,7 +257,7 @@ export default function Resumen() {
                   <Edit2 size={12} />
                 </button>
               </span>
-              <span className="font-mono text-red-400/80">- {$$(config.monotributo)}</span>
+              <span className="font-mono text-red-400/80">- {$$(stats.monotributoAplicado)}</span>
             </div>
 
             {/* Costo Mercadería (No editable por ahora según pedido, pero visible) */}
@@ -288,4 +310,3 @@ export default function Resumen() {
     </div>
   );
 }
-

@@ -12,11 +12,11 @@ import PedidosDelDia from './components/PedidosDelDia';
 import Historial from './components/Historial';
 import Clientes from './components/Clientes';
 import AgendaEntregas from './components/AgendaEntregas';
-import RutaOptimizada from './components/RutaOptimizada';
 import PanelCostos from './components/PanelCostos';
 import ControlStock from './components/ControlStock';
 import Reportes from './components/Reportes';
 import IAFlotante from './components/IAFlotante';
+import { GoogleSheetsProvider } from './context/GoogleSheetsContext';
 
 // Mapa de secciones del dashboard
 const SECCIONES = {
@@ -26,7 +26,6 @@ const SECCIONES = {
   historial: { label: 'Historial',         componente: Historial },
   clientes:  { label: 'Clientes',         componente: Clientes },
   agenda:    { label: 'Agenda entregas',   componente: AgendaEntregas },
-  ruta:      { label: 'Ruta optimizada',  componente: RutaOptimizada },
   costos:    { label: 'Panel de costos',  componente: PanelCostos },
   stock:     { label: 'Control stock',    componente: ControlStock },
   reportes:  { label: 'Reportes',         componente: Reportes },
@@ -34,36 +33,44 @@ const SECCIONES = {
 
 export default function App() {
   const [logueado, setLogueado] = useState(false);
+  const [rol, setRol] = useState('admin');
   const [seccion, setSeccion] = useState('resumen');
 
   // Si no está logueado, mostrar pantalla de login
   if (!logueado) {
-    return <Login onLogin={() => setLogueado(true)} />;
+    return <Login onLogin={(r) => { 
+      setLogueado(true); 
+      setRol(r || 'admin');
+      if (r === 'repartidor') setSeccion('agenda');
+    }} />;
   }
 
   const ComponenteActual = SECCIONES[seccion]?.componente || Resumen;
 
   return (
-    <div className="min-h-screen bg-[#0f0f0f]">
-      {/* Header de navegación */}
-      <Header
-        seccion={seccion}
-        onNav={(id) => setSeccion(id)}
-        onLogout={() => setLogueado(false)}
-      />
+    <GoogleSheetsProvider>
+      <div className="min-h-screen bg-[#0f0f0f]">
+        {/* Header de navegación */}
+        <Header
+          seccion={seccion}
+          onNav={(id) => setSeccion(id)}
+          onLogout={() => { setLogueado(false); setSeccion('resumen'); }}
+          rol={rol}
+        />
 
-      {/* Contenido principal */}
-      <main className="pt-14">
-        <div className="max-w-7xl mx-auto px-4 py-6">
-          {/* Key fuerza remount al cambiar sección para animar entrada */}
-          <div key={seccion} className="fade-in">
-            <ComponenteActual />
+        {/* Contenido principal */}
+        <main className="pt-14">
+          <div className="max-w-7xl mx-auto px-4 py-6">
+            {/* Key fuerza remount al cambiar sección para animar entrada */}
+            <div key={seccion} className="fade-in">
+              <ComponenteActual rol={rol} />
+            </div>
           </div>
-        </div>
-      </main>
+        </main>
 
-      {/* Botón de IA flotante */}
-      <IAFlotante />
-    </div>
+        {/* Botón de IA flotante (Oculto para repartidores) */}
+        {rol !== 'repartidor' && <IAFlotante />}
+      </div>
+    </GoogleSheetsProvider>
   );
 }

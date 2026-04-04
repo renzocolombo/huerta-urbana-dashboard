@@ -1,9 +1,10 @@
+import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useMemo } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, PieChart, Pie, Cell, Legend,
 } from 'recharts';
-import { PEDIDOS, LOCALIDADES, PRODUCTOS } from '../data/mockData';
+import { LOCALIDADES, PRODUCTOS } from '../data/mockData';
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
@@ -34,6 +35,8 @@ function GraficoCard({ titulo, children }) {
 }
 
 export default function Graficos() {
+  const { pedidos: PEDIDOS } = useGoogleSheets();
+
   const { pedidosSemana, facturacionSemanas, productosTorta, localidadesBarra } = useMemo(() => {
     const hoy = new Date();
 
