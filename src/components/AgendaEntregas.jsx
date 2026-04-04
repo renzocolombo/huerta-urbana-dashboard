@@ -189,41 +189,42 @@ export default function AgendaEntregas({ rol }) {
             };
             const conf = configEstado[estadoActual] || configEstado.pendiente;
 
-            // Estilo Glow Premium (Dark Theme con acentos fluorescentes)
+            // Estilo Glow & Reactive (Rider especial: fondos sólidos al marcar acción)
             const glowStyles = {
-              pendiente:    { border: 'border-amber-500/30',  text: 'text-amber-500',  shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
-              preparado:    { border: 'border-amber-500/30',  text: 'text-amber-500',  shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
-              listo:        { border: 'border-amber-500/30',  text: 'text-amber-500',  shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
-              entregado:    { border: 'border-green-500/30',  text: 'text-green-500',  shadow: 'shadow-[0_0_15px_rgba(34,197,94,0.1)]'   },
-              no_entregado: { border: 'border-red-500/30',    text: 'text-red-500',    shadow: 'shadow-[0_0_15px_rgba(239,68,68,0.1)]'   },
+              pendiente:    { solid: '',         border: 'border-amber-500/30',  text: 'text-amber-500',  accent: 'text-white', shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
+              preparado:    { solid: '',         border: 'border-amber-500/30',  text: 'text-amber-500',  accent: 'text-white', shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
+              listo:        { solid: '',         border: 'border-amber-500/30',  text: 'text-amber-500',  accent: 'text-white', shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
+              entregado:    { solid: 'bg-[#dcfce7]', border: 'border-green-500/40', text: 'text-green-700',  accent: 'text-black', shadow: 'shadow-none' },
+              no_entregado: { solid: 'bg-[#fee2e2]', border: 'border-red-500/40',   text: 'text-red-700',    accent: 'text-black', shadow: 'shadow-none' },
             };
             const glow = glowStyles[estadoActual] || glowStyles.pendiente;
+            const isFinishedRider = rol === 'repartidor' && (estadoActual === 'entregado' || estadoActual === 'no_entregado');
 
             return (
-              <div key={p.numero_pedido} className={`transition-all duration-300 rounded-2xl overflow-hidden border ${glow.border} ${glow.shadow} bg-[#0a0a0a]/90 ${isOpen ? 'ring-2 ring-white/10' : ''} ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'opacity-80' : ''}`}>
+              <div key={p.numero_pedido} className={`transition-all duration-300 rounded-2xl overflow-hidden border ${isFinishedRider ? glow.solid + ' ' + glow.border : glow.border + ' ' + glow.shadow + ' bg-[#0a0a0a]/90'} ${isOpen ? 'ring-2 ring-white/10' : ''} ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'opacity-80' : ''}`}>
                 <div className="px-4 py-4 flex items-center justify-between cursor-pointer" onClick={() => toggleAcordeon(p.numero_pedido)}>
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl flex items-center justify-center border bg-black/40 border-white/10">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${isFinishedRider ? 'bg-black/5 border-black/10' : 'bg-black/40 border-white/10'}`}>
                        {conf.icon}
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <p className={`font-bold text-sm text-white ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'text-gray-400 line-through decoration-green-500/50' : ''}`}>
+                        <p className={`font-bold text-sm ${isFinishedRider ? 'text-black' : 'text-white'} ${estadoActual === 'entregado' && rol !== 'repartidor' ? 'text-gray-400 line-through decoration-green-500/50' : ''}`}>
                           {p.nombre}
                         </p>
-                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border bg-black/40 ${glow.border} ${glow.text}`}>
+                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border ${isFinishedRider ? 'bg-white/40 ' + glow.border + ' ' + glow.text : 'bg-black/40 ' + glow.border + ' ' + glow.text}`}>
                           {conf.icon} {conf.label}
                         </span>
                       </div>
-                      <p className={`text-[11px] font-medium text-gray-500`}>{p.direccion} • {p.localidad}</p>
+                      <p className={`text-[11px] font-medium ${isFinishedRider ? 'text-black/60' : 'text-gray-500'}`}>{p.direccion} • {p.localidad}</p>
                     </div>
                   </div>
-                  <div className="text-gray-500">{isOpen ? <ChevronUp /> : <ChevronDown />}</div>
+                  <div className={isFinishedRider ? 'text-black/40' : 'text-gray-500'}>{isOpen ? <ChevronUp /> : <ChevronDown />}</div>
                 </div>
 
                 {isOpen && (
                   <div className="px-4 pb-5 pt-2 border-t border-black/5 space-y-4">
-                    <div className="p-3 rounded-xl border bg-black/40 border-white/10 text-white">
+                    <div className={`p-3 rounded-xl border ${isFinishedRider ? 'bg-black/5 border-black/10 text-black' : 'bg-black/40 border-white/10 text-white'}`}>
                       <p className="text-xs font-bold uppercase opacity-60 mb-1">Pedido</p>
                       <p className="font-semibold">{p.producto} x{p.cantidades}</p>
                       {p.observaciones && <p className="mt-2 text-sm italic opacity-80">"{p.observaciones}"</p>}
