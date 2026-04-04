@@ -100,9 +100,24 @@ export function GoogleSheetsProvider({ children }) {
       })
     );
 
-    // 2. Aquí iría el POST a un backend o Apps Script si existiera.
-    // Con API Key pública no podemos escribir, pero el Dashboard se mantiene síncrono localmente.
-    console.log(`[SYNC INTENT] Sincronizando con Sheet Celda M${fila}...`);
+    // 2. Persistencia real vía Webhook (Google Apps Script)
+    const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
+    
+    if (APPS_SCRIPT_URL) {
+      try {
+        fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          mode: 'no-cors', // Para evitar problemas de CORS con Apps Script
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ row: fila, status: nuevoEstado })
+        });
+        console.log(`[SYNC SUCCESS] Sincronizado con Columna M${fila}`);
+      } catch (e) {
+        console.error(`[SYNC ERROR] Fallo al sincronizar con Sheet:`, e);
+      }
+    } else {
+      console.warn(`[SYNC WARNING] No hay VITE_APPS_SCRIPT_URL configurado en .env. El cambio es solo local.`);
+    }
   };
   
   const actualizarRemitoEnSheet = async (fila, impreso) => {
