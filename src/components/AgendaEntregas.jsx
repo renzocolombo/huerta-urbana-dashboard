@@ -22,11 +22,12 @@ export default function AgendaEntregas({ rol }) {
     setPedidosAbiertos(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const actualizarEstado = (id, estadoAAsignar) => {
+  const actualizarEstado = async (id, estadoAAsignar) => {
     const pedido = PEDIDOS.find(p => p.numero_pedido === id);
-    if (pedido && pedido.sheetRowIndex) {
-      actualizarEstadoEnSheet(pedido.sheetRowIndex, estadoAAsignar);
-    }
+    if (!pedido || !pedido.sheetRowIndex) return;
+    
+    // Llamar a la sincronización (que ya es optimista)
+    await actualizarEstadoEnSheet(pedido.sheetRowIndex, estadoAAsignar);
   };
 
   const abrirWhatsApp = (telefono, nombre, producto) => {
@@ -261,9 +262,27 @@ export default function AgendaEntregas({ rol }) {
                       </div>
                     ) : (
                       <div className="grid grid-cols-3 gap-2 pt-2">
-                        <button onClick={() => actualizarEstado(p.numero_pedido, 'pendiente')} className={`py-2 rounded-lg text-[10px] font-bold border transition-all ${estadoActual === 'pendiente' ? 'bg-amber-500 text-white' : 'bg-gray-800 text-gray-400 border-gray-700'}`}>PENDIENTE</button>
-                        <button onClick={() => actualizarEstado(p.numero_pedido, 'preparado')} className={`py-2 rounded-lg text-[10px] font-bold border transition-all ${estadoActual === 'preparado' ? 'bg-blue-500 text-white' : 'bg-gray-800 text-gray-400 border-gray-700'}`}>PREPARADO</button>
-                        <button onClick={() => actualizarEstado(p.numero_pedido, 'entregado')} className={`py-2 rounded-lg text-[10px] font-bold border transition-all ${estadoActual === 'entregado' ? 'bg-green-500 text-white' : 'bg-gray-800 text-gray-400 border-gray-700'}`}>ENTREGADO</button>
+                        <button 
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); actualizarEstado(p.numero_pedido, 'pendiente'); }} 
+                          className={`py-2 px-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer active:scale-95 flex items-center justify-center ${estadoActual === 'pendiente' ? 'bg-amber-500 text-white border-amber-600 shadow-lg shadow-amber-500/20' : 'bg-gray-800/80 text-gray-500 border-gray-700 hover:bg-gray-800'}`}
+                        >
+                          PENDIENTE
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); actualizarEstado(p.numero_pedido, 'preparado'); }} 
+                          className={`py-2 px-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer active:scale-95 flex items-center justify-center ${estadoActual === 'preparado' ? 'bg-blue-500 text-white border-blue-600 shadow-lg shadow-blue-500/20' : 'bg-gray-800/80 text-gray-500 border-gray-700 hover:bg-gray-800'}`}
+                        >
+                          PREPARADO
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); actualizarEstado(p.numero_pedido, 'entregado'); }} 
+                          className={`py-2 px-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer active:scale-95 flex items-center justify-center ${estadoActual === 'entregado' ? 'bg-green-500 text-white border-green-600 shadow-lg shadow-green-500/20' : 'bg-gray-800/80 text-gray-500 border-gray-700 hover:bg-gray-800'}`}
+                        >
+                          ENTREGADO
+                        </button>
                       </div>
                     )}
                   </div>
