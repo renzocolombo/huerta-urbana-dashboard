@@ -18,16 +18,15 @@ export default function AgendaEntregas({ rol }) {
 
   const [pedidosAbiertos, setPedidosAbiertos] = useState({});
 
-  const toggleAcordeon = (id) => {
-    setPedidosAbiertos(prev => ({ ...prev, [id]: !prev[id] }));
+  const toggleAcordeon = (filaIndex) => {
+    setPedidosAbiertos(prev => ({ ...prev, [filaIndex]: !prev[filaIndex] }));
   };
 
-  const actualizarEstado = async (id, estadoAAsignar) => {
-    const pedido = PEDIDOS.find(p => p.numero_pedido === id);
-    if (!pedido || !pedido.sheetRowIndex) return;
+  const actualizarEstado = async (filaIndex, estadoAAsignar) => {
+    if (!filaIndex) return;
     
-    // Llamar a la sincronización (que ya es optimista)
-    await actualizarEstadoEnSheet(pedido.sheetRowIndex, estadoAAsignar);
+    // Llamar a la sincronización (que ya es optimista y basada en fila física)
+    await actualizarEstadoEnSheet(filaIndex, estadoAAsignar);
   };
 
   const abrirWhatsApp = (telefono, nombre, producto) => {
@@ -179,8 +178,9 @@ export default function AgendaEntregas({ rol }) {
       ) : (
         <div className="space-y-3">
           {pedidosDelTurno.map(p => {
-            const isOpen = !!pedidosAbiertos[p.numero_pedido];
-            const estadoActual = (p.estado || 'pendiente').toLowerCase();
+            const idUnico = p.sheetRowIndex;
+            const isOpen = !!pedidosAbiertos[idUnico];
+            const estadoActual = (p.estado || 'pendiente').toLowerCase().trim();
             const configEstado = {
               pendiente:    { icon: '⏱️', label: 'PENDIENTE', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
               preparado:    { icon: '📦', label: 'PREPARADO', color: 'text-blue-400',   bg: 'bg-blue-500/5',   border: 'border-blue-500/10' },
@@ -197,8 +197,8 @@ export default function AgendaEntregas({ rol }) {
             }
 
             return (
-              <div key={p.numero_pedido} className={`transition-all duration-300 rounded-2xl overflow-hidden border ${riderBg ? riderBg : 'bg-[#0a0a0a]/90 ' + conf.border} ${isOpen ? 'ring-2 ring-white/10' : ''}`}>
-                <div className="px-4 py-4 flex items-center justify-between cursor-pointer" onClick={() => toggleAcordeon(p.numero_pedido)}>
+              <div key={`pedido-${idUnico}`} className={`transition-all duration-300 rounded-2xl overflow-hidden border ${riderBg ? riderBg : 'bg-[#0a0a0a]/90 ' + conf.border} ${isOpen ? 'ring-2 ring-white/10' : ''}`}>
+                <div className="px-4 py-4 flex items-center justify-between cursor-pointer" onClick={() => toggleAcordeon(idUnico)}>
                   <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${riderBg ? 'bg-white/40 border-black/10' : 'bg-black/40 border-white/10'}`}>
                        {conf.icon}
@@ -239,13 +239,13 @@ export default function AgendaEntregas({ rol }) {
                     {rol === 'repartidor' ? (
                       <div className="flex flex-col gap-3 pt-2">
                         <button 
-                          onClick={() => actualizarEstado(p.numero_pedido, 'entregado')} 
+                          onClick={() => actualizarEstado(idUnico, 'entregado')} 
                           className={`py-5 rounded-2xl font-black text-lg flex items-center justify-center gap-3 shadow-md transition-all active:scale-95 ${estadoActual === 'entregado' ? 'bg-green-600 text-white' : 'bg-green-500 text-white border-b-4 border-green-700'}`}
                         >
                           ✅ ENTREGADO
                         </button>
                         <button 
-                          onClick={() => actualizarEstado(p.numero_pedido, 'no_entregado')} 
+                          onClick={() => actualizarEstado(idUnico, 'no_entregado')} 
                           className={`py-5 rounded-2xl font-black text-lg flex items-center justify-center gap-3 shadow-md transition-all active:scale-95 ${estadoActual === 'no_entregado' ? 'bg-red-600 text-white' : 'bg-red-500 text-white border-b-4 border-red-700'}`}
                         >
                           ❌ NO ENTREGADO
@@ -255,21 +255,21 @@ export default function AgendaEntregas({ rol }) {
                       <div className="grid grid-cols-3 gap-2 pt-2">
                         <button 
                           type="button"
-                          onClick={(e) => { e.stopPropagation(); actualizarEstado(p.numero_pedido, 'pendiente'); }} 
+                          onClick={(e) => { e.stopPropagation(); actualizarEstado(idUnico, 'pendiente'); }} 
                           className={`py-2 px-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer active:scale-95 flex items-center justify-center ${estadoActual === 'pendiente' ? 'bg-amber-500 text-white border-amber-600 shadow-lg shadow-amber-500/20' : 'bg-gray-800/80 text-gray-500 border-gray-700 hover:bg-gray-800'}`}
                         >
                           PENDIENTE
                         </button>
                         <button 
                           type="button"
-                          onClick={(e) => { e.stopPropagation(); actualizarEstado(p.numero_pedido, 'preparado'); }} 
+                          onClick={(e) => { e.stopPropagation(); actualizarEstado(idUnico, 'preparado'); }} 
                           className={`py-2 px-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer active:scale-95 flex items-center justify-center ${estadoActual === 'preparado' ? 'bg-blue-500 text-white border-blue-600 shadow-lg shadow-blue-500/20' : 'bg-gray-800/80 text-gray-500 border-gray-700 hover:bg-gray-800'}`}
                         >
                           PREPARADO
                         </button>
                         <button 
                           type="button"
-                          onClick={(e) => { e.stopPropagation(); actualizarEstado(p.numero_pedido, 'entregado'); }} 
+                          onClick={(e) => { e.stopPropagation(); actualizarEstado(idUnico, 'entregado'); }} 
                           className={`py-2 px-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer active:scale-95 flex items-center justify-center ${estadoActual === 'entregado' ? 'bg-green-500 text-white border-green-600 shadow-lg shadow-green-500/20' : 'bg-gray-800/80 text-gray-500 border-gray-700 hover:bg-gray-800'}`}
                         >
                           ENTREGADO
