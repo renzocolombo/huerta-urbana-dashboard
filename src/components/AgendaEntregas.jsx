@@ -188,6 +188,8 @@ export default function AgendaEntregas({ rol }) {
               entregado:    { icon: '✅', label: 'ENTREGADO', color: 'text-green-500',  bg: 'bg-green-500/10', border: 'border-green-500/30' },
               no_entregado: { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-500', bg: 'bg-red-500/10',   border: 'border-red-500/30' },
             };
+            const conf = configEstado[estadoActual] || configEstado.pendiente;
+            
             let riderBg = '';
             if (rol === 'repartidor') {
               if (estadoActual === 'entregado') riderBg = 'bg-[#dcfce7] !text-black border-green-300';
