@@ -182,9 +182,9 @@ export default function AgendaEntregas({ rol }) {
             const isOpen = !!pedidosAbiertos[p.numero_pedido];
             const estadoActual = (p.estado || 'pendiente').toLowerCase();
             const configEstado = {
-              pendiente:    { icon: '🟡', label: 'PREPARADO', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
-              preparado:    { icon: '🟡', label: 'PREPARADO', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
-              listo:        { icon: '🟡', label: 'PREPARADO', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
+              pendiente:    { icon: '⏱️', label: 'PENDIENTE', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
+              preparado:    { icon: '📦', label: 'PREPARADO', color: 'text-blue-400',   bg: 'bg-blue-500/5',   border: 'border-blue-500/10' },
+              listo:        { icon: '📦', label: 'PREPARADO', color: 'text-blue-400',   bg: 'bg-blue-500/5',   border: 'border-blue-500/10' },
               entregado:    { icon: '✅', label: 'ENTREGADO', color: 'text-green-500',  bg: 'bg-green-500/10', border: 'border-green-500/30' },
               no_entregado: { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-500', bg: 'bg-red-500/10',   border: 'border-red-500/30' },
             };
@@ -193,8 +193,8 @@ export default function AgendaEntregas({ rol }) {
             // Estilo Glow & Reactive (Rider especial: fondos sólidos al marcar acción)
             const glowStyles = {
               pendiente:    { solid: '',         border: 'border-amber-500/30',  text: 'text-amber-500',  accent: 'text-white', shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
-              preparado:    { solid: '',         border: 'border-amber-500/30',  text: 'text-amber-500',  accent: 'text-white', shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
-              listo:        { solid: '',         border: 'border-amber-500/30',  text: 'text-amber-500',  accent: 'text-white', shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.1)]' },
+              preparado:    { solid: '',         border: 'border-blue-500/30',   text: 'text-blue-400',   accent: 'text-white', shadow: 'shadow-[0_0_15px_rgba(59,130,246,0.1)]' },
+              listo:        { solid: '',         border: 'border-blue-500/30',   text: 'text-blue-400',   accent: 'text-white', shadow: 'shadow-[0_0_15px_rgba(59,130,246,0.1)]' },
               entregado:    { solid: 'bg-[#dcfce7]', border: 'border-green-500/40', text: 'text-green-700',  accent: 'text-black', shadow: 'shadow-none' },
               no_entregado: { solid: 'bg-[#fee2e2]', border: 'border-red-500/40',   text: 'text-red-700',    accent: 'text-black', shadow: 'shadow-none' },
             };
