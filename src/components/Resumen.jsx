@@ -159,7 +159,7 @@ export default function Resumen() {
           subtitulo={`${HOY}`}
           icono={ShoppingCart}
           color="green"
-          cambio={12}
+          cambio={0}
         />
         <KpiCard
           titulo="Facturación hoy"
@@ -167,7 +167,7 @@ export default function Resumen() {
           subtitulo="Total bruto del día"
           icono={DollarSign}
           color="blue"
-          cambio={8}
+          cambio={0}
         />
         <KpiCard
           titulo="Pedidos del mes"
@@ -175,7 +175,7 @@ export default function Resumen() {
           subtitulo="Mes en curso"
           icono={Calendar}
           color="purple"
-          cambio={5}
+          cambio={0}
         />
         <KpiCard
           titulo="Ganancia estimada"
@@ -183,7 +183,7 @@ export default function Resumen() {
           subtitulo="Neto real del día"
           icono={TrendingUp}
           color="amber"
-          cambio={18}
+          cambio={0}
         />
       </div>
 
