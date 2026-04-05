@@ -327,7 +327,7 @@ export default function AgendaEntregas({ rol }) {
             return (
               <div 
                 key={p.numero_pedido} 
-                className={`transition-all duration-300 rounded-2xl overflow-hidden border ${conf.bg} ${isOpen ? 'ring-1 ring-white/10' : conf.border} ${estadoActual === 'entregado' ? 'opacity-80' : ''}`}
+                className={`transition-all duration-300 rounded-2xl overflow-hidden border ${conf.bg} ${isOpen ? 'ring-1 ring-white/10' : conf.border}`}
               >
                 
                 {/* Cabecera (Click para expandir) */}
