@@ -315,7 +315,7 @@ export default function AgendaEntregas({ rol }) {
 
             // Configuración visual por estado
             const configEstado = {
-              pendiente:    { icon: '⚪', label: 'PREPARADO', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
+              pendiente:    { icon: '⚪', label: 'PENDIENTE', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
               preparado:    { icon: '🟡', label: 'PREPARADO', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
               listo:        { icon: '🟡', label: 'PREPARADO', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
               entregado:    { icon: '✅', label: 'ENTREGADO', color: 'text-green-400',  bg: 'bg-green-500/10', border: 'border-green-500/30' },
