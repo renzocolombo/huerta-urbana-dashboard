@@ -1,0 +1,33 @@
+﻿1e2798e fix: use pure sheetRowIndex as master key to prevent silent failures on duplicate numero_pedido data v38.2
+f06a9ee fix: reference error conf is not defined in AgendaEntregas
+6dc1e45 feat: restore classic rider ui aesthetics and sizing v38.0
+8ecff2a fix: resolve duplicate state definitions causing visual bugs on status change v37.2
+aa5a821 fix: resolve status buttons blocking and sync header labels immediately v37.1
+b2bbb99 feat: reactive full-card backgrounds for rider v36.0 with dynamic label and icons
+f43c9af fix: resolve crash on abrirRuta and encode addresses correctly v35.2
+3f621eb feat: glow premium refinement with dark theme and medium buttons v35.1
+3b4a10a feat: rider premium aesthetic with golden gold and dual square buttons v33.3
+2b4d1c5 feat: rider view color refinement and compact buttons v32.1
+47e7d03 feat: optimized rider experience and status labels v31.1
+c5af07d fix: state buttons reactivity and sheets persistence v30.3
+8be1f20 fix: massive hook imports cleanup and stabilization v30.2
+52d3a19 fix: reference error useEffect is not defined in Header.jsx
+2d284a3 fix: revert to last stable version before realtime
+e67fcd0 feat(costos): require Kilos por cajon and rename form label
+79cef4c feat(costos): full localStorage persistence, real-time recalculations, modal and inline-editing implemented
+6490358 fix(agenda): import missing Clock icon from lucide-react
+34b051e feat(core): move order operations to agenda features including multi-tabs, accordions and print commands
+57f8a4e feat(pedidos): add order details modal with workflow actions and route observations
+30f208a feat(agenda): group deliveries by morning and afternoon shifts
+c0123f3 feat(agenda): only display Martes and Jueves
+6025378 style(panelcostos): remove .json extension from publish button label
+db4dfe3 fix(hooks): add missing React imports in Resumen and format Header to prevent ReferenceError crash
+80b4940 fix(panelcostos): fix scope and syntax errors causing crash; feat(resumen): add inline editing for financial variables
+8b374ef feat: complete monthly breakdown card and combo modal CRUD
+4bc9b2e chore: full sync and vscode settings for tailwind
+28c1b20 fix: resolve PanelCostos crash due to missing icon import and invalid tailwind class
+05aa38f feat: complete redesign of Cost Panel with products and combos
+dcd6930 style: update login placeholders
+b6c35f8 feat: update login credentials and add password toggle
+bd4305e docs: add README
+63e7b44 dashboard inicial huerta urbana

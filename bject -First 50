@@ -1,0 +1,77 @@
+[33m1e2798e[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m HEAD@{0}: commit: fix: use pure sheetRowIndex as master key to prevent silent failures on duplicate numero_pedido data v38.2
+[33mf06a9ee[m HEAD@{1}: commit: fix: reference error conf is not defined in AgendaEntregas
+[33m6dc1e45[m HEAD@{2}: commit: feat: restore classic rider ui aesthetics and sizing v38.0
+[33m8ecff2a[m HEAD@{3}: commit: fix: resolve duplicate state definitions causing visual bugs on status change v37.2
+[33maa5a821[m HEAD@{4}: commit: fix: resolve status buttons blocking and sync header labels immediately v37.1
+[33mb2bbb99[m HEAD@{5}: commit: feat: reactive full-card backgrounds for rider v36.0 with dynamic label and icons
+[33mf43c9af[m HEAD@{6}: commit: fix: resolve crash on abrirRuta and encode addresses correctly v35.2
+[33m3f621eb[m HEAD@{7}: commit: feat: glow premium refinement with dark theme and medium buttons v35.1
+[33m3b4a10a[m HEAD@{8}: commit: feat: rider premium aesthetic with golden gold and dual square buttons v33.3
+[33m2b4d1c5[m HEAD@{9}: commit: feat: rider view color refinement and compact buttons v32.1
+[33m47e7d03[m HEAD@{10}: commit: feat: optimized rider experience and status labels v31.1
+[33mc5af07d[m HEAD@{11}: commit: fix: state buttons reactivity and sheets persistence v30.3
+[33m8be1f20[m HEAD@{12}: commit: fix: massive hook imports cleanup and stabilization v30.2
+[33m52d3a19[m HEAD@{13}: commit: fix: reference error useEffect is not defined in Header.jsx
+[33m2d284a3[m HEAD@{14}: commit: fix: revert to last stable version before realtime
+[33me67fcd0[m HEAD@{15}: reset: moving to e67fcd0
+[33m09f2989[m HEAD@{16}: commit: fix: massive restoration to stable e67fcd0, cleaned orphan imports and restored rider role logic
+[33me67fcd0[m HEAD@{17}: reset: moving to e67fcd0
+[33m074f0fc[m HEAD@{18}: reset: moving to 074f0fc
+[33m074f0fc[m HEAD@{19}: reset: moving to 074f0fc
+[33me7adb93[m HEAD@{20}: commit: fix: restore missing imports for PanelCostos, ControlStock and Reportes in App.jsx
+[33ma52cfb5[m HEAD@{21}: commit: fix: resolve Vercel build failure by removing orphan RutaOptimizada imports
+[33m6fb4fa6[m HEAD@{22}: commit: fix: total restoration of stable loading and clean login UI (v32.0)
+[33mcac656a[m HEAD@{23}: commit: fix: revert Agenda design to stable v13ab1a2, fixed admin button interactivity and disabled polling
+[33md0be636[m HEAD@{24}: commit: fix: admin status buttons, rider view redesign, login placeholders and real-time polling
+[33m13ab1a2[m HEAD@{25}: commit: fix: dashboard crash, rider login reliability and case-insensitive role update
+[33m49b3225[m HEAD@{26}: commit: feat: real-time synchronization with 30s polling and optimistic updates
+[33mf8a5909[m HEAD@{27}: commit: style: mobile logistics optimization with quick-scan status and dual-action buttons
+[33m8a75ecd[m HEAD@{28}: commit: feat: make 'Entregado' button toggleable for easier corrections
+[33m4618e59[m HEAD@{29}: commit: style: disable Pendiente and Preparado buttons for delivery person
+[33m8ebcb9f[m HEAD@{30}: commit: feat: restricted delivery person role with hidden financials and sync logic
+[33m76a82f2[m HEAD@{31}: commit: style: increase remito logo font size to 24px and bold
+[33m6e438ee[m HEAD@{32}: commit: style: final remito design with page border, updated font sizes and boxed total
+[33m4b66b93[m HEAD@{33}: commit: style: professional B&W remito layout with 20 product rows and fixed font sizes
+[33mdbc8e5c[m HEAD@{34}: commit: style: two full A4 pages per order for delivery notes with maximum legibility
+[33me9e6daf[m HEAD@{35}: commit: style: one A4 page per order for delivery notes with improved legibility
+[33m7344350[m HEAD@{36}: commit: feat: overhauled delivery note printing system with A4 pairing and professional design
+[33m1d095e6[m HEAD@{37}: commit: fix: header sheet URL fix and remove redundant body button
+[33m45ec663[m HEAD@{38}: commit: fix: mobile enhancements - sheet indicator visible, luma in header for mobile
+[33m6c663ef[m HEAD@{39}: commit: style: ajustar Luma 3mm hacia la izquierda (right -8px)
+[33mb2f51f2[m HEAD@{40}: commit: style: mover Luma 0.5cm mas a la derecha (right -20px)
+[33md96ffb4[m HEAD@{41}: commit: fix: normalizacion de acentos en headers y restauracion de filtro approved en agenda
+[33m2ee4ea2[m HEAD@{42}: commit: fix: Luma button right:0px pegado al borde derecho
+[33m152f4fe[m HEAD@{43}: commit: debug: log raw pedidos + sin filtro approved temporalmente
+[33mced8ceb[m HEAD@{44}: commit: debug: console.log campos pedido + URL ruta directa sin double-encode
+[33m6e745e7[m HEAD@{45}: commit: fix: origen ruta = Labarden 4252 Tortuguitas
+[33m2b82489[m HEAD@{46}: commit: fix: agenda solo approved, ruta con direccion exacta Partido de Pilar
+[33mcbf40a3[m HEAD@{47}: commit: fix: usuario login Renzo -> Ren
+[33mf4fc539[m HEAD@{48}: commit: fix: Luma 120x120 bottom-right, ruta con direccion exacta, clientes approved + carritos abandonados
+[33m3d0b333[m HEAD@{49}: commit: style: move Luma button 50px from right edge and fix mobile chat panel responsiveness
+[33mac13eda[m HEAD@{50}: commit: style: move Luma icon 8px from right edge to prevent overlap as requested
+[33m19ff098[m HEAD@{51}: commit: fix(UI): unmount floating Luma button completely when chat is open to remove redundant X button blocking input
+[33mbf24889[m HEAD@{52}: commit: style(UI): force right: 30px without complex calc wrappers to prevent any rendering overlaps on variable size screens
+[33mc68d090[m HEAD@{53}: commit: style(UI): adjust Luma position to base right: 30px with dynamic centering, hide main button on mobile when chat is open
+[33mae865d2[m HEAD@{54}: commit: style: center Luma avatar exactly in right viewport margin using dynamic calc
+[33m993a202[m HEAD@{55}: commit: refactor(ui): remove standalone RutaOptimizada and resize Luma avatar
+[33m4fdf6c9[m HEAD@{56}: commit: feat: setup 'repartidor' role and Maps native URL routing
+[33m0d7ecf7[m HEAD@{57}: commit: fix(Resumen): connect Ganancia estimada card directly to daily calculation
+[33ma869996[m HEAD@{58}: commit: fix(Agenda & Resumen): apply exact requested (campo || '') syntax and strict Daily Ganancia formula
+[33m3d1d12c[m HEAD@{59}: commit: fix: enforce string fallbacks to empty strings, force zero financial stats when today's billing is 0
+[33m13a94c3[m HEAD@{60}: commit: fix(AgendaEntregas): protect string split and replace operations against undefined values
+[33m0e7a4c1[m HEAD@{61}: commit: fix: financial calc on zero, format date in Clientes, map dummy fallback and fix horario_entrega parse
+[33m3940e29[m HEAD@{62}: commit: feat: use VITE_GOOGLE_SHEETS_KEY and add debug logs for sheets api
+[33m24d2af7[m HEAD@{63}: commit: style: move luma button to the absolute right edge (right-0)
+[33m41b2e69[m HEAD@{64}: commit: style: reposition luma button and chat dialog for better balance
+[33m421bab6[m HEAD@{65}: commit: style: luma xl 120px, unify header sheets status, and validate real data
+[33m90d9f4f[m HEAD@{66}: commit: fix: resolve black screen after login by fixing ReferenceError in GoogleSheetsContext
+[33m32e813f[m HEAD@{67}: commit: refactor: automate sheet sync with api key, redesign luma fab to 70px transparent, and unify sheet buttons
+[33mc7d480e[m HEAD@{68}: commit: style: premium Luma button and improve Sheets connection feedback with direct link
+[33mf5fde1f[m HEAD@{69}: commit: feat: enable write operations to public editable sheet using API Key
+[33md60476e[m HEAD@{70}: commit: feat: simplify Sheets access to public API Key (no OAuth)
+[33md18c5ef[m HEAD@{71}: commit: feat: migrate Google OAuth to GIS Token Client to fix redirect_uri issues
+[33m074f0fc[m HEAD@{72}: commit: feat: implement @react-oauth/google and modernize Sheets sync logic
+[33mfbd68b0[m HEAD@{73}: reset: moving to fbd68b0
+[33mf53bf5c[m HEAD@{74}: commit: feat: complete OAuth2 refactor with @react-oauth/google and update Sheets integration
+[33mfbd68b0[m HEAD@{75}: commit: fix: use google client id for maps script as requested
+[33m5e1c6e8[m HEAD@{76}: comm
