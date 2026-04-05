@@ -341,7 +341,7 @@ export default function AgendaEntregas({ rol }) {
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <p className={`font-bold text-sm ${estadoActual === 'entregado' ? 'text-gray-400 line-through decoration-green-500/50' : 'text-white'}`}>
+                        <p className={`font-bold text-sm ${estadoActual === 'entregado' ? 'text-gray-400' : 'text-white'}`}>
                           {p.nombre}
                         </p>
                         <span className={`text-[10px] font-black uppercase px-1.5 py-0.5 rounded border ${conf.color} ${conf.border} bg-black/20`}>
