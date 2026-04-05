@@ -30,11 +30,14 @@ export default function AgendaEntregas({ rol }) {
     setPedidosAbiertos(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const actualizarEstado = async (filaIndex, estadoAAsignar) => {
-    if (!filaIndex) return;
+  const actualizarEstado = (id, estadoAAsignar) => {
+    setEstados(prev => ({ ...prev, [id]: estadoAAsignar }));
     
-    // Llamar a la sincronización (que ya es optimista y usando el ID exacto de fila)
-    await actualizarEstadoEnSheet(filaIndex, estadoAAsignar);
+    // Obtener el pedido para saber la fila
+    const pedido = PEDIDOS.find(p => p.numero_pedido === id);
+    if (pedido && pedido.sheetRowIndex) {
+      actualizarEstadoEnSheet(pedido.sheetRowIndex, estadoAAsignar);
+    }
   };
 
   const abrirWhatsApp = (telefono, nombre, producto) => {
@@ -49,7 +52,7 @@ export default function AgendaEntregas({ rol }) {
     const origen = 'Labarden 4252, Tortuguitas, Pilar, Buenos Aires';
 
     const destinos = pedidosDelTurno
-      .map(p => encodeURIComponent(`${p.direccion || ''}, ${p.localidad || ''}, Partido de Pilar, Buenos Aires`))
+      .map(p => `${p.direccion || ''}, ${p.localidad || ''}, Partido de Pilar, Buenos Aires`)
       .join('/');
 
     const url = `https://www.google.com/maps/dir/${encodeURIComponent(origen)}/${destinos}`;
@@ -307,15 +310,14 @@ export default function AgendaEntregas({ rol }) {
       ) : (
         <div className="space-y-3">
           {pedidosDelTurno.map(p => {
-            const idUnico = p.sheetRowIndex;
-            const isOpen = !!pedidosAbiertos[idUnico];
-            const estadoActual = (estados[p.numero_pedido] || p.estado || 'pendiente').toLowerCase().trim();
+            const isOpen = !!pedidosAbiertos[p.numero_pedido];
+            const estadoActual = (estados[p.numero_pedido] || p.estado || 'pendiente').toLowerCase();
 
             // Configuración visual por estado
             const configEstado = {
-              pendiente:    { icon: '⏱️', label: 'PENDIENTE', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
-              preparado:    { icon: '📦', label: 'PREPARADO', color: 'text-blue-400',   bg: 'bg-blue-500/5',   border: 'border-blue-500/10' },
-              listo:        { icon: '📦', label: 'PREPARADO', color: 'text-blue-400',   bg: 'bg-blue-500/5',   border: 'border-blue-500/10' },
+              pendiente:    { icon: '⚪', label: 'PREPARADO', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
+              preparado:    { icon: '🟡', label: 'PREPARADO', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
+              listo:        { icon: '🟡', label: 'PREPARADO', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
               entregado:    { icon: '✅', label: 'ENTREGADO', color: 'text-green-400',  bg: 'bg-green-500/10', border: 'border-green-500/30' },
               no_entregado: { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400', bg: 'bg-red-500/10',   border: 'border-red-500/30' },
             };
@@ -324,14 +326,14 @@ export default function AgendaEntregas({ rol }) {
 
             return (
               <div 
-                key={`pedido-${idUnico}`} 
+                key={p.numero_pedido} 
                 className={`transition-all duration-300 rounded-2xl overflow-hidden border ${conf.bg} ${isOpen ? 'ring-1 ring-white/10' : conf.border} ${estadoActual === 'entregado' ? 'opacity-80' : ''}`}
               >
                 
                 {/* Cabecera (Click para expandir) */}
                 <div 
                   className="px-4 pr-5 py-4 flex items-center justify-between cursor-pointer hover:bg-white/5"
-                  onClick={() => toggleAcordeon(idUnico)}
+                  onClick={() => toggleAcordeon(p.numero_pedido)}
                 >
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-lg">
@@ -430,7 +432,7 @@ export default function AgendaEntregas({ rol }) {
                         <div className="flex gap-3">
                           {/* Botón NO ENTREGADO */}
                           <button
-                            onClick={() => actualizarEstado(idUnico, estadoActual === 'no_entregado' ? 'preparado' : 'no_entregado')}
+                            onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'no_entregado' ? 'preparado' : 'no_entregado')}
                             className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-xs transition-all active:scale-95 ${
                               estadoActual === 'no_entregado'
                                 ? 'bg-red-500 text-white border-red-400 shadow-[0_0_20px_rgba(239,68,68,0.4)]'
@@ -443,7 +445,7 @@ export default function AgendaEntregas({ rol }) {
 
                           {/* Botón ENTREGADO */}
                           <button
-                            onClick={() => actualizarEstado(idUnico, estadoActual === 'entregado' ? 'preparado' : 'entregado')}
+                            onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'preparado' : 'entregado')}
                             className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-xs transition-all active:scale-95 ${
                               estadoActual === 'entregado'
                                 ? 'bg-green-500 text-white border-green-400 shadow-[0_0_20px_rgba(34,197,94,0.4)]'
@@ -460,7 +462,7 @@ export default function AgendaEntregas({ rol }) {
                         <p className="text-center text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-3">Actualizar estado logístico (Admin)</p>
                         <div className="flex flex-wrap sm:flex-nowrap gap-2">
                           <button
-                            onClick={(e) => { e.stopPropagation(); actualizarEstado(idUnico, 'pendiente'); }}
+                            onClick={() => actualizarEstado(p.numero_pedido, 'pendiente')}
                             className={`flex-1 py-2.5 rounded-lg border text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                               estadoActual === 'pendiente' 
                                ? 'bg-amber-500/10 border-amber-500/50 text-amber-400 ring-1 ring-amber-500/30' 
@@ -470,7 +472,7 @@ export default function AgendaEntregas({ rol }) {
                             <AlertCircle size={14} /> PENDIENTE
                           </button>
                           <button
-                            onClick={(e) => { e.stopPropagation(); actualizarEstado(idUnico, 'preparado'); }}
+                            onClick={() => actualizarEstado(p.numero_pedido, 'preparado')}
                             className={`flex-1 py-2.5 rounded-lg border text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                               estadoActual === 'preparado' || estadoActual === 'listo'
                                ? 'bg-blue-500/10 border-blue-500/50 text-blue-400 ring-1 ring-blue-500/30' 
@@ -480,7 +482,7 @@ export default function AgendaEntregas({ rol }) {
                             <Package size={14} /> PREPARADO
                           </button>
                           <button
-                            onClick={(e) => { e.stopPropagation(); actualizarEstado(idUnico, estadoActual === 'entregado' ? 'preparado' : 'entregado'); }}
+                            onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'preparado' : 'entregado')}
                             className={`flex-1 py-2.5 rounded-lg border text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                               estadoActual === 'entregado' 
                                ? 'bg-green-500/10 border-green-500/50 text-green-400 ring-1 ring-green-500/30' 
