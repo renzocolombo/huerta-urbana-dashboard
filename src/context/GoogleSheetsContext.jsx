@@ -106,9 +106,14 @@ export function GoogleSheetsProvider({ children }) {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ values: [[nuevoEstado]] }),
       });
-      if (!res.ok) console.error(`[SYNC ERROR] HTTP ${res.status} en N${fila}`);
+      if (res.ok) {
+        console.log(`✅ [SYNC OK] Pedido en fila N${fila} actualizado a "${nuevoEstado}" exitosamente.`);
+      } else {
+        const err = await res.text();
+        console.error(`❌ [SYNC ERROR] Falló actualización en N${fila}. Código ${res.status}. Detalle:`, err);
+      }
     } catch (e) {
-      console.error(`[SYNC ERROR] Excepción en N${fila}:`, e.message);
+      console.error(`❌ [SYNC ERROR] Excepción general al actualizar N${fila}:`, e.message);
     }
   };
 
