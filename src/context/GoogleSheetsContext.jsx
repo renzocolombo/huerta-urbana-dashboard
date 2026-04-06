@@ -89,46 +89,51 @@ export function GoogleSheetsProvider({ children }) {
     }
   };
 
-  // Actualización optimista + PUT a Sheets API v4 → Columna M
+  // Actualización optimista + PUT a Sheets API v4 → Columna N (Estado)
   const actualizarEstadoEnSheet = async (fila, nuevoEstado) => {
-    console.log(`[OPTIMISTIC] Fila ${fila} -> "${nuevoEstado}"`);
-
     // 1. UI reactiva inmediata
     setPedidos(current =>
       current.map(p => p.sheetRowIndex === fila ? { ...p, estado: nuevoEstado } : p)
     );
 
-    if (!API_KEY || !SHEET_ID) {
-      console.warn('[SYNC] Sin credenciales — cambio solo local.');
-      return;
-    }
+    if (!API_KEY || !SHEET_ID) return;
 
     // 2. PUT directo a Sheets API v4
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Pedidos!M${fila}?valueInputOption=RAW&key=${API_KEY}`;
-
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Pedidos!N${fila}?valueInputOption=RAW&key=${API_KEY}`;
     try {
       const res = await fetch(url, {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ values: [[nuevoEstado]] }),
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        console.log(`[SYNC OK] ✅ M${fila} = "${nuevoEstado}" → ${data.updatedRange}`);
-      } else {
-        const err = await res.json().catch(() => ({}));
-        console.error(`[SYNC ERROR] HTTP ${res.status} en M${fila}:`, err?.error?.message || res.statusText);
-      }
+      if (!res.ok) console.error(`[SYNC ERROR] HTTP ${res.status} en N${fila}`);
     } catch (e) {
-      console.error(`[SYNC ERROR] Excepción en M${fila}:`, e.message);
+      console.error(`[SYNC ERROR] Excepción en N${fila}:`, e.message);
     }
   };
 
+  // Actualización optimista + PUT a Sheets API v4 → Columna T (Remito Impreso)
   const actualizarRemitoEnSheet = async (fila, impreso) => {
     setPedidos(current =>
       current.map(p => p.sheetRowIndex === fila ? { ...p, remito_impreso: impreso } : p)
     );
+
+    if (!API_KEY || !SHEET_ID) return;
+
+    // Convertimos booleano en texto para Google Sheets
+    const valorMarcador = impreso ? 'TRUE' : 'FALSE';
+
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Pedidos!T${fila}?valueInputOption=RAW&key=${API_KEY}`;
+    try {
+      const res = await fetch(url, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ values: [[valorMarcador]] }),
+      });
+      if (!res.ok) console.error(`[SYNC ERROR] HTTP ${res.status} en T${fila}`);
+    } catch (e) {
+      console.error(`[SYNC ERROR] Excepción en T${fila}:`, e.message);
+    }
   };
 
   return (

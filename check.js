@@ -1,0 +1,1 @@
+fetch('https://sheets.googleapis.com/v4/spreadsheets/1Qw2LRgQuIR1CHox1XNJ3DPLipEEPE7k16tJLMYaoyt0/values/Pedidos!A1:Z1?key=' + process.env.VITE_GOOGLE_API_KEY).then(r=>r.json()).then(d => { d.values[0].forEach((v,i) => console.log(String.fromCharCode(65+i) + ': ' + v)) })
