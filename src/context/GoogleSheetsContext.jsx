@@ -6,6 +6,7 @@ const GoogleSheetsContext = createContext();
 
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
 const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_KEY || import.meta.env.VITE_GOOGLE_API_KEY;
+const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 
 export function GoogleSheetsProvider({ children }) {
   const [pedidos, setPedidos]         = useState(PEDIDOS_MOCK);
@@ -89,55 +90,52 @@ export function GoogleSheetsProvider({ children }) {
     }
   };
 
-  // Actualización optimista + PUT a Sheets API v4 → Columna N (Estado)
+  // Actualización optimista + POST a Webhook de Apps Script (Estado)
   const actualizarEstadoEnSheet = async (fila, nuevoEstado) => {
     // 1. UI reactiva inmediata
     setPedidos(current =>
       current.map(p => p.sheetRowIndex === fila ? { ...p, estado: nuevoEstado } : p)
     );
 
-    if (!API_KEY || !SHEET_ID) return;
+    if (!APPS_SCRIPT_URL) {
+      console.warn('[SYNC] Falta VITE_APPS_SCRIPT_URL. Cambio solo local.');
+      return;
+    }
 
-    // 2. PUT directo a Sheets API v4
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Pedidos!N${fila}?valueInputOption=RAW&key=${API_KEY}`;
     try {
-      const res = await fetch(url, {
-        method:  'PUT',
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ values: [[nuevoEstado]] }),
+        body:    JSON.stringify({ fila, estado: nuevoEstado }),
       });
       if (res.ok) {
-        console.log(`✅ [SYNC OK] Pedido en fila N${fila} actualizado a "${nuevoEstado}" exitosamente.`);
+        console.log(`✅ [SYNC OK] Pedido en fila ${fila} enviado al Webhook (Estado: "${nuevoEstado}").`);
       } else {
         const err = await res.text();
-        console.error(`❌ [SYNC ERROR] Falló actualización en N${fila}. Código ${res.status}. Detalle:`, err);
+        console.error(`❌ [SYNC ERROR] Falló POST a Webhook. Código ${res.status}. Detalle:`, err);
       }
     } catch (e) {
-      console.error(`❌ [SYNC ERROR] Excepción general al actualizar N${fila}:`, e.message);
+      console.error(`❌ [SYNC ERROR] Excepción general al enviar estado al Webhook:`, e.message);
     }
   };
 
-  // Actualización optimista + PUT a Sheets API v4 → Columna T (Remito Impreso)
+  // Actualización optimista + POST a Webhook de Apps Script (Remito Impreso)
   const actualizarRemitoEnSheet = async (fila, impreso) => {
     setPedidos(current =>
       current.map(p => p.sheetRowIndex === fila ? { ...p, remito_impreso: impreso } : p)
     );
 
-    if (!API_KEY || !SHEET_ID) return;
+    if (!APPS_SCRIPT_URL) return;
 
-    // Convertimos booleano en texto para Google Sheets
-    const valorMarcador = impreso ? 'TRUE' : 'FALSE';
-
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Pedidos!T${fila}?valueInputOption=RAW&key=${API_KEY}`;
     try {
-      const res = await fetch(url, {
-        method:  'PUT',
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ values: [[valorMarcador]] }),
+        body:    JSON.stringify({ fila, remito_impreso: impreso }),
       });
-      if (!res.ok) console.error(`[SYNC ERROR] HTTP ${res.status} en T${fila}`);
+      if (!res.ok) console.error(`[SYNC ERROR] Falló POST a Webhook para remito HTTP ${res.status}`);
     } catch (e) {
-      console.error(`[SYNC ERROR] Excepción en T${fila}:`, e.message);
+      console.error(`[SYNC ERROR] Excepción al actualizar remito vía Webhook:`, e.message);
     }
   };
 
