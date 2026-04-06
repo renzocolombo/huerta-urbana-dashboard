@@ -102,12 +102,15 @@ export function GoogleSheetsProvider({ children }) {
       return;
     }
 
+    const payload = { fila, estado: nuevoEstado };
+    console.log(`[SYNC PREPARANDO] Enviando a Webhook:`, payload);
+
     try {
       await fetch(APPS_SCRIPT_URL, {
         method:  'POST',
         mode:    'no-cors',
         headers: { 'Content-Type': 'text/plain' },
-        body:    JSON.stringify({ fila, estado: nuevoEstado }),
+        body:    JSON.stringify(payload),
       });
       console.log(`✅ [SYNC ENVIADO] Orden a fila ${fila} disparada (Estado: "${nuevoEstado}"). Webhook Opaco.`);
     } catch (e) {
