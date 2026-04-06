@@ -26,7 +26,7 @@ export function GoogleSheetsProvider({ children }) {
   }, []);
 
   const fetchSheetPedidos = async () => {
-    const API_KEY = import.meta.env.VITE_GOOGLE_SHEETS_KEY;
+    const API_KEY = import.meta.env.VITE_GOOGLE_SHEETS_KEY || import.meta.env.VITE_GOOGLE_API_KEY;
     const SHEET_ID = import.meta.env.VITE_SHEET_ID;
 
     if (!API_KEY || !SHEET_ID) return;
@@ -88,35 +88,41 @@ export function GoogleSheetsProvider({ children }) {
 
   // ACTUALIZACIÓN OPTIMISTA: Refleja el cambio localmente al instante
   const actualizarEstadoEnSheet = async (fila, nuevoEstado) => {
-    console.log(`[OPTIMISTIC SYNC] Pedido en fila ${fila} -> ${nuevoEstado}`);
+    console.log(`[OPTIMISTIC] Pedido fila ${fila} -> "${nuevoEstado}" (actualizando pantalla...)`);
     
-    // 1. Actualizar estado local inmediatamente para evitar lag
+    // 1. Actualizar estado local inmediatamente (UI reactiva sin lag)
     setPedidos(current => 
-      current.map(p => {
-        if (p.sheetRowIndex === fila) {
-          return { ...p, estado: nuevoEstado };
-        }
-        return p;
-      })
+      current.map(p => p.sheetRowIndex === fila ? { ...p, estado: nuevoEstado } : p)
     );
 
-    // 2. Persistencia real vía Webhook (Google Apps Script)
-    const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
-    
-    if (APPS_SCRIPT_URL) {
-      try {
-        fetch(APPS_SCRIPT_URL, {
-          method: 'POST',
-          mode: 'no-cors', // Para evitar problemas de CORS con Apps Script
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ row: fila, status: nuevoEstado })
-        });
-        console.log(`[SYNC SUCCESS] Sincronizado con Columna M${fila}`);
-      } catch (e) {
-        console.error(`[SYNC ERROR] Fallo al sincronizar con Sheet:`, e);
+    // 2. Persistencia real: PUT directo a Google Sheets API v4 → Columna M
+    const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_KEY || import.meta.env.VITE_GOOGLE_API_KEY;
+    const SHEET_ID = import.meta.env.VITE_SHEET_ID;
+
+    if (!API_KEY || !SHEET_ID) {
+      console.warn(`[SYNC WARNING] Faltan VITE_SHEET_ID o API_KEY en .env — cambio guardado solo localmente.`);
+      return;
+    }
+
+    const range  = encodeURIComponent(`Pedidos!M${fila}`);
+    const url    = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?valueInputOption=RAW&key=${API_KEY}`;
+
+    try {
+      const res = await fetch(url, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ range: `Pedidos!M${fila}`, majorDimension: 'ROWS', values: [[nuevoEstado]] }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log(`[SYNC OK] Columna M${fila} actualizada a "${nuevoEstado}"`, data);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        console.error(`[SYNC ERROR] HTTP ${res.status} al escribir M${fila}:`, err?.error?.message || res.statusText);
       }
-    } else {
-      console.warn(`[SYNC WARNING] No hay VITE_APPS_SCRIPT_URL configurado en .env. El cambio es solo local.`);
+    } catch (e) {
+      console.error(`[SYNC ERROR] Excepción al escribir M${fila}:`, e.message);
     }
   };
   
