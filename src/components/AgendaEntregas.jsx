@@ -313,13 +313,14 @@ export default function AgendaEntregas({ rol }) {
             const isOpen = !!pedidosAbiertos[p.numero_pedido];
             const estadoActual = (estados[p.numero_pedido] || p.estado || 'pendiente').toLowerCase();
 
-            // Configuración visual por estado
+            // Configuración visual por estado (Tarjeta principal)
             const configEstado = {
-              pendiente:    { icon: '⚪', label: 'PENDIENTE', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
-              preparado:    { icon: '🟡', label: 'PREPARADO', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
-              listo:        { icon: '🟡', label: 'PREPARADO', color: 'text-amber-400',  bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
-              entregado:    { icon: '✅', label: 'ENTREGADO', color: 'text-green-400',  bg: 'bg-green-500/10', border: 'border-green-500/30' },
-              no_entregado: { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400', bg: 'bg-red-500/10',   border: 'border-red-500/30' },
+              'pendiente':    { icon: '⏳', label: 'PENDIENTE',    color: 'text-yellow-400', bg: 'bg-[#fef9c3]/10', border: 'border-[#fef9c3]/30' },
+              'preparado':    { icon: '🔵', label: 'PREPARADO',    color: 'text-blue-400',   bg: 'bg-[#dbeafe]/10', border: 'border-[#dbeafe]/30' },
+              'listo':        { icon: '🔵', label: 'PREPARADO',    color: 'text-blue-400',   bg: 'bg-[#dbeafe]/10', border: 'border-[#dbeafe]/30' },
+              'entregado':    { icon: '✅', label: 'ENTREGADO',    color: 'text-green-400',  bg: 'bg-[#dcfce7]/10', border: 'border-[#dcfce7]/30' },
+              'no_entregado': { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400',    bg: 'bg-[#fee2e2]/10', border: 'border-[#fee2e2]/30' },
+              'no entregado': { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400',    bg: 'bg-[#fee2e2]/10', border: 'border-[#fee2e2]/30' },
             };
 
             const conf = configEstado[estadoActual] || configEstado.pendiente;
@@ -424,76 +425,65 @@ export default function AgendaEntregas({ rol }) {
                        </div>
                     </div>
 
-                    {/* Botonera de flujo Dinámica */}
-                    {rol === 'repartidor' ? (
-                      <div className="bg-black/60 border border-white/10 rounded-2xl p-5 shadow-inner">
-                        <p className="text-center text-[10px] text-gray-500 font-bold uppercase tracking-[0.2em] mb-4">Actualizar Entrega</p>
+                    {/* Botonera de flujo Dinámica - UNIFICADA */}
+                    <div className="bg-black/60 border border-white/10 rounded-2xl p-5 shadow-inner mt-4">
+                      <p className="text-center text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-4">Actualizar Entrega</p>
+                      
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         
-                        <div className="flex gap-3">
-                          {/* Botón NO ENTREGADO */}
-                          <button
-                            onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'no_entregado' ? 'preparado' : 'no_entregado')}
-                            className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-xs transition-all active:scale-95 ${
-                              estadoActual === 'no_entregado'
-                                ? 'bg-red-500 text-white border-red-400 shadow-[0_0_20px_rgba(239,68,68,0.4)]'
-                                : 'bg-red-500/10 border-red-500/20 text-red-500 hover:bg-red-500/20'
-                            }`}
-                          >
-                            <span className="text-xl">❌</span>
-                            NO ENTREGADO
-                          </button>
+                        {/* Botón PENDIENTE */}
+                        <button
+                          onClick={() => rol !== 'repartidor' ? actualizarEstado(p.numero_pedido, 'Pendiente') : null}
+                          className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 ${
+                            estadoActual === 'pendiente'
+                              ? 'bg-[#fef9c3] text-yellow-800 border-yellow-400 shadow-[0_0_20px_rgba(254,249,195,0.4)]'
+                              : 'bg-[#fef9c3]/10 border-yellow-500/20 text-yellow-500 hover:bg-[#fef9c3]/20'
+                          } ${rol === 'repartidor' ? 'opacity-50 cursor-default hover:bg-[#fef9c3]/10 active:scale-100' : 'cursor-pointer hover:scale-[1.02]'}`}
+                        >
+                          <span className="text-xl">⏳</span>
+                          PENDIENTE
+                        </button>
 
-                          {/* Botón ENTREGADO */}
-                          <button
-                            onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'preparado' : 'entregado')}
-                            className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-xs transition-all active:scale-95 ${
-                              estadoActual === 'entregado'
-                                ? 'bg-green-500 text-white border-green-400 shadow-[0_0_20px_rgba(34,197,94,0.4)]'
-                                : 'bg-green-500/10 border-green-500/20 text-green-500 hover:bg-green-500/20'
-                            }`}
-                          >
-                            <span className="text-xl">✅</span>
-                            ENTREGADO
-                          </button>
-                        </div>
+                        {/* Botón PREPARADO */}
+                        <button
+                          onClick={() => rol !== 'repartidor' ? actualizarEstado(p.numero_pedido, 'Preparado') : null}
+                          className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 ${
+                            (estadoActual === 'preparado' || estadoActual === 'listo')
+                              ? 'bg-[#dbeafe] text-blue-800 border-blue-400 shadow-[0_0_20px_rgba(219,234,254,0.4)]'
+                              : 'bg-[#dbeafe]/10 border-blue-500/20 text-blue-500 hover:bg-[#dbeafe]/20'
+                          } ${rol === 'repartidor' ? 'opacity-50 cursor-default hover:bg-[#dbeafe]/10 active:scale-100' : 'cursor-pointer hover:scale-[1.02]'}`}
+                        >
+                          <span className="text-xl">🔵</span>
+                          PREPARADO
+                        </button>
+
+                        {/* Botón ENTREGADO */}
+                        <button
+                          onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'Preparado' : 'Entregado')}
+                          className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${
+                            estadoActual === 'entregado'
+                              ? 'bg-[#dcfce7] text-green-800 border-green-400 shadow-[0_0_20px_rgba(220,252,231,0.4)]'
+                              : 'bg-[#dcfce7]/10 border-green-500/20 text-green-500 hover:bg-[#dcfce7]/20'
+                          }`}
+                        >
+                          <span className="text-xl">✅</span>
+                          ENTREGADO
+                        </button>
+
+                        {/* Botón NO ENTREGADO */}
+                        <button
+                          onClick={() => actualizarEstado(p.numero_pedido, (estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'Preparado' : 'No entregado')}
+                          className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${
+                            (estadoActual === 'no_entregado' || estadoActual === 'no entregado')
+                              ? 'bg-[#fee2e2] text-red-800 border-red-400 shadow-[0_0_20px_rgba(254,226,226,0.4)]'
+                              : 'bg-[#fee2e2]/10 border-red-500/20 text-red-500 hover:bg-[#fee2e2]/20'
+                          }`}
+                        >
+                          <span className="text-xl">❌</span>
+                          NO ENTREGADO
+                        </button>
                       </div>
-                    ) : (
-                      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                        <p className="text-center text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-3">Actualizar estado logístico (Admin)</p>
-                        <div className="flex flex-wrap sm:flex-nowrap gap-2">
-                          <button
-                            onClick={() => actualizarEstado(p.numero_pedido, 'pendiente')}
-                            className={`flex-1 py-2.5 rounded-lg border text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                              estadoActual === 'pendiente' 
-                               ? 'bg-amber-500/10 border-amber-500/50 text-amber-400 ring-1 ring-amber-500/30' 
-                               : 'bg-[#111827] border-gray-800 hover:border-amber-500/30 text-gray-500 hover:text-amber-400'
-                            }`}
-                          >
-                            <AlertCircle size={14} /> PENDIENTE
-                          </button>
-                          <button
-                            onClick={() => actualizarEstado(p.numero_pedido, 'preparado')}
-                            className={`flex-1 py-2.5 rounded-lg border text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                              estadoActual === 'preparado' || estadoActual === 'listo'
-                               ? 'bg-blue-500/10 border-blue-500/50 text-blue-400 ring-1 ring-blue-500/30' 
-                               : 'bg-[#111827] border-gray-800 hover:border-blue-500/30 text-gray-500 hover:text-blue-400'
-                            }`}
-                          >
-                            <Package size={14} /> PREPARADO
-                          </button>
-                          <button
-                            onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'preparado' : 'entregado')}
-                            className={`flex-1 py-2.5 rounded-lg border text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                              estadoActual === 'entregado' 
-                               ? 'bg-green-500/10 border-green-500/50 text-green-400 ring-1 ring-green-500/30' 
-                               : 'bg-[#111827] border-gray-800 hover:border-green-500/30 text-gray-500 hover:text-green-400'
-                            }`}
-                          >
-                            <CheckCircle size={14} /> ENTREGADO
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                    </div>
 
                     {/* Info de seguridad (Solo repartidor) */}
                     {rol === 'repartidor' && (
