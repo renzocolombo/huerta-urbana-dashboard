@@ -32,30 +32,15 @@ export default function Clientes() {
     return Object.values(mapa).sort((a, b) => b.totalGastado - a.totalGastado);
   }, [PEDIDOS]);
 
-  // Emails de clientes reales para excluirlos de carritos
-  const emailsAprobados = useMemo(() => new Set(clientes.map(c => c.email)), [clientes]);
-
-  // Carritos abandonados: formulario enviado pero ningún pedido con 'approved'
+  // Carritos abandonados: pedidos con datos del cliente pero sin pago aprobado
   const carritosAbandonados = useMemo(() => {
-    const mapa = {};
-    PEDIDOS.forEach(p => {
-      // Solo incluir si el email NO tiene ningún pago aprobado
-      if (emailsAprobados.has(p.email)) return;
-      if (!mapa[p.email]) {
-        mapa[p.email] = {
-          nombre: p.nombre,
-          telefono: p.telefono,
-          email: p.email,
-          localidad: p.localidad,
-          producto: p.producto,
-          total: p.total,
-          fecha: p.fecha,
-          estado_pago: p.estado_pago,
-        };
-      }
-    });
-    return Object.values(mapa).sort((a, b) => (b.fecha > a.fecha ? 1 : -1));
-  }, [PEDIDOS, emailsAprobados]);
+    return PEDIDOS.filter(p => {
+      const estadoPago = (p.estado_pago || '').toLowerCase().trim();
+      const tieneAprobado = estadoPago === 'approved';
+      const tieneDatos = !!(p.nombre || p.telefono);
+      return !tieneAprobado && tieneDatos;
+    }).sort((a, b) => (b.fecha > a.fecha ? 1 : -1));
+  }, [PEDIDOS]);
 
   const abrirWhatsApp = (tel, nombre) => {
     const msg = encodeURIComponent(`Hola ${nombre.split(' ')[0]}! 👋 ¿Cómo estás? Te escribimos desde Huerta Urbana 🥦`);

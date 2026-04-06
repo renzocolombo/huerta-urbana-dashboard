@@ -17,16 +17,7 @@ const NAV_ITEMS = [
 export default function Header({ seccion, onNav, onLogout, rol, urlSheet, setSeccionActiva }) {
   const [menuAbierto, setMenuAbierto] = useState(false);
   const { conectado, ultimoRefresco } = useGoogleSheets();
-  const [segundosTranscurridos, setSegundosTranscurridos] = useState(0);
 
-  // Timer para el indicador de "Hace Xs"
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const diff = Math.floor((new Date() - ultimoRefresco) / 1000);
-      setSegundosTranscurridos(diff);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [ultimoRefresco]);
 
   const itemsMostrar = rol === 'repartidor' ? NAV_ITEMS.filter(item => item.id === 'agenda') : NAV_ITEMS;
 
