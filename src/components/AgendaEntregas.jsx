@@ -315,12 +315,12 @@ export default function AgendaEntregas({ rol }) {
 
             // Configuración visual por estado (Tarjeta principal)
             const configEstado = {
-              'pendiente':    { icon: '⏳', label: 'PENDIENTE',    color: 'text-yellow-400', bg: 'bg-[#fef9c3]/10', border: 'border-[#fef9c3]/30' },
-              'preparado':    { icon: '🔵', label: 'PREPARADO',    color: 'text-blue-400',   bg: 'bg-[#dbeafe]/10', border: 'border-[#dbeafe]/30' },
-              'listo':        { icon: '🔵', label: 'PREPARADO',    color: 'text-blue-400',   bg: 'bg-[#dbeafe]/10', border: 'border-[#dbeafe]/30' },
-              'entregado':    { icon: '✅', label: 'ENTREGADO',    color: 'text-green-400',  bg: 'bg-[#dcfce7]/10', border: 'border-[#dcfce7]/30' },
-              'no_entregado': { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400',    bg: 'bg-[#fee2e2]/10', border: 'border-[#fee2e2]/30' },
-              'no entregado': { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400',    bg: 'bg-[#fee2e2]/10', border: 'border-[#fee2e2]/30' },
+              'pendiente':    { icon: '⏳', label: 'PENDIENTE',    color: 'text-yellow-400', bg: 'bg-[#fbbf24]/20', border: 'border-[#fbbf24]/30' },
+              'preparado':    { icon: '🔵', label: 'PREPARADO',    color: 'text-blue-400',   bg: 'bg-[#93c5fd]/20', border: 'border-[#93c5fd]/30' },
+              'listo':        { icon: '🔵', label: 'PREPARADO',    color: 'text-blue-400',   bg: 'bg-[#93c5fd]/20', border: 'border-[#93c5fd]/30' },
+              'entregado':    { icon: '✅', label: 'ENTREGADO',    color: 'text-green-400',  bg: 'bg-[#86efac]/20', border: 'border-[#86efac]/30' },
+              'no_entregado': { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400',    bg: 'bg-[#fca5a5]/20', border: 'border-[#fca5a5]/30' },
+              'no entregado': { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400',    bg: 'bg-[#fca5a5]/20', border: 'border-[#fca5a5]/30' },
             };
 
             const conf = configEstado[estadoActual] || configEstado.pendiente;
