@@ -13,7 +13,7 @@ const PAGO_CONFIG = {
 };
 
 export default function AgendaEntregas({ rol }) {
-  const { pedidos: PEDIDOS, actualizarEstadoEnSheet } = useGoogleSheets();
+  const { pedidos: PEDIDOS, actualizarEstadoEnSheet, actualizarRemitoEnSheet } = useGoogleSheets();
 
   const [diaSeleccionado, setDiaSeleccionado] = useState(DIAS_SEMANA[0]);
   const [turnoSeleccionado, setTurnoSeleccionado] = useState('Manana'); // 'Manana' | 'Tarde'
@@ -184,19 +184,20 @@ export default function AgendaEntregas({ rol }) {
       <html><head><title>REMITOS - HUERTA URBANA</title>${styles}</head><body>
       ${aImprimir.map((p) => renderHojasPedido(p)).join('')}
       <script>
-        window.onload = () => {
-          setTimeout(() => {
-            window.print();
-            window.close();
-          }, 500);
-        };
+        setTimeout(() => {
+          window.print();
+        }, 500);
       </script>
       </body></html>
     `);
+    win.document.close();
 
     // Sincronización
     aImprimir.forEach(p => {
       console.log(`[SYNC] Marcando pedido #${p.numero_pedido} como remito_impreso = SI`);
+      if (p.sheetRowIndex) {
+        actualizarRemitoEnSheet(p.sheetRowIndex, true);
+      }
     });
   };
 
