@@ -436,9 +436,9 @@ export default function AgendaEntregas({ rol }) {
                           onClick={() => rol !== 'repartidor' ? actualizarEstado(p.numero_pedido, 'Pendiente') : null}
                           className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 ${
                             estadoActual === 'pendiente'
-                              ? 'bg-[#fef9c3] text-yellow-800 border-yellow-400 shadow-[0_0_20px_rgba(254,249,195,0.4)]'
-                              : 'bg-[#fef9c3]/10 border-yellow-500/20 text-yellow-500 hover:bg-[#fef9c3]/20'
-                          } ${rol === 'repartidor' ? 'opacity-50 cursor-default hover:bg-[#fef9c3]/10 active:scale-100' : 'cursor-pointer hover:scale-[1.02]'}`}
+                              ? 'bg-amber-500/20 border-amber-500/40 text-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.2)]'
+                              : 'bg-amber-500/5 border-amber-500/10 text-amber-400 hover:bg-amber-500/10'
+                          } ${rol === 'repartidor' ? 'opacity-50 cursor-default hover:bg-amber-500/5 active:scale-100' : 'cursor-pointer hover:scale-[1.02]'}`}
                         >
                           <span className="text-xl">⏳</span>
                           PENDIENTE
