@@ -103,19 +103,15 @@ export function GoogleSheetsProvider({ children }) {
     }
 
     try {
-      const res = await fetch(APPS_SCRIPT_URL, {
+      await fetch(APPS_SCRIPT_URL, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        mode:    'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
         body:    JSON.stringify({ fila, estado: nuevoEstado }),
       });
-      if (res.ok) {
-        console.log(`✅ [SYNC OK] Pedido en fila ${fila} enviado al Webhook (Estado: "${nuevoEstado}").`);
-      } else {
-        const err = await res.text();
-        console.error(`❌ [SYNC ERROR] Falló POST a Webhook. Código ${res.status}. Detalle:`, err);
-      }
+      console.log(`✅ [SYNC ENVIADO] Orden a fila ${fila} disparada (Estado: "${nuevoEstado}"). Webhook Opaco.`);
     } catch (e) {
-      console.error(`❌ [SYNC ERROR] Excepción general al enviar estado al Webhook:`, e.message);
+      console.error(`❌ [SYNC ERROR] Excepción de red enviando estado al Webhook:`, e.message);
     }
   };
 
@@ -128,14 +124,14 @@ export function GoogleSheetsProvider({ children }) {
     if (!APPS_SCRIPT_URL) return;
 
     try {
-      const res = await fetch(APPS_SCRIPT_URL, {
+      await fetch(APPS_SCRIPT_URL, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        mode:    'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
         body:    JSON.stringify({ fila, remito_impreso: impreso }),
       });
-      if (!res.ok) console.error(`[SYNC ERROR] Falló POST a Webhook para remito HTTP ${res.status}`);
     } catch (e) {
-      console.error(`[SYNC ERROR] Excepción al actualizar remito vía Webhook:`, e.message);
+      console.error(`[SYNC ERROR] Excepción de red al actualizar remito vía Webhook:`, e.message);
     }
   };
 
