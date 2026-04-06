@@ -104,19 +104,20 @@ export function GoogleSheetsProvider({ children }) {
       return;
     }
 
-    const range  = encodeURIComponent(`Pedidos!M${fila}`);
-    const url    = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?valueInputOption=RAW&key=${API_KEY}`;
+    // La URL correcta: el rango va SIN encodeURIComponent en el path
+    // https://sheets.googleapis.com/v4/spreadsheets/{ID}/values/Pedidos!M{ROW}?valueInputOption=RAW&key={KEY}
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Pedidos!M${fila}?valueInputOption=RAW&key=${API_KEY}`;
 
     try {
       const res = await fetch(url, {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ range: `Pedidos!M${fila}`, majorDimension: 'ROWS', values: [[nuevoEstado]] }),
+        body:    JSON.stringify({ values: [[nuevoEstado]] }),
       });
 
       if (res.ok) {
         const data = await res.json();
-        console.log(`[SYNC OK] Columna M${fila} actualizada a "${nuevoEstado}"`, data);
+        console.log(`[SYNC OK] Columna M${fila} actualizada a "${nuevoEstado}" ✅`, data.updatedRange);
       } else {
         const err = await res.json().catch(() => ({}));
         console.error(`[SYNC ERROR] HTTP ${res.status} al escribir M${fila}:`, err?.error?.message || res.statusText);
