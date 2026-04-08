@@ -38,6 +38,11 @@ function KpiCard({ titulo, valor, subtitulo, icono: Icon, color = 'green', cambi
 export default function Resumen() {
   const { pedidos: PEDIDOS, urlSheet, error, cargando, conectado } = useGoogleSheets();
 
+  // Filtrar solo ventas reales (aprobadas) para TODA la sección de resumen
+  const ventasAprobadas = useMemo(() => {
+    return PEDIDOS.filter(p => (p.estado_pago || '').toLowerCase() === 'approved');
+  }, [PEDIDOS]);
+
   const [config, setConfig] = useState({
     comisionMP: 8,
     costobolsas: 500,
@@ -47,9 +52,9 @@ export default function Resumen() {
   const [showConfig, setShowConfig] = useState(false);
 
   const stats = useMemo(() => {
-    const hoy = PEDIDOS.filter(p => p.fecha === HOY);
+    const hoy = ventasAprobadas.filter(p => p.fecha === HOY);
     const mesActual = new Date().getMonth();
-    const mesActualPedidos = PEDIDOS.filter(p => new Date(p.fecha).getMonth() === mesActual);
+    const mesActualPedidos = ventasAprobadas.filter(p => new Date(p.fecha).getMonth() === mesActual);
 
     const pedidosHoy = hoy.length;
     const facturacionHoy = hoy.reduce((sum, p) => sum + p.total, 0);
@@ -90,11 +95,11 @@ export default function Resumen() {
       margenRealPct,
       gananciaNetaDia
     };
-  }, [config, PEDIDOS]);
+  }, [config, ventasAprobadas]);
 
   const productStats = useMemo(() => {
     const counts = {};
-    PEDIDOS.forEach(p => {
+    ventasAprobadas.forEach(p => {
       const prod = (p.producto || '').trim();
       if (!prod) return;
       counts[prod] = (counts[prod] || 0) + 1;
@@ -112,14 +117,14 @@ export default function Resumen() {
       top: sortedDesc.slice(0, 3),
       bottom: sortedAsc.slice(0, 3)
     };
-  }, [PEDIDOS]);
+  }, [ventasAprobadas]);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-white">Resumen</h2>
-          <p className="text-gray-500 text-sm mt-1">Indicadores clave y desglose financiero</p>
+          <p className="text-gray-500 text-sm mt-1">Indicadores clave y ventas reales (aprobadas)</p>
         </div>
         
         <div className="flex items-center gap-3">
@@ -358,7 +363,7 @@ export default function Resumen() {
             { label: 'Listos',          estado: 'listo',          color: 'bg-blue-500',   light: 'text-blue-400' },
             { label: 'Entregados',      estado: 'entregado',      color: 'bg-green-500',  light: 'text-green-400' },
           ].map(({ label, estado, color, light }) => {
-            const hoy = PEDIDOS.filter(p => p.fecha === HOY);
+            const hoy = ventasAprobadas.filter(p => p.fecha === HOY);
             const cant = hoy.filter(p => p.estado === estado).length;
             const pct = hoy.length ? Math.round((cant / hoy.length) * 100) : 0;
             return (
