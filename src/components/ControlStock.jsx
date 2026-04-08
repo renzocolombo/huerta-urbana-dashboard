@@ -3,15 +3,12 @@ import { useState, useEffect, useMemo } from 'react';
 import { 
   AlertTriangle, TrendingUp, Package, Plus, History, 
   Check, Info, Box, Edit2, RotateCcw, X, Save,
-  AlertCircle
+  AlertCircle, Loader2
 } from 'lucide-react';
 
-const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
-
-// Teclas de LocalStorage
+// Teclas de LocalStorage (Solo para sincronización de productos master)
 const COSTOS_KEY = 'huerta_data_costos_v1_productos';
-const STOCK_DATA_KEY = 'huerta_stock_v1_data';
-const HISTORY_KEY = 'huerta_stock_v1_history';
+const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 
 // Configuración por defecto por tipo
 const DEFAULTS_BY_TYPE = {
@@ -21,57 +18,99 @@ const DEFAULTS_BY_TYPE = {
 };
 
 export default function ControlStock() {
-  const { pedidos: PEDIDOS } = useGoogleSheets();
+  const { conectado: apiConectada } = useGoogleSheets();
 
-  // 1. Estados principales persistentes
+  // 1. Estados principales
   const [productosMaster, setProductosMaster] = useState([]);
   const [stockData, setStockData] = useState({});
   const [historial, setHistorial] = useState([]);
   const [showFormId, setShowFormId] = useState(null);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState(null);
 
-  // 2. Cargar datos iniciales de LocalStorage
+  // 2. Cargar productos master y luego el stock de Google Sheets
   useEffect(() => {
+    cargarDatosIniciales();
+  }, []);
+
+  const cargarDatosIniciales = async () => {
+    setCargando(true);
+    setError(null);
+
+    // 2a. Leer productos del Panel de Costos (Maestro) desde LocalStorage
     const prodsSaved = localStorage.getItem(COSTOS_KEY);
     const master = prodsSaved ? JSON.parse(prodsSaved) : [];
     setProductosMaster(master);
 
-    const stockSaved = localStorage.getItem(STOCK_DATA_KEY);
-    const sData = stockSaved ? JSON.parse(stockSaved) : {};
-    
-    // Sincronizar y aplicar esquema extendido
-    const updatedStockData = { ...sData };
-    master.forEach(p => {
-      if (!updatedStockData[p.id]) {
-        updatedStockData[p.id] = {
-          nombre: p.nombre,
-          stock: { '500g': 0, '1kg': 0 },
-          originalLoad: { '500g': 0, '1kg': 0 },
-          ultimoBandejeado: null,
-          tipo: 'hoja verde',
-          urgentDays: DEFAULTS_BY_TYPE['hoja verde'].days
-        };
-      } else {
-        // Asegurar campos nuevos en registros viejos
-        updatedStockData[p.id].nombre = p.nombre;
-        if (!updatedStockData[p.id].originalLoad) updatedStockData[p.id].originalLoad = updatedStockData[p.id].stock;
-        if (!updatedStockData[p.id].urgentDays) {
-          const type = updatedStockData[p.id].tipo || 'hoja verde';
-          updatedStockData[p.id].urgentDays = DEFAULTS_BY_TYPE[type]?.days || 2;
-        }
+    // 2b. Leer data de Stock desde Google Sheets
+    if (!APPS_SCRIPT_URL) {
+      setError('Falta VITE_APPS_SCRIPT_URL en el entorno');
+      setCargando(false);
+      return;
+    }
+
+    try {
+      console.log('[STOCK-SYNC] Solicitando stock a Google Sheets...');
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ accion: 'getStock' })
+      });
+      
+      const data = await res.json();
+      if (!Array.isArray(data)) {
+        throw new Error('La respuesta de Google Sheets no es un formato válido (se esperaba array)');
       }
-    });
 
-    // Limpiar obsoletos
-    Object.keys(updatedStockData).forEach(id => {
-      if (!master.find(p => p.id === Number(id))) delete updatedStockData[id];
-    });
+      console.log(`[STOCK-SYNC] ✅ ${data.length} registros de stock recibidos.`);
 
-    setStockData(updatedStockData);
-    localStorage.setItem(STOCK_DATA_KEY, JSON.stringify(updatedStockData));
+      // Sincronizar Master con Data remota
+      const newStockData = {};
+      master.forEach(p => {
+        // Buscamos el producto en la data remota por nombre o ID
+        const remoteInfo = data.find(r => r.nombre?.toLowerCase().trim() === p.nombre?.toLowerCase().trim());
+        
+        if (remoteInfo) {
+          newStockData[p.id] = {
+            nombre: p.nombre,
+            fila: remoteInfo.fila, // Guardamos la fila para futuras actualizaciones
+            stock: { 
+              '500g': Number(remoteInfo.stock_500g || 0), 
+              '1kg': Number(remoteInfo.stock_1kg || 0) 
+            },
+            originalLoad: { 
+              '500g': Number(remoteInfo.original_load_500g || remoteInfo.stock_500g || 0), 
+              '1kg': Number(remoteInfo.original_load_1kg || remoteInfo.stock_1kg || 0) 
+            },
+            ultimoBandejeado: remoteInfo.ultimo_bandejeado || null,
+            tipo: remoteInfo.tipo || 'hoja verde',
+            urgentDays: Number(remoteInfo.urgent_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || 'hoja verde'].days)
+          };
+        } else {
+          // Si no existe en el Sheet, lo inicializamos localmente (se guardará al primer cambio)
+          newStockData[p.id] = {
+            nombre: p.nombre,
+            fila: null, // No tiene fila aún
+            stock: { '500g': 0, '1kg': 0 },
+            originalLoad: { '500g': 0, '1kg': 0 },
+            ultimoBandejeado: null,
+            tipo: 'hoja verde',
+            urgentDays: DEFAULTS_BY_TYPE['hoja verde'].days
+          };
+        }
+      });
 
-    const histSaved = localStorage.getItem(HISTORY_KEY);
-    setHistorial(histSaved ? JSON.parse(histSaved) : []);
-  }, []);
+      setStockData(newStockData);
+    } catch (err) {
+      console.error('[STOCK-SYNC] ❌ Error al cargar stock:', err.message);
+      setError('No se pudo leer el stock de Google Sheets. Verifica la conexión.');
+      
+      // Fallback a localStorage por seguridad si ya existía algo (opcional, pero user pidió REEMPLAZAR)
+      // Por ahora dejamos el error visible.
+    } finally {
+      setCargando(false);
+    }
+  };
 
   // 3. Lógica de cálculo de alertas y categorías
   const processedData = useMemo(() => {
@@ -86,12 +125,10 @@ export default function ControlStock() {
         diasTranscurridos = Math.floor(diff / (1000 * 60 * 60 * 24));
       }
 
-      // LÓGICA DE ESTADOS
       const isFaltante = totalStock === 0;
       const isUrgente = diasTranscurridos !== null && diasTranscurridos > item.urgentDays;
       const isStockBajo = !isFaltante && totalOriginal > 0 && totalStock <= (totalOriginal / 2);
 
-      // Jerarquía: Faltante > Urgente > Bajo
       let category = 'ok';
       if (isFaltante) category = 'faltante';
       else if (isUrgente) category = 'urgente';
@@ -108,12 +145,47 @@ export default function ControlStock() {
     });
   }, [stockData]);
 
-  // 4. Handlers Principales
+  // 4. Handlers Principales Sincronizados con Google Sheets
+  const syncWithSheet = async (pid, updatedProduct) => {
+    if (!APPS_SCRIPT_URL || !updatedProduct.fila) {
+      console.warn('[STOCK-SYNC] No se puede sincronizar: Falta URL o Fila');
+      return;
+    }
+
+    const payload = {
+      accion: 'updateStock',
+      fila: updatedProduct.fila,
+      nombre: updatedProduct.nombre,
+      stock_500g: updatedProduct.stock['500g'],
+      stock_1kg: updatedProduct.stock['1kg'],
+      original_load_500g: updatedProduct.originalLoad['500g'],
+      original_load_1kg: updatedProduct.originalLoad['1kg'],
+      tipo: updatedProduct.tipo,
+      urgent_days: updatedProduct.urgentDays,
+      ultimo_bandejeado: updatedProduct.ultimoBandejeado
+    };
+
+    try {
+      // Usamos no-cors para el envío según instrucción del usuario
+      await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(payload)
+      });
+      console.log(`[STOCK-SYNC] ✅ Sincronización enviada para ${updatedProduct.nombre}`);
+    } catch (e) {
+      console.error(`[STOCK-SYNC] ❌ Error al sincronizar:`, e.message);
+    }
+  };
+
   const updateProductData = (pid, patch) => {
     const newData = { ...stockData };
     newData[pid] = { ...newData[pid], ...patch };
     setStockData(newData);
-    localStorage.setItem(STOCK_DATA_KEY, JSON.stringify(newData));
+    
+    // Sincronización remota
+    syncWithSheet(pid, newData[pid]);
   };
 
   const guardarCarga = (pid, formData) => {
@@ -123,35 +195,63 @@ export default function ControlStock() {
     const newData = { ...stockData };
     const prod = newData[pid];
     
-    // Al cargar bandejeado, sumamos y actualizamos el originalLoad al nuevo total
     prod.stock[tamano] += cantNum;
-    prod.originalLoad = { ...prod.stock }; // El nuevo original es el stock total actual
+    prod.originalLoad = { ...prod.stock }; 
     prod.ultimoBandejeado = fecha;
     prod.tipo = tipo;
 
     setStockData(newData);
-    localStorage.setItem(STOCK_DATA_KEY, JSON.stringify(newData));
+    syncWithSheet(pid, prod);
 
-    // Historial
-    const entry = {
-      id: Date.now(), pid, nombre: prod.nombre, tamano, cantidad: cantNum,
-      mode: 'add', fecha, tipo, fechaRegistro: new Date().toISOString()
-    };
-    setHistorial([entry, ...historial]);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify([entry, ...historial]));
     setShowFormId(null);
   };
 
+  if (cargando) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] text-gray-500 gap-4">
+        <Loader2 className="animate-spin text-green-500" size={40} />
+        <p className="animate-pulse font-bold text-xs uppercase tracking-widest">Sincronizando con Google Sheets...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-500/10 border border-red-500/20 rounded-[2rem] p-10 text-center space-y-4">
+        <AlertCircle className="mx-auto text-red-500" size={48} />
+        <h3 className="text-white font-bold text-lg">Error de Sincronización</h3>
+        <p className="text-red-400 text-sm max-w-md mx-auto">{error}</p>
+        <button 
+          onClick={cargarDatosIniciales}
+          className="bg-red-500 text-white px-6 py-2 rounded-xl text-xs font-bold uppercase hover:bg-red-400 transition-colors"
+        >
+          Reintentar conexión
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-10 pb-20">
-      <div>
-        <h2 className="text-xl font-bold text-white">Control de Stock</h2>
-        <p className="text-gray-500 text-sm mt-1">Gestión avanzada centrada en reposición y frescura</p>
+      <div className="flex justify-between items-end">
+        <div>
+          <h2 className="text-xl font-bold text-white">Control de Stock</h2>
+          <p className="text-gray-500 text-sm mt-1 flex items-center gap-2">
+            <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+            Sincronizado con Google Sheets (Tiempo Real)
+          </p>
+        </div>
+        <button 
+          onClick={cargarDatosIniciales}
+          className="text-gray-500 hover:text-white transition-colors p-2 rounded-xl bg-white/5"
+          title="Refrescar desde Sheet"
+        >
+          <RotateCcw size={16} />
+        </button>
       </div>
 
-      {/* 📦 REDISEÑO DEL RESUMEN — 3 COLUMNAS */}
+      {/* 📦 RESUMEN DE STOCK — 3 COLUMNAS */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Columna 1: URGENTE VENDER */}
         <StatusColumn 
           title="🔴 URGENTE VENDER" 
           bg="bg-red-500/5 shadow-[0_0_20px_rgba(239,68,68,0.05)]" 
@@ -160,7 +260,6 @@ export default function ControlStock() {
           type="urgente"
         />
 
-        {/* Columna 2: STOCK BAJO */}
         <StatusColumn 
           title="🟡 STOCK BAJO" 
           bg="bg-amber-500/5 shadow-[0_0_20px_rgba(245,158,11,0.05)]" 
@@ -169,7 +268,6 @@ export default function ControlStock() {
           type="bajo"
         />
 
-        {/* Columna 3: FALTANTE */}
         <StatusColumn 
           title="⚫ FALTANTE" 
           bg="bg-gray-800/10 shadow-[0_0_20px_rgba(0,0,0,0.1)]" 
@@ -179,9 +277,9 @@ export default function ControlStock() {
         />
       </div>
 
-      {/* Grid de Productos Detallado */}
+      {/* Grid de Productos */}
       <div className="space-y-4">
-        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-2">Inventario Completo</h3>
+        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-2">Inventario en la Nube</h3>
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
           {processedData.map(p => (
             <ProductCard 
@@ -192,25 +290,6 @@ export default function ControlStock() {
               onToggleAdd={() => setShowFormId(showFormId === p.id ? null : p.id)}
               onSaveAdd={(data) => guardarCarga(p.id, data)}
             />
-          ))}
-        </div>
-      </div>
-
-      {/* Historial footer simple */}
-      <div className="pt-10">
-        <div className="flex items-center gap-2 mb-4 text-gray-500 opacity-50">
-          <History size={16} />
-          <span className="text-xs uppercase font-bold tracking-tighter">Últimos movimientos registrados</span>
-        </div>
-        <div className="space-y-2 opacity-50">
-          {historial.slice(0, 5).map(h => (
-            <div key={h.id} className="text-[10px] text-gray-400 font-mono flex gap-2">
-              <span>{new Date(h.fechaRegistro).toLocaleDateString()}</span>
-              <span className="text-gray-600">|</span>
-              <span className="text-white">{h.nombre}</span>
-              <span className="text-gray-600">|</span>
-              <span className={h.mode === 'add' ? 'text-green-500' : 'text-blue-500'}>{h.mode === 'add' ? '+' : ''}{h.cantidad} {h.tamano}</span>
-            </div>
           ))}
         </div>
       </div>
@@ -257,10 +336,10 @@ function StatusColumn({ title, bg, borderColor, items, type }) {
   );
 }
 
-// COMPONENTE: Tarjeta de Producto (Altamente editable)
+// COMPONENTE: Tarjeta de Producto
 function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
-  const [editingField, setEditingField] = useState(null); // 'tipo' | 'days' | 'stock500' | 'stock1k'
-  const [resetConfirm, setResetConfirm] = useState(null); // '500g' | '1kg'
+  const [editingField, setEditingField] = useState(null);
+  const [resetConfirm, setResetConfirm] = useState(null);
   
   const icon = DEFAULTS_BY_TYPE[product.tipo]?.icon || '🌿';
 
@@ -274,7 +353,6 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
   const handleResetStock = (size) => {
     const newStock = { ...product.stock };
     newStock[size] = 0;
-    // Si reseteamos todo, limpiamos fecha. Si no, solo el tamaño.
     const total = Object.values(newStock).reduce((a,b)=>a+b, 0);
     onUpdate({ 
       stock: newStock, 
@@ -292,60 +370,25 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
             <span className="text-xl">{icon}</span>
             <h4 className="font-bold text-white text-md tracking-tight">{product.nombre}</h4>
           </div>
-          
-          {/* Edición de Tipo */}
-          <div className="flex items-center gap-2">
-            {editingField === 'tipo' ? (
-              <select 
-                autoFocus
-                className="bg-gray-900 text-xs text-white border border-gray-700 rounded-lg px-2 py-1 outline-none"
-                value={product.tipo}
-                onChange={(e) => { onUpdate({ 
-                  tipo: e.target.value, 
-                  urgentDays: DEFAULTS_BY_TYPE[e.target.value]?.days || product.urgentDays 
-                }); setEditingField(null); }}
-                onBlur={() => setEditingField(null)}
-              >
-                <option value="hoja verde">Hoja Verde</option>
-                <option value="blando">Blando</option>
-                <option value="duro">Duro</option>
-              </select>
-            ) : (
-              <button 
-                onClick={() => setEditingField('tipo')}
-                className="text-[10px] text-gray-500 uppercase font-black hover:text-white transition-colors flex items-center gap-1"
-              >
-                {product.tipo} <Edit2 size={8} />
-              </button>
-            )}
-          </div>
+          <button 
+            onClick={() => setEditingField('tipo')}
+            className="text-[10px] text-gray-500 uppercase font-black hover:text-white transition-colors flex items-center gap-1"
+          >
+            {product.tipo} <Edit2 size={8} />
+          </button>
         </div>
 
-        {/* Alerta de días */}
         <div className="text-right">
           <p className="text-[10px] text-gray-500 font-bold uppercase tracking-tighter mb-1">Alerta Urgente</p>
-          {editingField === 'days' ? (
-            <input 
-              autoFocus
-              type="number"
-              className="bg-gray-900 text-xs text-white border border-gray-700 rounded-lg w-12 px-2 py-1 text-right outline-none"
-              value={product.urgentDays}
-              onChange={(e) => onUpdate({ urgentDays: Number(e.target.value) })}
-              onBlur={() => setEditingField(null)}
-              onKeyDown={(e) => e.key === 'Enter' && setEditingField(null)}
-            />
-          ) : (
-            <button 
-              onClick={() => setEditingField('days')}
-              className="text-sm font-black text-white hover:text-green-400 transition-colors flex items-center justify-end gap-1"
-            >
-              {product.urgentDays} d <Edit2 size={10} />
-            </button>
-          )}
+          <button 
+            onClick={() => setEditingField('days')}
+            className="text-sm font-black text-white hover:text-green-400 transition-colors flex items-center justify-end gap-1"
+          >
+            {product.urgentDays} d <Edit2 size={10} />
+          </button>
         </div>
       </div>
 
-      {/* Gestión de Stock */}
       <div className="space-y-3 mb-6">
         {['500g', '1kg'].map(size => {
           const isFaltante = product.stock[size] === 0;
@@ -374,7 +417,7 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
                 {resetConfirm === size ? (
                   <div className="flex items-center gap-1 animate-in slide-in-from-right-2">
                     <button onClick={() => handleResetStock(size)} className="bg-red-600 text-white text-[9px] font-black px-2 py-1 rounded-lg">SI, RESET</button>
-                    <button onClick={() => setResetConfirm(null)} className="bg-gray-700 text-white p-1 rounded-lg"><X size={12}/></button>
+                    <button onClick={() => setResetConfirm(null)} className="p-1 text-white border border-gray-700 rounded-lg"><X size={12}/></button>
                   </div>
                 ) : (
                   <>
@@ -388,12 +431,11 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
         })}
       </div>
 
-      {/* Info extra y botón carga */}
       <div className="pt-4 border-t border-gray-800">
         <div className="flex justify-between items-center mb-4 text-[10px]">
           <span className="text-gray-500 font-bold uppercase">Último: {product.ultimoBandejeado ? new Date(product.ultimoBandejeado).toLocaleDateString() : 'N/A'}</span>
           <span className={`font-black ${product.diasTranscurridos > product.urgentDays ? 'text-red-500' : 'text-green-500'}`}>
-             {product.diasTranscurridos !== null ? `${product.diasTranscurridos} días de frescura` : 'Sin datos'}
+             {product.diasTranscurridos !== null ? `${product.diasTranscurridos} d frescura` : 'Sin datos'}
           </span>
         </div>
 
@@ -413,6 +455,40 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
           />
         )}
       </div>
+
+      {/* Edit Overlays (Simplified) */}
+      {editingField === 'tipo' && (
+        <div className="absolute inset-0 bg-gray-900/95 flex flex-col items-center justify-center p-6 z-10 animate-in fade-in">
+          <p className="text-[10px] font-bold text-gray-500 uppercase mb-4">Cambiar Tipo</p>
+          <div className="grid grid-cols-1 gap-2 w-full">
+            {Object.keys(DEFAULTS_BY_TYPE).map(t => (
+              <button 
+                key={t}
+                onClick={() => { onUpdate({ tipo: t, urgentDays: DEFAULTS_BY_TYPE[t].days }); setEditingField(null); }}
+                className={`py-3 px-4 rounded-2xl text-xs font-bold uppercase transition-all ${product.tipo === t ? 'bg-green-500 text-white' : 'bg-white/5 text-gray-400 hover:bg-white/10'}`}
+              >
+                {t} {DEFAULTS_BY_TYPE[t].icon}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setEditingField(null)} className="mt-6 text-[10px] text-gray-500 font-bold uppercase hover:text-white">Cancelar</button>
+        </div>
+      )}
+
+      {editingField === 'days' && (
+        <div className="absolute inset-0 bg-gray-900/95 flex flex-col items-center justify-center p-6 z-10 animate-in fade-in">
+          <p className="text-[10px] font-bold text-gray-500 uppercase mb-4">Días Alerta Urgente</p>
+          <input 
+            autoFocus
+            type="number"
+            className="bg-black text-3xl font-black text-white text-center w-24 p-4 rounded-3xl border border-gray-800 mb-6 outline-none"
+            value={product.urgentDays}
+            onChange={(e) => onUpdate({ urgentDays: Number(e.target.value) })}
+            onKeyDown={(e) => e.key === 'Enter' && setEditingField(null)}
+          />
+          <button onClick={() => setEditingField(null)} className="bg-green-500 text-white px-8 py-3 rounded-2xl text-xs font-bold uppercase hover:bg-green-400 transition-all">Guardar</button>
+        </div>
+      )}
     </div>
   );
 }
