@@ -38,7 +38,7 @@ export default function ControlStock() {
       if (!updatedStockData[p.id]) {
         updatedStockData[p.id] = {
           nombre: p.nombre,
-          stock: { '500g': 0, '750g': 0, '1kg': 0 },
+          stock: { '500g': 0, '1kg': 0 },
           ultimoBandejeado: null,
           tipo: 'hoja verde'
         };
@@ -115,12 +115,21 @@ export default function ControlStock() {
 
   // 4. Funciones de carga
   const guardarCarga = (pid, formData) => {
-    const { tamano, cantidad, tipo, fecha } = formData;
+    const { tamano, cantidad, tipo, fecha, mode } = formData;
     
+    // Normalizar cantidad (no negativos, default 0)
+    const cantNum = Math.max(0, Number(cantidad) || 0);
+
     // Actualizar StockData
     const newStockData = { ...stockData };
     const prod = newStockData[pid];
-    prod.stock[tamano] += Number(cantidad);
+    
+    if (mode === 'set') {
+      prod.stock[tamano] = cantNum;
+    } else {
+      prod.stock[tamano] += cantNum;
+    }
+    
     prod.ultimoBandejeado = fecha;
     prod.tipo = tipo;
 
@@ -133,7 +142,8 @@ export default function ControlStock() {
       pid,
       nombre: prod.nombre,
       tamano,
-      cantidad: Number(cantidad),
+      cantidad: cantNum,
+      mode: mode || 'add',
       fecha: fecha,
       tipo,
       fechaRegistro: new Date().toISOString()
@@ -143,6 +153,32 @@ export default function ControlStock() {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistorial));
 
     setShowFormId(null);
+  };
+
+  const resetearStock = (pid) => {
+    if (!window.confirm(`¿Resetear el stock de ${stockData[pid].nombre}?`)) return;
+
+    const newStockData = { ...stockData };
+    newStockData[pid].stock = { '500g': 0, '1kg': 0 };
+    newStockData[pid].ultimoBandejeado = null;
+
+    setStockData(newStockData);
+    localStorage.setItem(STOCK_DATA_KEY, JSON.stringify(newStockData));
+    
+    // Opcional: registrar en historial
+    const newEntry = {
+      id: Date.now(),
+      pid,
+      nombre: newStockData[pid].nombre,
+      tamano: 'Todos',
+      cantidad: 0,
+      mode: 'reset',
+      fecha: new Date().toISOString().split('T')[0],
+      tipo: newStockData[pid].tipo,
+      fechaRegistro: new Date().toISOString()
+    };
+    setHistorial([newEntry, ...historial]);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify([newEntry, ...historial]));
   };
 
   return (
@@ -194,6 +230,7 @@ export default function ControlStock() {
             isEditing={showFormId === p.id}
             onToggleEdit={() => setShowFormId(showFormId === p.id ? null : p.id)}
             onSave={(data) => guardarCarga(p.id, data)}
+            onReset={() => resetearStock(p.id)}
           />
         ))}
       </div>
@@ -242,13 +279,25 @@ export default function ControlStock() {
   );
 }
 
-function ProductCard({ product, isEditing, onToggleEdit, onSave }) {
+function ProductCard({ product, isEditing, onToggleEdit, onSave, onReset }) {
+  const [formMode, setFormMode] = useState('add'); // 'add' | 'set'
   const [formData, setFormData] = useState({
     tamano: '1kg',
     cantidad: 1,
     tipo: product.tipo || 'hoja verde',
     fecha: new Date().toISOString().split('T')[0]
   });
+
+  const handleOpenTool = (mode) => {
+    setFormMode(mode);
+    setFormData({
+      ...formData,
+      cantidad: mode === 'set' ? 0 : 1,
+      tipo: product.tipo || 'hoja verde',
+      fecha: product.ultimoBandejeado || new Date().toISOString().split('T')[0]
+    });
+    onToggleEdit();
+  };
 
   const getStatusColor = (status) => {
     if (status === 'urgente') return 'text-red-400 bg-red-500/10 border-red-500/20';
@@ -287,26 +336,47 @@ function ProductCard({ product, isEditing, onToggleEdit, onSave }) {
       </div>
 
       {/* Desglose Stock */}
-      <div className="grid grid-cols-3 gap-2 mb-4">
-        {['500g', '750g', '1kg'].map(size => (
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        {['500g', '1kg'].map(size => (
           <div key={size} className="bg-gray-900/50 border border-gray-800 rounded-xl p-2 text-center">
             <p className="text-[9px] text-gray-500 uppercase font-black">{size}</p>
             <p className={`text-sm font-black ${product.stock[size] > 0 ? 'text-white' : 'text-gray-700'}`}>
-              {product.stock[size]}
+              {product.stock[size] || 0}
             </p>
           </div>
         ))}
       </div>
 
       {!isEditing ? (
-        <button 
-          onClick={onToggleEdit}
-          className="w-full flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold py-3 rounded-2xl transition-all border border-gray-700 hover:border-gray-600"
-        >
-          <Plus size={16} /> Cargar bandejeado
-        </button>
+        <div className="flex flex-col gap-2">
+          <button 
+            onClick={() => handleOpenTool('add')}
+            className="w-full flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 text-white text-[11px] font-bold py-2.5 rounded-2xl transition-all border border-gray-700 hover:border-gray-600"
+          >
+            <Plus size={14} /> Cargar bandejeado
+          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button 
+              onClick={() => handleOpenTool('set')}
+              className="flex items-center justify-center gap-2 bg-gray-800/50 hover:bg-gray-700 text-gray-400 text-[10px] font-bold py-2 rounded-xl transition-all border border-gray-800 hover:border-gray-600"
+            >
+              ✏️ Editar
+            </button>
+            <button 
+              onClick={onReset}
+              className="flex items-center justify-center gap-2 bg-red-500/5 hover:bg-red-500/10 text-red-500/50 hover:text-red-500 text-[10px] font-bold py-2 rounded-xl transition-all border border-red-500/10 hover:border-red-500/20"
+            >
+              🔄 Resetear
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="bg-gray-900 border border-gray-700 rounded-2xl p-4 slide-in space-y-4">
+          <div className="flex items-center justify-between mb-1">
+             <span className="text-[10px] font-black text-white uppercase tracking-widest">
+               {formMode === 'set' ? '✏️ Modo Edición Manual' : '📦 Cargar Bandejeado'}
+             </span>
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-[8px] font-bold text-gray-500 uppercase mb-1">Tamaño</label>
@@ -316,7 +386,6 @@ function ProductCard({ product, isEditing, onToggleEdit, onSave }) {
                 className="w-full bg-[#111827] border border-gray-800 text-white text-[10px] px-2 py-1.5 rounded-lg outline-none"
               >
                 <option value="500g">500g</option>
-                <option value="750g">750g</option>
                 <option value="1kg">1kg</option>
               </select>
             </div>
@@ -324,9 +393,10 @@ function ProductCard({ product, isEditing, onToggleEdit, onSave }) {
               <label className="block text-[8px] font-bold text-gray-500 uppercase mb-1">Cantidad</label>
               <input 
                 type="number" 
+                min="0"
                 value={formData.cantidad}
-                onChange={(e) => setFormData({...formData, cantidad: e.target.value})}
-                className="w-full bg-[#111827] border border-gray-800 text-white text-[10px] px-2 py-1.5 rounded-lg outline-none"
+                onChange={(e) => setFormData({...formData, cantidad: Math.max(0, Number(e.target.value))})}
+                className="w-full bg-[#111827] border border-gray-800 text-white text-[10px] px-2 py-1.5 rounded-lg outline-none font-black text-center"
               />
             </div>
           </div>
@@ -356,10 +426,10 @@ function ProductCard({ product, isEditing, onToggleEdit, onSave }) {
           <div className="flex gap-2">
             <button onClick={onToggleEdit} className="flex-1 text-[10px] text-gray-500 font-bold hover:text-white transition-colors">Cancelar</button>
             <button 
-              onClick={() => onSave(formData)}
+              onClick={() => onSave({ ...formData, mode: formMode })}
               className="flex-[2] bg-green-500 hover:bg-green-400 text-white text-[10px] font-bold py-2 rounded-xl transition-all shadow-lg shadow-green-500/20"
             >
-              Guardar Stock
+              {formMode === 'set' ? 'Actualizar Stock' : 'Guardar Stock'}
             </button>
           </div>
         </div>
