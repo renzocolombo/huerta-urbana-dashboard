@@ -138,17 +138,40 @@ export function GoogleSheetsProvider({ children }) {
     }
   };
 
+  // Actualización optimista + POST a Webhook de Apps Script (Múltiples datos de cliente)
+  const actualizarDatosCliente = async (fila, payload) => {
+    // UI reactiva
+    setPedidos(current =>
+      current.map(p => p.sheetRowIndex === fila ? { ...p, ...payload } : p)
+    );
+
+    if (!APPS_SCRIPT_URL) return;
+
+    try {
+      await fetch(APPS_SCRIPT_URL, {
+        method:  'POST',
+        mode:    'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
+        body:    JSON.stringify({ fila, ...payload }),
+      });
+      console.log(`✅ [SYNC ENVIADO] Datos de cliente enviados (Fila: ${fila}). Payload:`, payload);
+    } catch (e) {
+      console.error(`[SYNC ERROR] Excepción de red al actualizar datos del cliente:`, e.message);
+    }
+  };
+
   return (
     <GoogleSheetsContext.Provider value={{
       pedidos, setPedidos,
       ultimoRefresco,
-      fetchSheetPedidos,
-      conectado,
       cargando,
       error,
-      urlSheet: URL_SHEET,
+      conectado,
+      fetchSheetPedidos,
       actualizarEstadoEnSheet,
       actualizarRemitoEnSheet,
+      actualizarDatosCliente,
+      urlSheet: URL_SHEET
     }}>
       {children}
     </GoogleSheetsContext.Provider>
