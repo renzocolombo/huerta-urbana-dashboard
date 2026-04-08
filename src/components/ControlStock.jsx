@@ -14,10 +14,27 @@ const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 const COSTOS_KEY = 'huerta_data_costos_v1_productos';
 
 const DEFAULTS_BY_TYPE = {
-  'hoja verde': { days: 2, icon: '🌿' },
-  'blando': { days: 4, icon: '🍑' },
-  'duro': { days: 10, icon: '🥔' }
+  'hoja verde': { days: 2, icon: '🌿', labels: { small: '250g', large: '500g' } },
+  'blando': { days: 4, icon: '🍑', labels: { small: '500g', large: '1kg' } },
+  'duro': { days: 10, icon: '🥔', labels: { small: '500g', large: '1kg' } }
 };
+
+const PRODUCT_DATABASE = {
+  'hoja verde': ['espinaca', 'lechuga', 'rucula', 'acelga', 'perejil', 'albahaca', 'ciboulette', 'radicheta'],
+  'blando': ['tomate', 'tomate cherry', 'banana', 'durazno', 'frutilla', 'pera', 'ciruela', 'morron', 'pepino', 'chaucha', 'berenjena'],
+  'duro': [
+    'papa', 'cebolla', 'zanahoria', 'zapallo', 'manzana', 'naranja', 'limon', 'mandarina', 'pomelo', 
+    'boniato', 'ajo', 'remolacha', 'hinojo', 'apio', 'brocoli', 'coliflor', 'repollo', 'choclo', 'huevos'
+  ]
+};
+
+function getTipoByNombre(nombre) {
+  const n = nombre.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (PRODUCT_DATABASE['hoja verde'].some(p => n.includes(p))) return 'hoja verde';
+  if (PRODUCT_DATABASE['blando'].some(p => n.includes(p))) return 'blando';
+  if (PRODUCT_DATABASE['duro'].some(p => n.includes(p))) return 'duro';
+  return 'hoja verde'; // Default
+}
 
 export default function ControlStock() {
   const [productosMaster, setProductosMaster] = useState([]);
@@ -72,6 +89,10 @@ export default function ControlStock() {
     const newStockData = {};
     master.forEach(p => {
       const remoteInfo = remoteData.find(r => r.nombre?.toLowerCase().trim() === p.nombre?.toLowerCase().trim());
+      
+      // Clasificación automática priorizada
+      const autoTipo = getTipoByNombre(p.nombre);
+
       if (remoteInfo) {
         newStockData[p.id] = {
           nombre: p.nombre,
@@ -79,13 +100,13 @@ export default function ControlStock() {
           stock: { '500g': Number(remoteInfo.stock_500g || 0), '1kg': Number(remoteInfo.stock_1kg || 0) },
           originalLoad: { '500g': Number(remoteInfo.original_load_500g || remoteInfo.stock_500g || 0), '1kg': Number(remoteInfo.original_load_1kg || remoteInfo.stock_1kg || 0) },
           ultimoBandejeado: remoteInfo.ultimo_bandejeado || null,
-          tipo: remoteInfo.tipo || 'hoja verde',
-          urgentDays: Number(remoteInfo.urgent_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || 'hoja verde']?.days || 2)
+          tipo: remoteInfo.tipo || autoTipo,
+          urgentDays: Number(remoteInfo.urgent_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.days || 2)
         };
       } else {
         newStockData[p.id] = {
           nombre: p.nombre, fila: null, stock: { '500g': 0, '1kg': 0 }, originalLoad: { '500g': 0, '1kg': 0 },
-          ultimoBandejeado: null, tipo: 'hoja verde', urgentDays: DEFAULTS_BY_TYPE['hoja verde'].days
+          ultimoBandejeado: null, tipo: autoTipo, urgentDays: DEFAULTS_BY_TYPE[autoTipo].days
         };
       }
     });
@@ -163,38 +184,12 @@ export default function ControlStock() {
         <button onClick={cargarDatosIniciales} className="text-gray-500 hover:text-white transition-colors p-2.5 rounded-xl bg-white/5"><RotateCcw size={16} /></button>
       </div>
 
-      {/* Resumen Superior — Acordeones Colapsables */}
       <div className="flex flex-col gap-3">
-        <StatusAccordion 
-          title="URGENTE VENDER" 
-          icon="🔴"
-          items={processedData.filter(d => d.category === 'urgente')} 
-          isOpen={expandedCategory === 'urgente'}
-          onToggle={() => toggleCategory('urgente')}
-          color="red"
-          type="urgente"
-        />
-        <StatusAccordion 
-          title="STOCK BAJO" 
-          icon="🟡"
-          items={processedData.filter(d => d.category === 'bajo')} 
-          isOpen={expandedCategory === 'bajo'}
-          onToggle={() => toggleCategory('bajo')}
-          color="amber"
-          type="bajo"
-        />
-        <StatusAccordion 
-          title="FALTANTE" 
-          icon="⚫"
-          items={processedData.filter(d => d.category === 'faltante')} 
-          isOpen={expandedCategory === 'faltante'}
-          onToggle={() => toggleCategory('faltante')}
-          color="gray"
-          type="faltante"
-        />
+        <StatusAccordion title="URGENTE VENDER" icon="🔴" items={processedData.filter(d => d.category === 'urgente')} isOpen={expandedCategory === 'urgente'} onToggle={() => toggleCategory('urgente')} color="red" type="urgente" />
+        <StatusAccordion title="STOCK BAJO" icon="🟡" items={processedData.filter(d => d.category === 'bajo')} isOpen={expandedCategory === 'bajo'} onToggle={() => toggleCategory('bajo')} color="amber" type="bajo" />
+        <StatusAccordion title="FALTANTE" icon="⚫" items={processedData.filter(d => d.category === 'faltante')} isOpen={expandedCategory === 'faltante'} onToggle={() => toggleCategory('faltante')} color="gray" type="faltante" />
       </div>
 
-      {/* Grilla General de Productos */}
       <div className="space-y-4 pt-10 border-t border-white/5">
         <h3 className="text-[11px] font-black text-gray-500 uppercase tracking-[0.3em] font-mono">Inventario Completo</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-[12px]">
@@ -223,22 +218,15 @@ function StatusAccordion({ title, icon, items, isOpen, onToggle, color, type }) 
 
   return (
     <div className={`${colorMap[color]} border rounded-2xl overflow-hidden transition-all duration-300`}>
-      {/* Header */}
-      <button 
-        onClick={onToggle}
-        className="w-full flex items-center justify-between p-4 lg:p-5"
-      >
+      <button onClick={onToggle} className="w-full flex items-center justify-between p-4 lg:p-5">
         <div className="flex items-center gap-3">
           <span className="text-sm">{icon}</span>
           <h3 className="font-black text-[13px] uppercase tracking-widest">{title}</h3>
-          <span className="bg-white/5 px-3 py-0.5 rounded-full text-[10px] font-mono">
-            {items.length} {items.length === 1 ? 'producto' : 'productos'}
-          </span>
+          <span className="bg-white/5 px-3 py-0.5 rounded-full text-[10px] font-mono">{items.length} {items.length === 1 ? 'producto' : 'productos'}</span>
         </div>
         {isOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
       </button>
 
-      {/* Body */}
       {isOpen && (
         <div className="p-4 pt-0 lg:p-6 lg:pt-0 border-t border-white/5 animate-in slide-in-from-top-2 duration-200">
           {items.length === 0 ? (
@@ -248,24 +236,27 @@ function StatusAccordion({ title, icon, items, isOpen, onToggle, color, type }) 
             </div>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-[12px] pt-4">
-              {items.map(p => (
-                <div key={p.id} className="bg-black/30 border border-white/5 rounded-2xl p-4 flex flex-col justify-between hover:bg-black/40 transition-all">
-                  <div className="flex justify-between items-start mb-2">
-                    <span className="text-white font-bold text-xs truncate pr-2">{p.nombre}</span>
-                  </div>
-                  <div className="flex gap-1 mb-2">
-                    <div className="flex-1 bg-white/5 rounded-lg py-1 text-center">
-                       <span className="text-[9px] font-black text-white">{p.stock['1kg']} <span className="text-[7px] opacity-40">1k</span></span>
+              {items.map(p => {
+                const labels = DEFAULTS_BY_TYPE[p.tipo]?.labels || { small: '500g', large: '1kg' };
+                return (
+                  <div key={p.id} className="bg-black/30 border border-white/5 rounded-2xl p-4 flex flex-col justify-between hover:bg-black/40 transition-all">
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="text-white font-bold text-xs truncate pr-2">{p.nombre}</span>
                     </div>
-                    <div className="flex-1 bg-white/5 rounded-lg py-1 text-center">
-                       <span className="text-[9px] font-black text-white">{p.stock['500g']} <span className="text-[7px] opacity-40">5h</span></span>
+                    <div className="flex gap-1 mb-2">
+                      <div className="flex-1 bg-white/5 rounded-lg py-1 text-center">
+                         <span className="text-[9px] font-black text-white">{p.stock['1kg']} <span className="text-[7px] opacity-40 uppercase">{labels.large.replace('g','')}</span></span>
+                      </div>
+                      <div className="flex-1 bg-white/5 rounded-lg py-1 text-center">
+                         <span className="text-[9px] font-black text-white">{p.stock['500g']} <span className="text-[7px] opacity-40 uppercase">{labels.small.replace('g','')}</span></span>
+                      </div>
                     </div>
+                    <span className="text-[9px] font-mono opacity-50 text-right">
+                      {type === 'urgente' ? `${p.diasTranscurridos}d` : `${p.totalStock}u`}
+                    </span>
                   </div>
-                  <span className="text-[9px] font-mono opacity-50 text-right">
-                    {type === 'urgente' ? `${p.diasTranscurridos}d` : `${p.totalStock}u`}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -276,7 +267,9 @@ function StatusAccordion({ title, icon, items, isOpen, onToggle, color, type }) 
 
 function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
   const [editing, setEditing] = useState(false);
-  const icon = DEFAULTS_BY_TYPE[product.tipo]?.icon || '🌿';
+  const typeConfig = DEFAULTS_BY_TYPE[product.tipo] || DEFAULTS_BY_TYPE['hoja verde'];
+  const icon = typeConfig.icon;
+  const labels = typeConfig.labels;
   const categoryColor = { urgente: 'bg-red-500', bajo: 'bg-amber-500', faltante: 'bg-gray-500', ok: 'bg-green-500' };
 
   return (
@@ -289,11 +282,11 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
         </div>
         <div className="flex items-center gap-0.5 mt-2">
           <div className="flex-1 bg-black/30 rounded-lg p-1 text-center">
-            <span className="text-[8px] text-gray-500 block uppercase font-bold leading-none mb-0.5">500g</span>
+            <span className="text-[8px] text-gray-500 block uppercase font-bold leading-none mb-0.5">{labels.small}</span>
             <span className={`text-[11px] font-black ${product.stock['500g'] === 0 ? 'text-gray-700' : 'text-white'}`}>{product.stock['500g']}</span>
           </div>
           <div className="flex-1 bg-black/30 rounded-lg p-1 text-center">
-            <span className="text-[8px] text-gray-500 block uppercase font-bold leading-none mb-0.5">1kg</span>
+            <span className="text-[8px] text-gray-500 block uppercase font-bold leading-none mb-0.5">{labels.large}</span>
             <span className={`text-[11px] font-black ${product.stock['1kg'] === 0 ? 'text-gray-700' : 'text-white'}`}>{product.stock['1kg']}</span>
           </div>
         </div>
@@ -307,7 +300,7 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
           <button onClick={onToggleAdd} className="w-full bg-gray-800/80 hover:bg-gray-700 text-white font-black text-[9px] py-1.5 rounded-lg border border-gray-700 flex items-center justify-center gap-1 transition-all"><Plus size={10} /> Cargar</button>
         ) : (
           <div className="bg-gray-900 absolute inset-0 z-20 p-2 rounded-2xl animate-in fade-in flex flex-col justify-center">
-            <AddStockInline nombre={product.nombre} currentStock={product.stock} onCancel={onToggleAdd} onSave={onSaveAdd} />
+            <AddStockInline nombre={product.nombre} labels={labels} currentStock={product.stock} onCancel={onToggleAdd} onSave={onSaveAdd} />
           </div>
         )}
       </div>
@@ -336,28 +329,27 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
   );
 }
 
-function AddStockInline({ nombre, currentStock, onCancel, onSave }) {
+function AddStockInline({ nombre, labels, currentStock, onCancel, onSave }) {
   const [data, setData] = useState({ stock_1kg: currentStock['1kg'], stock_500g: currentStock['500g'], fecha: new Date().toISOString().split('T')[0] });
   return (
     <div className="space-y-2">
-      <div className="text-center mb-1">
-        <p className="text-[8px] font-black text-white uppercase tracking-tighter">📦 Cargar bandejeado</p>
-        <p className="text-[10px] font-black text-green-500 truncate">{nombre}</p>
+      <div className="text-center mb-1 text-green-400">
+        <p className="text-[10px] font-black truncate">{nombre}</p>
       </div>
       <div className="space-y-1.5">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[9px] text-gray-500 font-bold">1kg:</span>
+          <span className="text-[9px] text-gray-500 font-bold uppercase">{labels.large}:</span>
           <input type="number" value={data.stock_1kg} onChange={(e) => setData({...data, stock_1kg: e.target.value})} className="w-16 bg-black text-[10px] text-white p-1 rounded border border-gray-800 outline-none text-right" />
         </div>
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[9px] text-gray-500 font-bold">500g:</span>
+          <span className="text-[9px] text-gray-500 font-bold uppercase">{labels.small}:</span>
           <input type="number" value={data.stock_500g} onChange={(e) => setData({...data, stock_500g: e.target.value})} className="w-16 bg-black text-[10px] text-white p-1 rounded border border-gray-800 outline-none text-right" />
         </div>
-        <input type="date" value={data.fecha} onChange={(e) => setData({...data, fecha: e.target.value})} className="w-full bg-black text-[9px] text-white p-1 rounded border border-gray-800 outline-none" />
+        <input type="date" value={data.fecha} onChange={(e) => setData({...data, fecha: e.target.value})} className="w-full bg-black text-[9px] text-white p-1 rounded border border-gray-800 outline-none mt-1" />
       </div>
-      <div className="flex gap-1 pt-1">
-        <button onClick={onCancel} className="flex-1 text-[8px] text-gray-400 font-bold uppercase py-1">Cancelar</button>
-        <button onClick={() => onSave(data)} className="flex-1 bg-green-600 text-white text-[8px] font-black uppercase py-1 rounded shadow-lg shadow-green-900/30">Guardar</button>
+      <div className="flex gap-1 pt-2">
+        <button onClick={onCancel} className="flex-1 text-[8px] text-gray-500 font-bold uppercase py-1">Salir</button>
+        <button onClick={() => onSave(data)} className="flex-1 bg-green-600 text-white text-[8px] font-black uppercase py-1 rounded">Listo</button>
       </div>
     </div>
   );
