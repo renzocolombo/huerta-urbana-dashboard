@@ -77,9 +77,10 @@ export default function Clientes() {
   const enviarCuponBienvenida = (c) => {
     if (actualizarDatosCliente) actualizarDatosCliente(c.sheetRowIndex, { cupon_bienvenida_estado: 'Enviado' });
     const primerNombre = (c.nombre || '').split(' ')[0] || 'Cliente';
-    const texto = encodeURIComponent(`Hola ${primerNombre}! `) + "%F0%9F%8C%BF" + 
+    const texto = encodeURIComponent(`Hola ${primerNombre}! `) + "%F0%9F%8E%89" + 
                   encodeURIComponent(`\nTe regalamos un cupón de bienvenida:\n`) + "%F0%9F%8E%81" + 
-                  encodeURIComponent(` *BIENVENIDO10* — 10% off en tu próxima compra\nUso único — sin vencimiento\n\nQue tengas un excelente día!\nHuerta Urbana — 11 6177-1376`);
+                  encodeURIComponent(` BIENVENIDO10 — 10% off en tu próxima compra\nUso único — sin vencimiento\n\nQue tengas un excelente día!\n`) + 
+                  "%F0%9F%8C%BF" + encodeURIComponent(` Huerta Urbana — 11 6177-1376`);
     const url = `https://web.whatsapp.com/send?phone=${(c.telefono || '').replace(/\D/g, '')}&text=${texto}`;
     window.open(url, '_blank');
   };
@@ -94,11 +95,12 @@ export default function Clientes() {
     if (actualizarDatosCliente) actualizarDatosCliente(c.sheetRowIndex, { codigo_referido: codigo, referido_estado: 'Enviado' });
     
     const primerNombre = (c.nombre || '').split(' ')[0] || 'Cliente';
-    const texto = encodeURIComponent(`Hola ${primerNombre}! `) + "%F0%9F%8C%BF" + 
+    const texto = encodeURIComponent(`Hola ${primerNombre}! `) + "%F0%9F%8E%89" + 
                   encodeURIComponent(`\nTu código de referido personal:\n`) + "%F0%9F%91%A5" + 
-                  encodeURIComponent(` *${codigo}*\n\nCompartilo con amigos y familia:\n`) + "%E2%9C%85" + 
+                  encodeURIComponent(` ${codigo}\n\nCompartilo con amigos y familia:\n`) + "%E2%9C%85" + 
                   encodeURIComponent(` Ellos reciben 10% de descuento\n`) + "%E2%9C%85" + 
-                  encodeURIComponent(` Vos recibís $5.000 de crédito por cada uno\nSin límite de referidos — válido 30 días!\n\nQue tengas un excelente día!\nHuerta Urbana — 11 6177-1376`);
+                  encodeURIComponent(` Vos recibís $5.000 de crédito por cada uno\nSin límite de referidos — válido 30 días!\n\nQue tengas un excelente día!\n`) + 
+                  "%F0%9F%8C%BF" + encodeURIComponent(` Huerta Urbana — 11 6177-1376`);
     const url = `https://web.whatsapp.com/send?phone=${(c.telefono || '').replace(/\D/g, '')}&text=${texto}`;
     window.open(url, '_blank');
   };
