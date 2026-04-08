@@ -154,27 +154,42 @@ export default function ControlStock() {
   if (error) return <div className="bg-red-500/10 border border-red-500/20 rounded-[2rem] p-10 text-center space-y-4"><AlertCircle className="mx-auto text-red-500" size={48} /><h3 className="text-white font-bold text-lg">Error</h3><p className="text-red-400 text-sm max-w-md mx-auto">{error}</p><button onClick={cargarDatosIniciales} className="bg-red-500 text-white px-6 py-2 rounded-xl text-xs font-bold uppercase">Reintentar</button></div>;
 
   return (
-    <div className="space-y-6 pb-20">
+    <div className="space-y-10 pb-20">
       <div className="flex justify-between items-end">
         <div>
-          <h2 className="text-xl font-bold text-white">Control de Stock</h2>
-          <p className="text-gray-500 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2">
-            <span className="w-1.5 h-1.5 bg-green-500 rounded-full" /> Sincronizado en la nube
+          <h2 className="text-xl font-bold text-white tracking-tight">Control de Stock</h2>
+          <p className="text-gray-500 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 mt-1">
+            <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" /> Sincronizado vía Cloud API
           </p>
         </div>
-        <button onClick={cargarDatosIniciales} className="text-gray-500 hover:text-white transition-colors p-2 rounded-lg bg-white/5"><RotateCcw size={14} /></button>
+        <button onClick={cargarDatosIniciales} className="text-gray-500 hover:text-white transition-colors p-2.5 rounded-xl bg-white/5 border border-white/5"><RotateCcw size={16} /></button>
       </div>
 
-      {/* Resumen Superior */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatusColumn title="🔴 Urgente" items={processedData.filter(d => d.category === 'urgente')} type="urgente" color="red" />
-        <StatusColumn title="🟡 Bajo" items={processedData.filter(d => d.category === 'bajo')} type="bajo" color="amber" />
-        <StatusColumn title="⚫ Faltante" items={processedData.filter(d => d.category === 'faltante')} type="faltante" color="gray" />
+      {/* Resumen Superior — Filas Horizontales de Ancho Completo */}
+      <div className="flex flex-col gap-8">
+        <StatusSection 
+          title="🔴 URGENTE VENDER" 
+          items={processedData.filter(d => d.category === 'urgente')} 
+          type="urgente" 
+          color="red" 
+        />
+        <StatusSection 
+          title="🟡 STOCK BAJO" 
+          items={processedData.filter(d => d.category === 'bajo')} 
+          type="bajo" 
+          color="amber" 
+        />
+        <StatusSection 
+          title="⚫ FALTANTE" 
+          items={processedData.filter(d => d.category === 'faltante')} 
+          type="faltante" 
+          color="gray" 
+        />
       </div>
 
-      {/* Grilla Compacta de Productos */}
-      <div className="space-y-4 pt-4">
-        <h3 className="text-[10px] font-black text-gray-600 uppercase tracking-[0.2em] pl-1">Inventario General</h3>
+      {/* Grilla General de Productos */}
+      <div className="space-y-4 pt-10 border-t border-white/5">
+        <h3 className="text-[11px] font-black text-gray-500 uppercase tracking-[0.3em] pl-1 font-mono">Inventario Completo</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-[12px]">
           {processedData.map(p => (
             <ProductCard 
@@ -192,25 +207,44 @@ export default function ControlStock() {
   );
 }
 
-function StatusColumn({ title, items, type, color }) {
-  const colorMap = { red: 'bg-red-500/5 border-red-500/20', amber: 'bg-amber-500/5 border-amber-500/20', gray: 'bg-gray-800/10 border-gray-700/50' };
+function StatusSection({ title, items, type, color }) {
+  if (items.length === 0) return null; // Ocultar sección si está vacía
+
+  const colorMap = { 
+    red: 'bg-red-500/5 border-red-500/20 text-red-500', 
+    amber: 'bg-amber-500/5 border-amber-500/20 text-amber-500', 
+    gray: 'bg-gray-800/10 border-gray-700/50 text-gray-400' 
+  };
+
   return (
-    <div className={`${colorMap[color]} border rounded-3xl p-4 flex flex-col min-h-[160px]`}>
-      <h3 className="text-gray-400 font-black text-[10px] uppercase tracking-widest mb-3 flex justify-between">
-        {title} <span>{items.length}</span>
+    <div className={`${colorMap[color]} border rounded-[2rem] p-6 lg:p-8 w-full`}>
+      <h3 className={`font-black text-xs uppercase tracking-[0.2em] mb-6 flex items-center justify-between border-b pb-4 ${colorMap[color].split(' ')[1].replace('/20', '/10')}`}>
+        {title}
+        <span className="bg-white/5 px-3 py-1 rounded-full text-[10px] font-mono">{items.length} productos</span>
       </h3>
-      <div className="grid grid-cols-1 gap-2">
-        {items.length === 0 ? (
-          <p className="text-[10px] text-gray-600 font-bold opacity-30 mt-4 uppercase">OK</p>
-        ) : (
-          items.slice(0, 3).map(p => (
-            <div key={p.id} className="text-[10px] text-white flex justify-between items-center bg-black/20 px-2 py-1 rounded-lg">
-              <span className="truncate pr-2">{p.nombre}</span>
-              <span className="font-mono opacity-50">{type === 'urgente' ? `${p.diasTranscurridos}d` : `${p.totalStock}u`}</span>
+      
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-[12px]">
+        {items.map(p => (
+          <div key={p.id} className="bg-black/30 border border-white/5 rounded-2xl p-4 flex flex-col justify-between hover:bg-black/40 transition-all">
+            <div className="flex justify-between items-start mb-3">
+              <span className="text-white font-bold text-xs truncate leading-none pr-2">{p.nombre}</span>
+              <span className="text-[9px] font-mono opacity-50 whitespace-nowrap">
+                {type === 'urgente' ? `${p.diasTranscurridos}d frescura` : `${p.totalStock}u total`}
+              </span>
             </div>
-          ))
-        )}
-        {items.length > 3 && <p className="text-[8px] text-gray-500 pl-1">+{items.length - 3} más...</p>}
+            
+            <div className="flex gap-1.5 mt-auto">
+              <div className="flex-1 bg-white/5 rounded-lg py-1 text-center">
+                <span className="text-[8px] text-gray-500 block uppercase font-bold leading-none mb-0.5 tracking-tighter">1kg</span>
+                <span className="text-[10px] font-black text-white">{p.stock['1kg']}</span>
+              </div>
+              <div className="flex-1 bg-white/5 rounded-lg py-1 text-center">
+                <span className="text-[8px] text-gray-500 block uppercase font-bold leading-none mb-0.5 tracking-tighter">500g</span>
+                <span className="text-[10px] font-black text-white">{p.stock['500g']}</span>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
