@@ -92,6 +92,28 @@ export default function Resumen() {
     };
   }, [config, PEDIDOS]);
 
+  const productStats = useMemo(() => {
+    const counts = {};
+    PEDIDOS.forEach(p => {
+      const prod = (p.producto || '').trim();
+      if (!prod) return;
+      counts[prod] = (counts[prod] || 0) + 1;
+    });
+
+    const list = Object.entries(counts).map(([name, count]) => ({ name, count }));
+    
+    // Si no hay datos, devolvemos null
+    if (list.length === 0) return null;
+
+    const sortedDesc = [...list].sort((a, b) => b.count - a.count);
+    const sortedAsc = [...list].sort((a, b) => a.count - b.count);
+
+    return {
+      top: sortedDesc.slice(0, 3),
+      bottom: sortedAsc.slice(0, 3)
+    };
+  }, [PEDIDOS]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -275,6 +297,53 @@ export default function Resumen() {
             <div className="mt-6 flex items-center gap-2 bg-green-500/10 text-green-400 text-[10px] px-4 py-1.5 rounded-full border border-green-500/20 font-bold uppercase">
               <TrendingUp size={12} /> Negocio Altamente Rentable
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* WIDGET TOP PRODUCTOS */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* MÁS VENDIDOS */}
+        <div className="bg-[#1f2937] border border-green-500/20 rounded-2xl p-6 shadow-lg relative overflow-hidden">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="text-2xl">🏆</span>
+            <h3 className="font-black text-white text-sm uppercase tracking-wider">Más Vendidos</h3>
+          </div>
+          <div className="space-y-3">
+            {!productStats || productStats.top.length === 0 ? (
+              <p className="text-gray-500 text-xs italic">Sin datos suficientes</p>
+            ) : (
+              productStats.top.map((p, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-green-500/5 border border-green-500/10 rounded-xl">
+                  <span className="text-white text-xs font-bold truncate pr-4">{p.name}</span>
+                  <span className="bg-green-500 text-black text-[10px] font-black px-2 py-1 rounded-lg">
+                    {p.count} VENDIDOS
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* MENOS VENDIDOS */}
+        <div className="bg-[#1f2937] border border-blue-500/10 rounded-2xl p-6 shadow-lg">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="text-2xl">📉</span>
+            <h3 className="font-black text-white text-sm uppercase tracking-wider">Menos vendidos</h3>
+          </div>
+          <div className="space-y-3">
+            {!productStats || productStats.bottom.length === 0 ? (
+              <p className="text-gray-500 text-xs italic">Sin datos suficientes</p>
+            ) : (
+              productStats.bottom.map((p, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-blue-500/5 border border-blue-500/5 rounded-xl">
+                  <span className="text-gray-400 text-xs truncate pr-4">{p.name}</span>
+                  <span className="bg-blue-500/20 text-blue-400 text-[10px] font-bold px-2 py-1 rounded-lg border border-blue-500/20">
+                    {p.count} ventas
+                  </span>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>
