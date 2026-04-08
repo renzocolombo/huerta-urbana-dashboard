@@ -190,33 +190,59 @@ export default function ControlStock() {
         </div>
       </div>
 
-      {/* 📦 RESUMEN DE STOCK HOY */}
+      {/* 📦 RESUMEN DE STOCK HOY - NUEVO DISEÑO */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-[#1f2937] border border-red-500/30 rounded-2xl p-5 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-red-500/10 flex items-center justify-center text-red-400">
-            <AlertTriangle size={24} />
-          </div>
-          <div>
-            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Urgente vender</p>
-            <p className="text-2xl font-black text-white">{resumen.urgente}</p>
+        {/* Columna Urgente */}
+        <div className="bg-[#fee2e2] rounded-[2rem] p-6 border border-red-200 shadow-lg shadow-red-900/10">
+          <h3 className="text-red-900 font-black text-[11px] uppercase tracking-widest mb-6 flex items-center gap-2">
+            <span className="w-2.5 h-2.5 bg-red-600 rounded-full" /> URGENTE VENDER
+          </h3>
+          <div className="space-y-3">
+            {processedData.filter(d => d.statusFinal === 'urgente').length === 0 ? (
+              <div className="text-red-800/40 text-xs font-bold py-4 text-center border-2 border-dashed border-red-300/50 rounded-2xl italic">
+                ✅ Sin urgentes
+              </div>
+            ) : (
+              processedData.filter(d => d.statusFinal === 'urgente').map(p => (
+                <SummaryItem key={p.id} p={p} color="red" />
+              ))
+            )}
           </div>
         </div>
-        <div className="bg-[#1f2937] border border-amber-500/30 rounded-2xl p-5 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-400">
-            <TrendingUp size={24} />
-          </div>
-          <div>
-            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Stock bajo</p>
-            <p className="text-2xl font-black text-white">{resumen.bajo}</p>
+
+        {/* Columna Stock Bajo */}
+        <div className="bg-[#fef9c3] rounded-[2rem] p-6 border border-amber-200 shadow-lg shadow-amber-900/10">
+          <h3 className="text-amber-900 font-black text-[11px] uppercase tracking-widest mb-6 flex items-center gap-2">
+            <span className="w-2.5 h-2.5 bg-amber-500 rounded-full" /> STOCK BAJO
+          </h3>
+          <div className="space-y-3">
+            {processedData.filter(d => d.statusFinal === 'bajo').length === 0 ? (
+              <div className="text-amber-800/40 text-xs font-bold py-4 text-center border-2 border-dashed border-amber-300/50 rounded-2xl italic">
+                ✨ Stock suficiente
+              </div>
+            ) : (
+              processedData.filter(d => d.statusFinal === 'bajo').map(p => (
+                <SummaryItem key={p.id} p={p} color="amber" />
+              ))
+            )}
           </div>
         </div>
-        <div className="bg-[#1f2937] border border-green-500/30 rounded-2xl p-5 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-green-500/10 flex items-center justify-center text-green-400">
-            <Check size={24} />
-          </div>
-          <div>
-            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Stock OK</p>
-            <p className="text-2xl font-black text-white">{resumen.ok}</p>
+
+        {/* Columna OK */}
+        <div className="bg-[#dcfce7] rounded-[2rem] p-6 border border-green-200 shadow-lg shadow-green-900/10">
+          <h3 className="text-green-900 font-black text-[11px] uppercase tracking-widest mb-6 flex items-center gap-2">
+            <span className="w-2.5 h-2.5 bg-green-500 rounded-full" /> STOCK OK
+          </h3>
+          <div className="space-y-3">
+            {processedData.filter(d => d.statusFinal === 'ok').length === 0 ? (
+              <div className="text-green-800/40 text-xs font-bold py-4 text-center border-2 border-dashed border-green-300/50 rounded-2xl italic">
+                Nada en buen estado
+              </div>
+            ) : (
+              processedData.filter(d => d.statusFinal === 'ok').map(p => (
+                <SummaryItem key={p.id} p={p} color="green" />
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -274,6 +300,47 @@ export default function ControlStock() {
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function SummaryItem({ p, color }) {
+  const textColor = {
+    red: 'text-red-900',
+    amber: 'text-amber-900',
+    green: 'text-green-900'
+  }[color];
+
+  const dotColor = {
+    red: 'bg-red-600',
+    amber: 'bg-amber-500',
+    green: 'bg-green-500'
+  }[color];
+
+  const getStockString = () => {
+    const parts = [];
+    if (p.stock['500g'] > 0) parts.push(`${p.stock['500g']} de 500g`);
+    if (p.stock['1kg'] > 0) parts.push(`${p.stock['1kg']} de 1kg`);
+    if (parts.length === 0) return '0 bandejas';
+    return parts.join(' / ');
+  };
+
+  const dayAlert = p.diasTranscurridos !== null 
+    ? ` — ${p.diasTranscurridos === 0 ? 'Hoy' : `${p.diasTranscurridos} d`}`
+    : '';
+
+  return (
+    <div className="flex flex-col p-3 rounded-2xl bg-white/40 border border-white/40 shadow-sm">
+      <div className="flex items-center gap-2">
+        <span className={`w-1.5 h-1.5 ${dotColor} rounded-full`} />
+        <span className={`text-[12px] font-black uppercase ${textColor}`}>{p.nombre}</span>
+      </div>
+      <div className="flex items-center justify-between mt-1">
+        <span className={`${textColor} text-[10px] font-bold opacity-70`}>
+          {getStockString()}
+          {dayAlert}
+        </span>
       </div>
     </div>
   );
