@@ -134,13 +134,17 @@ export default function ControlStock() {
   };
 
   const guardarCarga = (pid, formData) => {
-    const { tamano, cantidad, tipo, fecha } = formData;
+    const { stock_1kg, stock_500g, fecha } = formData;
     const newData = { ...stockData };
     const prod = newData[pid];
-    prod.stock[tamano] += Math.max(0, Number(cantidad) || 0);
+    
+    // REEMPLAZAR VALORES DIRECTAMENTE
+    prod.stock['1kg'] = Math.max(0, Number(stock_1kg) || 0);
+    prod.stock['500g'] = Math.max(0, Number(stock_500g) || 0);
+    
     prod.originalLoad = { ...prod.stock }; 
     prod.ultimoBandejeado = fecha;
-    prod.tipo = tipo;
+
     setStockData(newData);
     syncWithSheet(prod);
     setShowFormId(null);
@@ -257,12 +261,10 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
         ) : (
           <div className="bg-gray-900 absolute inset-0 z-20 p-2 rounded-2xl animate-in fade-in flex flex-col justify-center">
             <AddStockInline 
-              initialTipo={product.tipo} 
+              nombre={product.nombre}
+              currentStock={product.stock} 
               onCancel={onToggleAdd} 
-              onSave={(data) => { 
-                onSaveAdd(data); 
-                // Manual trigger sync logic for inline add if needed (already handled by GUARDARCARGA)
-              }} 
+              onSave={onSaveAdd}
             />
           </div>
         )}
@@ -294,24 +296,50 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
   );
 }
 
-function AddStockInline({ onCancel, onSave, initialTipo }) {
-  const [data, setData] = useState({ tamano: '1kg', cantidad: 1, tipo: initialTipo, fecha: new Date().toISOString().split('T')[0] });
+function AddStockInline({ nombre, currentStock, onCancel, onSave }) {
+  const [data, setData] = useState({ 
+    stock_1kg: currentStock['1kg'], 
+    stock_500g: currentStock['500g'], 
+    fecha: new Date().toISOString().split('T')[0] 
+  });
+
   return (
     <div className="space-y-2">
-      <p className="text-[9px] font-black text-white text-center mb-1">Cargar Bandejas</p>
-      <div className="grid grid-cols-2 gap-1.5">
-        <select value={data.tamano} onChange={(e) => setData({...data, tamano: e.target.value})} className="bg-black text-[9px] text-white p-1 rounded border border-gray-800 outline-none">
-          <option value="500g">500g</option>
-          <option value="1kg">1kg</option>
-        </select>
-        <input type="number" value={data.cantidad} min="1" onChange={(e) => setData({...data, cantidad: e.target.value})} className="bg-black text-[9px] text-white p-1 rounded border border-gray-800 outline-none" />
-        <div className="col-span-2">
-           <input type="date" value={data.fecha} onChange={(e) => setData({...data, fecha: e.target.value})} className="w-full bg-black text-[9px] text-white p-1 rounded border border-gray-800 outline-none" />
-        </div>
+      <div className="text-center mb-1">
+        <p className="text-[8px] font-black text-white uppercase tracking-tighter">📦 Cargar bandejeado</p>
+        <p className="text-[10px] font-black text-green-500 truncate">{nombre}</p>
       </div>
+      
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[9px] text-gray-500 font-bold">1kg:</span>
+          <input 
+            type="number" 
+            value={data.stock_1kg} 
+            onChange={(e) => setData({...data, stock_1kg: e.target.value})} 
+            className="w-16 bg-black text-[10px] text-white p-1 rounded border border-gray-800 outline-none text-right" 
+          />
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[9px] text-gray-500 font-bold">500g:</span>
+          <input 
+            type="number" 
+            value={data.stock_500g} 
+            onChange={(e) => setData({...data, stock_500g: e.target.value})} 
+            className="w-16 bg-black text-[10px] text-white p-1 rounded border border-gray-800 outline-none text-right" 
+          />
+        </div>
+        <input 
+          type="date" 
+          value={data.fecha} 
+          onChange={(e) => setData({...data, fecha: e.target.value})} 
+          className="w-full bg-black text-[9px] text-white p-1 rounded border border-gray-800 outline-none" 
+        />
+      </div>
+
       <div className="flex gap-1 pt-1">
-        <button onClick={onCancel} className="flex-1 text-[8px] text-gray-500 font-bold uppercase py-1">Cerrar</button>
-        <button onClick={() => onSave(data)} className="flex-1 bg-green-600 text-white text-[8px] font-black uppercase py-1 rounded shadow-lg shadow-green-900/30">OK</button>
+        <button onClick={onCancel} className="flex-1 text-[8px] text-gray-400 font-bold uppercase py-1">Cancelar</button>
+        <button onClick={() => onSave(data)} className="flex-1 bg-green-600 text-white text-[8px] font-black uppercase py-1 rounded shadow-lg shadow-green-900/30">Guardar</button>
       </div>
     </div>
   );
