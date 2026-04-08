@@ -105,6 +105,49 @@ export function GoogleSheetsProvider({ children }) {
     const payload = { fila, estado: nuevoEstado };
     console.log(`[SYNC PREPARANDO] Enviando a Webhook:`, payload);
 
+    // 2. Lógica de Descuento de Stock Automático (Solo si es Preparado)
+    if (nuevoEstado.toLowerCase() === 'preparado') {
+      try {
+        const pedido = pedidos.find(p => p.sheetRowIndex === fila);
+        if (pedido && pedido.producto) {
+          const stockDataRaw = localStorage.getItem('huerta_stock_v1_data');
+          if (stockDataRaw) {
+            let stockData = JSON.parse(stockDataRaw);
+            // Buscamos por nombre (insensible a mayúsculas/espacios)
+            const nombreNormalizado = pedido.producto.trim().toLowerCase();
+            const prodKey = Object.keys(stockData).find(k => 
+              stockData[k].nombre?.trim().toLowerCase() === nombreNormalizado
+            );
+
+            if (prodKey) {
+              const currentStock = stockData[prodKey].stock;
+              // Lógica de descuento: 1kg -> 750g -> 500g
+              let descontado = false;
+              const sizes = ['1kg', '750g', '500g'];
+              for (const size of sizes) {
+                if (currentStock[size] > 0) {
+                  currentStock[size] -= 1;
+                  descontado = true;
+                  break;
+                }
+              }
+
+              if (descontado) {
+                stockData[prodKey].stock = currentStock;
+                localStorage.setItem('huerta_stock_v1_data', JSON.stringify(stockData));
+                console.log(`[STOCK] ✅ Se descontó 1 bandeja de "${pedido.producto}"`);
+              } else {
+                console.warn(`[STOCK] ⚠️ Sin stock de "${pedido.producto}" — verificar antes de entregar`);
+                // Notificar visualmente via console o alert (el componente ControlStock disparará su propia alerta al leer)
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[STOCK] Error al descontar stock:', err);
+      }
+    }
+
     try {
       await fetch(APPS_SCRIPT_URL, {
         method:  'POST',
