@@ -2,7 +2,8 @@ import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useEffect, useMemo } from 'react';
 import { 
   AlertTriangle, TrendingUp, Package, Plus, History, 
-  ChevronDown, ChevronUp, Check, Info, Box
+  Check, Info, Box, Edit2, RotateCcw, X, Save,
+  AlertCircle
 } from 'lucide-react';
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
@@ -12,6 +13,13 @@ const COSTOS_KEY = 'huerta_data_costos_v1_productos';
 const STOCK_DATA_KEY = 'huerta_stock_v1_data';
 const HISTORY_KEY = 'huerta_stock_v1_history';
 
+// Configuración por defecto por tipo
+const DEFAULTS_BY_TYPE = {
+  'hoja verde': { days: 2, icon: '🌿' },
+  'blando': { days: 4, icon: '🍑' },
+  'duro': { days: 10, icon: '🥔' }
+};
+
 export default function ControlStock() {
   const { pedidos: PEDIDOS } = useGoogleSheets();
 
@@ -19,488 +27,448 @@ export default function ControlStock() {
   const [productosMaster, setProductosMaster] = useState([]);
   const [stockData, setStockData] = useState({});
   const [historial, setHistorial] = useState([]);
-  const [showFormId, setShowFormId] = useState(null); // ID del producto mostrando formulario
+  const [showFormId, setShowFormId] = useState(null);
 
   // 2. Cargar datos iniciales de LocalStorage
   useEffect(() => {
-    // 2a. Leer productos del Panel de Costos
     const prodsSaved = localStorage.getItem(COSTOS_KEY);
     const master = prodsSaved ? JSON.parse(prodsSaved) : [];
     setProductosMaster(master);
 
-    // 2b. Leer data de Stock
     const stockSaved = localStorage.getItem(STOCK_DATA_KEY);
     const sData = stockSaved ? JSON.parse(stockSaved) : {};
     
-    // Sincronizar: Asegurar que cada producto activo de Master tenga una entrada en stockData
+    // Sincronizar y aplicar esquema extendido
     const updatedStockData = { ...sData };
     master.forEach(p => {
       if (!updatedStockData[p.id]) {
         updatedStockData[p.id] = {
           nombre: p.nombre,
           stock: { '500g': 0, '1kg': 0 },
+          originalLoad: { '500g': 0, '1kg': 0 },
           ultimoBandejeado: null,
-          tipo: 'hoja verde'
+          tipo: 'hoja verde',
+          urgentDays: DEFAULTS_BY_TYPE['hoja verde'].days
         };
       } else {
-        // Actualizar nombre por si cambió en Panel de Costos
+        // Asegurar campos nuevos en registros viejos
         updatedStockData[p.id].nombre = p.nombre;
+        if (!updatedStockData[p.id].originalLoad) updatedStockData[p.id].originalLoad = updatedStockData[p.id].stock;
+        if (!updatedStockData[p.id].urgentDays) {
+          const type = updatedStockData[p.id].tipo || 'hoja verde';
+          updatedStockData[p.id].urgentDays = DEFAULTS_BY_TYPE[type]?.days || 2;
+        }
       }
     });
 
-    // Limpiar: Eliminar del stock los productos que ya no existen en Master
+    // Limpiar obsoletos
     Object.keys(updatedStockData).forEach(id => {
-      if (!master.find(p => p.id === Number(id))) {
-        delete updatedStockData[id];
-      }
+      if (!master.find(p => p.id === Number(id))) delete updatedStockData[id];
     });
 
     setStockData(updatedStockData);
     localStorage.setItem(STOCK_DATA_KEY, JSON.stringify(updatedStockData));
 
-    // 2c. Leer Historial
     const histSaved = localStorage.getItem(HISTORY_KEY);
     setHistorial(histSaved ? JSON.parse(histSaved) : []);
   }, []);
 
-  // 3. Lógica de cálculo de alertas y resumen
+  // 3. Lógica de cálculo de alertas y categorías
   const processedData = useMemo(() => {
     return Object.keys(stockData).map(id => {
       const item = stockData[id];
-      const totalBandejas = Object.values(item.stock).reduce((s, c) => s + c, 0);
+      const totalStock = Object.values(item.stock).reduce((s, c) => s + c, 0);
+      const totalOriginal = Object.values(item.originalLoad || {}).reduce((s, c) => s + c, 0);
       
-      // Cálculo de días transcurridos
       let diasTranscurridos = null;
       if (item.ultimoBandejeado) {
         const diff = new Date() - new Date(item.ultimoBandejeado);
         diasTranscurridos = Math.floor(diff / (1000 * 60 * 60 * 24));
       }
 
-      // Semáforo Cantidad (🟢 4+, 🟡 2-3, 🔴 0-1)
-      let statusCant = 'ok';
-      if (totalBandejas <= 1) statusCant = 'urgente';
-      else if (totalBandejas <= 3) statusCant = 'bajo';
+      // LÓGICA DE ESTADOS
+      const isFaltante = totalStock === 0;
+      const isUrgente = diasTranscurridos !== null && diasTranscurridos > item.urgentDays;
+      const isStockBajo = !isFaltante && totalOriginal > 0 && totalStock <= (totalOriginal / 2);
 
-      // Semáforo Días según tipo
-      let statusDias = 'ok';
-      if (diasTranscurridos !== null) {
-        if (item.tipo === 'hoja verde') {
-          if (diasTranscurridos >= 2) statusDias = 'urgente';
-          else if (diasTranscurridos >= 1) statusDias = 'bajo';
-        } else if (item.tipo === 'blando') {
-          if (diasTranscurridos >= 5) statusDias = 'urgente';
-          else if (diasTranscurridos >= 3) statusDias = 'bajo';
-        } else if (item.tipo === 'duro') {
-          if (diasTranscurridos >= 12) statusDias = 'urgente';
-          else if (diasTranscurridos >= 7) statusDias = 'bajo';
-        }
-      }
+      // Jerarquía: Faltante > Urgente > Bajo
+      let category = 'ok';
+      if (isFaltante) category = 'faltante';
+      else if (isUrgente) category = 'urgente';
+      else if (isStockBajo) category = 'bajo';
 
-      // El estado general es el más severo de los dos
-      const severityMap = { 'ok': 0, 'bajo': 1, 'urgente': 2 };
-      const val = Math.max(severityMap[statusCant], severityMap[statusDias]);
-      const statusFinal = Object.keys(severityMap).find(k => severityMap[k] === val);
-
-      return { id: Number(id), ...item, totalBandejas, diasTranscurridos, statusFinal, statusCant, statusDias };
+      return { 
+        id: Number(id), 
+        ...item, 
+        totalStock, 
+        totalOriginal,
+        diasTranscurridos, 
+        category
+      };
     });
   }, [stockData]);
 
-  const resumen = useMemo(() => {
-    return {
-      urgente: processedData.filter(d => d.statusFinal === 'urgente').length,
-      bajo: processedData.filter(d => d.statusFinal === 'bajo').length,
-      ok: processedData.filter(d => d.statusFinal === 'ok').length,
-    };
-  }, [processedData]);
+  // 4. Handlers Principales
+  const updateProductData = (pid, patch) => {
+    const newData = { ...stockData };
+    newData[pid] = { ...newData[pid], ...patch };
+    setStockData(newData);
+    localStorage.setItem(STOCK_DATA_KEY, JSON.stringify(newData));
+  };
 
-  // 4. Funciones de carga
   const guardarCarga = (pid, formData) => {
-    const { tamano, cantidad, tipo, fecha, mode } = formData;
-    
-    // Normalizar cantidad (no negativos, default 0)
+    const { tamano, cantidad, tipo, fecha } = formData;
     const cantNum = Math.max(0, Number(cantidad) || 0);
 
-    // Actualizar StockData
-    const newStockData = { ...stockData };
-    const prod = newStockData[pid];
+    const newData = { ...stockData };
+    const prod = newData[pid];
     
-    if (mode === 'set') {
-      prod.stock[tamano] = cantNum;
-    } else {
-      prod.stock[tamano] += cantNum;
-    }
-    
+    // Al cargar bandejeado, sumamos y actualizamos el originalLoad al nuevo total
+    prod.stock[tamano] += cantNum;
+    prod.originalLoad = { ...prod.stock }; // El nuevo original es el stock total actual
     prod.ultimoBandejeado = fecha;
     prod.tipo = tipo;
 
-    setStockData(newStockData);
-    localStorage.setItem(STOCK_DATA_KEY, JSON.stringify(newStockData));
+    setStockData(newData);
+    localStorage.setItem(STOCK_DATA_KEY, JSON.stringify(newData));
 
-    // Agregar al Historial
-    const newEntry = {
-      id: Date.now(),
-      pid,
-      nombre: prod.nombre,
-      tamano,
-      cantidad: cantNum,
-      mode: mode || 'add',
-      fecha: fecha,
-      tipo,
-      fechaRegistro: new Date().toISOString()
+    // Historial
+    const entry = {
+      id: Date.now(), pid, nombre: prod.nombre, tamano, cantidad: cantNum,
+      mode: 'add', fecha, tipo, fechaRegistro: new Date().toISOString()
     };
-    const newHistorial = [newEntry, ...historial];
-    setHistorial(newHistorial);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistorial));
-
+    setHistorial([entry, ...historial]);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify([entry, ...historial]));
     setShowFormId(null);
   };
 
-  const resetearStock = (pid) => {
-    if (!window.confirm(`¿Resetear el stock de ${stockData[pid].nombre}?`)) return;
-
-    const newStockData = { ...stockData };
-    newStockData[pid].stock = { '500g': 0, '1kg': 0 };
-    newStockData[pid].ultimoBandejeado = null;
-
-    setStockData(newStockData);
-    localStorage.setItem(STOCK_DATA_KEY, JSON.stringify(newStockData));
-    
-    // Opcional: registrar en historial
-    const newEntry = {
-      id: Date.now(),
-      pid,
-      nombre: newStockData[pid].nombre,
-      tamano: 'Todos',
-      cantidad: 0,
-      mode: 'reset',
-      fecha: new Date().toISOString().split('T')[0],
-      tipo: newStockData[pid].tipo,
-      fechaRegistro: new Date().toISOString()
-    };
-    setHistorial([newEntry, ...historial]);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify([newEntry, ...historial]));
-  };
-
   return (
-    <div className="space-y-10">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-white">Control de Stock</h2>
-          <p className="text-gray-500 text-sm mt-1">Gestión de bandejas sincronizada con costos y ventas</p>
+    <div className="space-y-10 pb-20">
+      <div>
+        <h2 className="text-xl font-bold text-white">Control de Stock</h2>
+        <p className="text-gray-500 text-sm mt-1">Gestión avanzada centrada en reposición y frescura</p>
+      </div>
+
+      {/* 📦 REDISEÑO DEL RESUMEN — 3 COLUMNAS */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* Columna 1: URGENTE VENDER */}
+        <StatusColumn 
+          title="🔴 URGENTE VENDER" 
+          bg="bg-red-500/5 shadow-[0_0_20px_rgba(239,68,68,0.05)]" 
+          borderColor="border-red-500/20"
+          items={processedData.filter(d => d.category === 'urgente')}
+          type="urgente"
+        />
+
+        {/* Columna 2: STOCK BAJO */}
+        <StatusColumn 
+          title="🟡 STOCK BAJO" 
+          bg="bg-amber-500/5 shadow-[0_0_20px_rgba(245,158,11,0.05)]" 
+          borderColor="border-amber-500/20"
+          items={processedData.filter(d => d.category === 'bajo')}
+          type="bajo"
+        />
+
+        {/* Columna 3: FALTANTE */}
+        <StatusColumn 
+          title="⚫ FALTANTE" 
+          bg="bg-gray-800/10 shadow-[0_0_20px_rgba(0,0,0,0.1)]" 
+          borderColor="border-gray-700/50"
+          items={processedData.filter(d => d.category === 'faltante')}
+          type="faltante"
+        />
+      </div>
+
+      {/* Grid de Productos Detallado */}
+      <div className="space-y-4">
+        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest pl-2">Inventario Completo</h3>
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+          {processedData.map(p => (
+            <ProductCard 
+              key={p.id} 
+              product={p} 
+              onUpdate={(patch) => updateProductData(p.id, patch)}
+              isAdding={showFormId === p.id}
+              onToggleAdd={() => setShowFormId(showFormId === p.id ? null : p.id)}
+              onSaveAdd={(data) => guardarCarga(p.id, data)}
+            />
+          ))}
         </div>
       </div>
 
-      {/* 📦 RESUMEN DE STOCK HOY - NUEVO DISEÑO */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Columna Urgente */}
-        <div className="bg-[#fee2e2] rounded-[2rem] p-6 border border-red-200 shadow-lg shadow-red-900/10">
-          <h3 className="text-red-900 font-black text-[11px] uppercase tracking-widest mb-6 flex items-center gap-2">
-            <span className="w-2.5 h-2.5 bg-red-600 rounded-full" /> URGENTE VENDER
-          </h3>
-          <div className="space-y-3">
-            {processedData.filter(d => d.statusFinal === 'urgente').length === 0 ? (
-              <div className="text-red-800/40 text-xs font-bold py-4 text-center border-2 border-dashed border-red-300/50 rounded-2xl italic">
-                ✅ Sin urgentes
-              </div>
-            ) : (
-              processedData.filter(d => d.statusFinal === 'urgente').map(p => (
-                <SummaryItem key={p.id} p={p} color="red" />
-              ))
-            )}
-          </div>
+      {/* Historial footer simple */}
+      <div className="pt-10">
+        <div className="flex items-center gap-2 mb-4 text-gray-500 opacity-50">
+          <History size={16} />
+          <span className="text-xs uppercase font-bold tracking-tighter">Últimos movimientos registrados</span>
         </div>
-
-        {/* Columna Stock Bajo */}
-        <div className="bg-[#fef9c3] rounded-[2rem] p-6 border border-amber-200 shadow-lg shadow-amber-900/10">
-          <h3 className="text-amber-900 font-black text-[11px] uppercase tracking-widest mb-6 flex items-center gap-2">
-            <span className="w-2.5 h-2.5 bg-amber-500 rounded-full" /> STOCK BAJO
-          </h3>
-          <div className="space-y-3">
-            {processedData.filter(d => d.statusFinal === 'bajo').length === 0 ? (
-              <div className="text-amber-800/40 text-xs font-bold py-4 text-center border-2 border-dashed border-amber-300/50 rounded-2xl italic">
-                ✨ Stock suficiente
-              </div>
-            ) : (
-              processedData.filter(d => d.statusFinal === 'bajo').map(p => (
-                <SummaryItem key={p.id} p={p} color="amber" />
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Columna OK */}
-        <div className="bg-[#dcfce7] rounded-[2rem] p-6 border border-green-200 shadow-lg shadow-green-900/10">
-          <h3 className="text-green-900 font-black text-[11px] uppercase tracking-widest mb-6 flex items-center gap-2">
-            <span className="w-2.5 h-2.5 bg-green-500 rounded-full" /> STOCK OK
-          </h3>
-          <div className="space-y-3">
-            {processedData.filter(d => d.statusFinal === 'ok').length === 0 ? (
-              <div className="text-green-800/40 text-xs font-bold py-4 text-center border-2 border-dashed border-green-300/50 rounded-2xl italic">
-                Nada en buen estado
-              </div>
-            ) : (
-              processedData.filter(d => d.statusFinal === 'ok').map(p => (
-                <SummaryItem key={p.id} p={p} color="green" />
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Grid de Productos */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {processedData.map(p => (
-          <ProductCard 
-            key={p.id} 
-            product={p} 
-            isEditing={showFormId === p.id}
-            onToggleEdit={() => setShowFormId(showFormId === p.id ? null : p.id)}
-            onSave={(data) => guardarCarga(p.id, data)}
-            onReset={() => resetearStock(p.id)}
-          />
-        ))}
-      </div>
-
-      {/* Historial */}
-      <div className="bg-[#111827] border border-gray-800 rounded-3xl overflow-hidden shadow-xl">
-        <div className="p-6 border-b border-gray-800 flex items-center gap-2">
-          <History size={20} className="text-gray-400" />
-          <h3 className="font-bold text-white uppercase text-xs tracking-widest">Historial de Bandejeado</h3>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-gray-900 text-gray-500 font-bold uppercase tracking-widest px-6">
-              <tr>
-                <th className="px-6 py-4">Fecha</th>
-                <th className="px-6 py-4">Producto</th>
-                <th className="px-6 py-4">Tamaño / Cant.</th>
-                <th className="px-6 py-4">Tipo</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-800">
-              {historial.length === 0 ? (
-                <tr>
-                  <td colSpan="4" className="px-6 py-10 text-center text-gray-600 italic">No hay registros de bandejeado</td>
-                </tr>
-              ) : (
-                historial.slice(0, 50).map(h => (
-                  <tr key={h.id} className="hover:bg-gray-800/40 transition-colors">
-                    <td className="px-6 py-4 text-white">
-                      {new Date(h.fecha).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' })}
-                    </td>
-                    <td className="px-6 py-4 font-bold text-gray-300">{h.nombre}</td>
-                    <td className="px-6 py-4">
-                      <span className="text-gray-400 font-mono">{h.tamano} @ </span>
-                      <span className="font-black text-green-400">{h.cantidad}</span>
-                    </td>
-                    <td className="px-6 py-4 text-gray-500 uppercase text-[10px]">{h.tipo}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+        <div className="space-y-2 opacity-50">
+          {historial.slice(0, 5).map(h => (
+            <div key={h.id} className="text-[10px] text-gray-400 font-mono flex gap-2">
+              <span>{new Date(h.fechaRegistro).toLocaleDateString()}</span>
+              <span className="text-gray-600">|</span>
+              <span className="text-white">{h.nombre}</span>
+              <span className="text-gray-600">|</span>
+              <span className={h.mode === 'add' ? 'text-green-500' : 'text-blue-500'}>{h.mode === 'add' ? '+' : ''}{h.cantidad} {h.tamano}</span>
+            </div>
+          ))}
         </div>
       </div>
     </div>
   );
 }
 
-function SummaryItem({ p, color }) {
-  const textColor = {
-    red: 'text-red-900',
-    amber: 'text-amber-900',
-    green: 'text-green-900'
-  }[color];
-
-  const dotColor = {
-    red: 'bg-red-600',
-    amber: 'bg-amber-500',
-    green: 'bg-green-500'
-  }[color];
-
-  const getStockString = () => {
-    const parts = [];
-    if (p.stock['500g'] > 0) parts.push(`${p.stock['500g']} de 500g`);
-    if (p.stock['1kg'] > 0) parts.push(`${p.stock['1kg']} de 1kg`);
-    if (parts.length === 0) return '0 bandejas';
-    return parts.join(' / ');
-  };
-
-  const dayAlert = p.diasTranscurridos !== null 
-    ? ` — ${p.diasTranscurridos === 0 ? 'Hoy' : `${p.diasTranscurridos} d`}`
-    : '';
-
+// COMPONENTE: Columnas del Resumen
+function StatusColumn({ title, bg, borderColor, items, type }) {
   return (
-    <div className="flex flex-col p-3 rounded-2xl bg-white/40 border border-white/40 shadow-sm">
-      <div className="flex items-center gap-2">
-        <span className={`w-1.5 h-1.5 ${dotColor} rounded-full`} />
-        <span className={`text-[12px] font-black uppercase ${textColor}`}>{p.nombre}</span>
-      </div>
-      <div className="flex items-center justify-between mt-1">
-        <span className={`${textColor} text-[10px] font-bold opacity-70`}>
-          {getStockString()}
-          {dayAlert}
-        </span>
+    <div className={`${bg} ${borderColor} border rounded-[2.5rem] p-6 flex flex-col min-h-[300px]`}>
+      <h3 className="text-gray-300 font-black text-xs uppercase tracking-widest mb-6 flex items-center justify-between">
+        {title}
+        <span className="text-[10px] font-normal opacity-50">{items.length}</span>
+      </h3>
+      
+      <div className="space-y-4">
+        {items.length === 0 ? (
+          <div className="flex-1 flex flex-col items-center justify-center pt-10 text-gray-600 opacity-40">
+            <Check size={32} />
+            <p className="text-[10px] uppercase font-bold mt-2">✅ Todo bien</p>
+          </div>
+        ) : (
+          items.map(p => (
+            <div key={p.id} className="bg-black/20 border border-white/5 rounded-2xl p-4 shadow-sm">
+              <div className="flex justify-between items-start">
+                <span className="text-white font-bold text-sm tracking-tight">{p.nombre}</span>
+                <span className="text-[10px] font-mono text-gray-500">
+                  {type === 'urgente' ? `${p.diasTranscurridos}d` : `${p.totalStock}u`}
+                </span>
+              </div>
+              <div className="flex gap-2 mt-2">
+                {Object.entries(p.stock).map(([size, count]) => count > 0 && (
+                  <span key={size} className="text-[9px] bg-white/5 px-2 py-0.5 rounded-full text-gray-400">
+                    {size}: {count}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
 }
 
-function ProductCard({ product, isEditing, onToggleEdit, onSave, onReset }) {
-  const [formMode, setFormMode] = useState('add'); // 'add' | 'set'
-  const [formData, setFormData] = useState({
-    tamano: '1kg',
-    cantidad: 1,
-    tipo: product.tipo || 'hoja verde',
-    fecha: new Date().toISOString().split('T')[0]
-  });
+// COMPONENTE: Tarjeta de Producto (Altamente editable)
+function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
+  const [editingField, setEditingField] = useState(null); // 'tipo' | 'days' | 'stock500' | 'stock1k'
+  const [resetConfirm, setResetConfirm] = useState(null); // '500g' | '1kg'
+  
+  const icon = DEFAULTS_BY_TYPE[product.tipo]?.icon || '🌿';
 
-  const handleOpenTool = (mode) => {
-    setFormMode(mode);
-    setFormData({
-      ...formData,
-      cantidad: mode === 'set' ? 0 : 1,
-      tipo: product.tipo || 'hoja verde',
-      fecha: product.ultimoBandejeado || new Date().toISOString().split('T')[0]
+  const handleUpdateStock = (size, val) => {
+    const newStock = { ...product.stock };
+    newStock[size] = Math.max(0, Number(val));
+    onUpdate({ stock: newStock });
+    setEditingField(null);
+  };
+
+  const handleResetStock = (size) => {
+    const newStock = { ...product.stock };
+    newStock[size] = 0;
+    // Si reseteamos todo, limpiamos fecha. Si no, solo el tamaño.
+    const total = Object.values(newStock).reduce((a,b)=>a+b, 0);
+    onUpdate({ 
+      stock: newStock, 
+      ultimoBandejeado: total === 0 ? null : product.ultimoBandejeado,
+      originalLoad: total === 0 ? { '500g': 0, '1kg': 0 } : product.originalLoad
     });
-    onToggleEdit();
-  };
-
-  const getStatusColor = (status) => {
-    if (status === 'urgente') return 'text-red-400 bg-red-500/10 border-red-500/20';
-    if (status === 'bajo') return 'text-amber-400 bg-amber-500/10 border-amber-500/20';
-    return 'text-green-400 bg-green-500/10 border-green-500/20';
-  };
-
-  const getDayAlert = () => {
-    if (product.diasTranscurridos === null) return null;
-    return product.diasTranscurridos === 0 ? 'Hoy' : `${product.diasTranscurridos} ${product.diasTranscurridos === 1 ? 'día' : 'días'}`;
+    setResetConfirm(null);
   };
 
   return (
-    <div className={`bg-[#1f2937] border rounded-3xl p-5 shadow-lg transition-all ${
-      product.statusFinal === 'urgente' ? 'border-red-500/30 ring-1 ring-red-500/10' :
-      product.statusFinal === 'bajo' ? 'border-amber-500/30' :
-      'border-gray-800'
-    }`}>
-      <div className="flex justify-between items-start mb-4">
+    <div className="bg-[#1f2937] border border-gray-800 rounded-[2rem] p-6 hover:border-gray-700 transition-all group overflow-hidden relative">
+      <div className="flex justify-between items-start mb-6">
         <div>
-          <h4 className="font-bold text-white text-md leading-tight">{product.nombre}</h4>
-          <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full inline-block mt-2 border ${getStatusColor(product.statusFinal)}`}>
-            {product.statusFinal === 'urgente' ? '🔴 Urgente' : product.statusFinal === 'bajo' ? '🟡 Bajo' : '🟢 Stock OK'}
-          </span>
-        </div>
-        <div className="text-right">
-          <p className="text-[10px] text-gray-500 font-bold uppercase tracking-tighter">Último bandejeado</p>
-          <p className={`text-xs font-black mt-0.5 ${
-            product.statusDias === 'urgente' ? 'text-red-400' :
-            product.statusDias === 'bajo' ? 'text-amber-400' :
-            'text-green-400'
-          }`}>
-            {getDayAlert() || '-'}
-          </p>
-        </div>
-      </div>
-
-      {/* Desglose Stock */}
-      <div className="grid grid-cols-2 gap-2 mb-4">
-        {['500g', '1kg'].map(size => (
-          <div key={size} className="bg-gray-900/50 border border-gray-800 rounded-xl p-2 text-center">
-            <p className="text-[9px] text-gray-500 uppercase font-black">{size}</p>
-            <p className={`text-sm font-black ${product.stock[size] > 0 ? 'text-white' : 'text-gray-700'}`}>
-              {product.stock[size] || 0}
-            </p>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xl">{icon}</span>
+            <h4 className="font-bold text-white text-md tracking-tight">{product.nombre}</h4>
           </div>
-        ))}
-      </div>
-
-      {!isEditing ? (
-        <div className="flex flex-col gap-2">
-          <button 
-            onClick={() => handleOpenTool('add')}
-            className="w-full flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 text-white text-[11px] font-bold py-2.5 rounded-2xl transition-all border border-gray-700 hover:border-gray-600"
-          >
-            <Plus size={14} /> Cargar bandejeado
-          </button>
-          <div className="grid grid-cols-2 gap-2">
-            <button 
-              onClick={() => handleOpenTool('set')}
-              className="flex items-center justify-center gap-2 bg-gray-800/50 hover:bg-gray-700 text-gray-400 text-[10px] font-bold py-2 rounded-xl transition-all border border-gray-800 hover:border-gray-600"
-            >
-              ✏️ Editar
-            </button>
-            <button 
-              onClick={onReset}
-              className="flex items-center justify-center gap-2 bg-red-500/5 hover:bg-red-500/10 text-red-500/50 hover:text-red-500 text-[10px] font-bold py-2 rounded-xl transition-all border border-red-500/10 hover:border-red-500/20"
-            >
-              🔄 Resetear
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="bg-gray-900 border border-gray-700 rounded-2xl p-4 slide-in space-y-4">
-          <div className="flex items-center justify-between mb-1">
-             <span className="text-[10px] font-black text-white uppercase tracking-widest">
-               {formMode === 'set' ? '✏️ Modo Edición Manual' : '📦 Cargar Bandejeado'}
-             </span>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-[8px] font-bold text-gray-500 uppercase mb-1">Tamaño</label>
+          
+          {/* Edición de Tipo */}
+          <div className="flex items-center gap-2">
+            {editingField === 'tipo' ? (
               <select 
-                value={formData.tamano}
-                onChange={(e) => setFormData({...formData, tamano: e.target.value})}
-                className="w-full bg-[#111827] border border-gray-800 text-white text-[10px] px-2 py-1.5 rounded-lg outline-none"
-              >
-                <option value="500g">500g</option>
-                <option value="1kg">1kg</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-[8px] font-bold text-gray-500 uppercase mb-1">Cantidad</label>
-              <input 
-                type="number" 
-                min="0"
-                value={formData.cantidad}
-                onChange={(e) => setFormData({...formData, cantidad: Math.max(0, Number(e.target.value))})}
-                className="w-full bg-[#111827] border border-gray-800 text-white text-[10px] px-2 py-1.5 rounded-lg outline-none font-black text-center"
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-[8px] font-bold text-gray-500 uppercase mb-1">Tipo Prod.</label>
-              <select 
-                value={formData.tipo}
-                onChange={(e) => setFormData({...formData, tipo: e.target.value})}
-                className="w-full bg-[#111827] border border-gray-800 text-white text-[10px] px-2 py-1.5 rounded-lg outline-none"
+                autoFocus
+                className="bg-gray-900 text-xs text-white border border-gray-700 rounded-lg px-2 py-1 outline-none"
+                value={product.tipo}
+                onChange={(e) => { onUpdate({ 
+                  tipo: e.target.value, 
+                  urgentDays: DEFAULTS_BY_TYPE[e.target.value]?.days || product.urgentDays 
+                }); setEditingField(null); }}
+                onBlur={() => setEditingField(null)}
               >
                 <option value="hoja verde">Hoja Verde</option>
                 <option value="blando">Blando</option>
                 <option value="duro">Duro</option>
               </select>
-            </div>
-            <div>
-              <label className="block text-[8px] font-bold text-gray-500 uppercase mb-1">Fecha</label>
-              <input 
-                type="date" 
-                value={formData.fecha}
-                onChange={(e) => setFormData({...formData, fecha: e.target.value})}
-                className="w-full bg-[#111827] border border-gray-800 text-white text-[10px] px-2 py-1.5 rounded-lg outline-none"
-              />
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={onToggleEdit} className="flex-1 text-[10px] text-gray-500 font-bold hover:text-white transition-colors">Cancelar</button>
-            <button 
-              onClick={() => onSave({ ...formData, mode: formMode })}
-              className="flex-[2] bg-green-500 hover:bg-green-400 text-white text-[10px] font-bold py-2 rounded-xl transition-all shadow-lg shadow-green-500/20"
-            >
-              {formMode === 'set' ? 'Actualizar Stock' : 'Guardar Stock'}
-            </button>
+            ) : (
+              <button 
+                onClick={() => setEditingField('tipo')}
+                className="text-[10px] text-gray-500 uppercase font-black hover:text-white transition-colors flex items-center gap-1"
+              >
+                {product.tipo} <Edit2 size={8} />
+              </button>
+            )}
           </div>
         </div>
-      )}
+
+        {/* Alerta de días */}
+        <div className="text-right">
+          <p className="text-[10px] text-gray-500 font-bold uppercase tracking-tighter mb-1">Alerta Urgente</p>
+          {editingField === 'days' ? (
+            <input 
+              autoFocus
+              type="number"
+              className="bg-gray-900 text-xs text-white border border-gray-700 rounded-lg w-12 px-2 py-1 text-right outline-none"
+              value={product.urgentDays}
+              onChange={(e) => onUpdate({ urgentDays: Number(e.target.value) })}
+              onBlur={() => setEditingField(null)}
+              onKeyDown={(e) => e.key === 'Enter' && setEditingField(null)}
+            />
+          ) : (
+            <button 
+              onClick={() => setEditingField('days')}
+              className="text-sm font-black text-white hover:text-green-400 transition-colors flex items-center justify-end gap-1"
+            >
+              {product.urgentDays} d <Edit2 size={10} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Gestión de Stock */}
+      <div className="space-y-3 mb-6">
+        {['500g', '1kg'].map(size => {
+          const isFaltante = product.stock[size] === 0;
+          return (
+            <div key={size} className="bg-black/20 rounded-2xl p-3 flex items-center justify-between border border-white/5">
+              <div>
+                <span className="text-[10px] font-black text-gray-600 uppercase block mb-0.5">{size}</span>
+                {editingField === `stock-${size}` ? (
+                  <input 
+                    autoFocus
+                    type="number"
+                    className="bg-gray-800 text-md font-black text-white w-16 px-2 rounded outline-none"
+                    value={product.stock[size]}
+                    onChange={(e) => handleUpdateStock(size, e.target.value)}
+                    onBlur={() => setEditingField(null)}
+                    onKeyDown={(e) => e.key === 'Enter' && setEditingField(null)}
+                  />
+                ) : (
+                  <span className={`text-lg font-black ${isFaltante ? 'text-gray-700' : 'text-white'}`}>
+                    {product.stock[size]} <span className="text-xs font-normal opacity-40">bandejas</span>
+                  </span>
+                )}
+              </div>
+              
+              <div className="flex gap-2">
+                {resetConfirm === size ? (
+                  <div className="flex items-center gap-1 animate-in slide-in-from-right-2">
+                    <button onClick={() => handleResetStock(size)} className="bg-red-600 text-white text-[9px] font-black px-2 py-1 rounded-lg">SI, RESET</button>
+                    <button onClick={() => setResetConfirm(null)} className="bg-gray-700 text-white p-1 rounded-lg"><X size={12}/></button>
+                  </div>
+                ) : (
+                  <>
+                    <button onClick={() => setEditingField(`stock-${size}`)} className="p-2 text-gray-600 hover:text-white transition-colors bg-white/5 rounded-xl"><Edit2 size={14}/></button>
+                    <button onClick={() => setResetConfirm(size)} className="p-2 text-gray-600 hover:text-red-500 transition-colors bg-white/5 rounded-xl"><RotateCcw size={14}/></button>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Info extra y botón carga */}
+      <div className="pt-4 border-t border-gray-800">
+        <div className="flex justify-between items-center mb-4 text-[10px]">
+          <span className="text-gray-500 font-bold uppercase">Último: {product.ultimoBandejeado ? new Date(product.ultimoBandejeado).toLocaleDateString() : 'N/A'}</span>
+          <span className={`font-black ${product.diasTranscurridos > product.urgentDays ? 'text-red-500' : 'text-green-500'}`}>
+             {product.diasTranscurridos !== null ? `${product.diasTranscurridos} días de frescura` : 'Sin datos'}
+          </span>
+        </div>
+
+        {!isAdding ? (
+          <button 
+            onClick={onToggleAdd}
+            className="w-full flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 text-white font-black text-xs py-3 rounded-2xl transition-all border border-gray-700"
+          >
+            <Plus size={16} /> Cargar bandejeado
+          </button>
+        ) : (
+          <AddStockInline 
+            prodId={product.id}
+            initialTipo={product.tipo}
+            onCancel={onToggleAdd}
+            onSave={onSaveAdd}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// COMPONENTE: Formulario inline de carga
+function AddStockInline({ onCancel, onSave, initialTipo }) {
+  const [data, setData] = useState({
+    tamano: '1kg',
+    cantidad: 1,
+    tipo: initialTipo,
+    fecha: new Date().toISOString().split('T')[0]
+  });
+
+  return (
+    <div className="bg-gray-900 p-4 rounded-2xl space-y-4 animate-in fade-in transition-all">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-[9px] font-bold text-gray-500 uppercase block mb-1">Tamaño</label>
+          <select 
+            value={data.tamano}
+            onChange={(e) => setData({...data, tamano: e.target.value})}
+            className="w-full bg-[#111827] text-white text-xs border border-gray-800 rounded-xl px-3 py-2 outline-none"
+          >
+            <option value="500g">500g</option>
+            <option value="1kg">1kg</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-[9px] font-bold text-gray-500 uppercase block mb-1">Cantidad</label>
+          <input 
+            type="number"
+            value={data.cantidad}
+            min="1"
+            onChange={(e) => setData({...data, cantidad: e.target.value})}
+            className="w-full bg-[#111827] text-white text-xs border border-gray-800 rounded-xl px-3 py-2 outline-none"
+          />
+        </div>
+        <div className="col-span-2">
+           <label className="text-[9px] font-bold text-gray-500 uppercase block mb-1">Fecha Bandejeado</label>
+           <input 
+            type="date"
+            value={data.fecha}
+            onChange={(e) => setData({...data, fecha: e.target.value})}
+            className="w-full bg-[#111827] text-white text-xs border border-gray-800 rounded-xl px-3 py-2 outline-none"
+          />
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={onCancel} className="flex-1 text-[10px] text-gray-500 font-bold hover:text-white">Cancelar</button>
+        <button 
+          onClick={() => onSave(data)}
+          className="flex-2 bg-green-600 hover:bg-green-500 text-white text-[10px] font-black px-4 py-2 rounded-xl transition-all shadow-lg shadow-green-900/40"
+        >
+          Guardar Carga
+        </button>
+      </div>
     </div>
   );
 }
