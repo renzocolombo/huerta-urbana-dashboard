@@ -125,10 +125,16 @@ export default function Clientes() {
     }
     if (c.cupon_bienvenida_estado === 'Enviado') {
       return (
-        <div className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-blue-500/30 bg-blue-500/10 h-24">
+        <div className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-blue-500/30 bg-blue-500/10 h-24 relative group">
           <span className="text-[9px] font-black text-blue-500/60 uppercase tracking-tighter">BIENVENIDA</span>
           <span className="text-xl">🔵</span>
           <span className="text-[10px] font-bold text-blue-400 uppercase text-center leading-tight">Enviado<br/><span className="text-white opacity-80 mt-1 block">— Pendiente —</span></span>
+          <button 
+            onClick={() => actualizarDatosCliente(c.sheetRowIndex, { cupon_bienvenida_estado: '' })}
+            className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800/80 hover:bg-gray-700 text-[8px] text-gray-400 px-1.5 py-0.5 rounded border border-gray-700"
+          >
+            Resetear
+          </button>
         </div>
       );
     }
@@ -157,10 +163,16 @@ export default function Clientes() {
     }
     if (c.referido_estado === 'Enviado') {
       return (
-        <div className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-blue-500/30 bg-blue-500/10 h-24">
+        <div className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-blue-500/30 bg-blue-500/10 h-24 relative group">
           <span className="text-[9px] font-black text-blue-500/60 uppercase tracking-tighter">REFERIDO</span>
           <span className="text-xl">🔵</span>
           <span className="text-[10px] font-bold text-blue-400 uppercase text-center leading-tight">Enviado<br/><span className="text-blue-300 opacity-90 mt-1 block text-[11px] bg-blue-500/20 px-2 py-0.5 rounded border border-blue-500/20">{c.codigo_referido}</span></span>
+          <button 
+            onClick={() => actualizarDatosCliente(c.sheetRowIndex, { referido_estado: '' })}
+            className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800/80 hover:bg-gray-700 text-[8px] text-gray-400 px-1.5 py-0.5 rounded border border-gray-700"
+          >
+            Resetear
+          </button>
         </div>
       );
     }
