@@ -62,23 +62,26 @@ export default function Clientes() {
   }, [PEDIDOS]);
 
   const abrirWhatsApp = (tel, nombre) => {
-    const msg = encodeURIComponent(`Hola ${nombre.split(' ')[0]}! 👋 ¿Cómo estás? Te escribimos desde Huerta Urbana 🥦`);
-    window.open(`https://wa.me/${(tel || '').replace(/\D/g, '')}?text=${msg}`, '_blank');
+    const texto = `Hola ${nombre.split(' ')[0]}! %F0%9F%91%8B ¿Cómo estás? Te escribimos desde Huerta Urbana %F0%9F%A5%A6`;
+    const url = `https://web.whatsapp.com/send?phone=${(tel || '').replace(/\D/g, '')}&text=${texto}`;
+    window.open(url, '_blank');
   };
 
   const abrirRecuperacion = (tel, nombre, producto) => {
     const primerNombre = (nombre || '').split(' ')[0] || 'ahí';
-    const msg = encodeURIComponent(
-      `Hola ${primerNombre}! 🌿 Vimos que casi completaste tu pedido de *${producto || 'Huerta Urbana'}*. ¿Querés que te ayudemos a finalizarlo? Estamos a disposición 🥦`
-    );
-    window.open(`https://wa.me/${(tel || '').replace(/\D/g, '')}?text=${msg}`, '_blank');
+    const texto = `Hola ${primerNombre}! %F0%9F%8C%BF Vimos que casi completaste tu pedido de *${producto || 'Huerta Urbana'}*. ¿Querés que te ayudemos a finalizarlo? Estamos a disposición %F0%9F%A5%A6`;
+    const url = `https://web.whatsapp.com/send?phone=${(tel || '').replace(/\D/g, '')}&text=${texto}`;
+    window.open(url, '_blank');
   };
 
   const enviarCuponBienvenida = (c) => {
     if (actualizarDatosCliente) actualizarDatosCliente(c.sheetRowIndex, { cupon_bienvenida_estado: 'Enviado' });
     const primerNombre = (c.nombre || '').split(' ')[0] || 'Cliente';
-    const msg = encodeURIComponent(`Hola ${primerNombre}! 🌿\nTe regalamos un cupón de bienvenida:\n🎁 *BIENVENIDO10* — 10% off en tu próxima compra\nUso único — sin vencimiento\n\nQue tengas un excelente día!\nHuerta Urbana — 11 6177-1376`);
-    window.open(`https://wa.me/${(c.telefono || '').replace(/\D/g, '')}?text=${msg}`, '_blank');
+    const texto = encodeURIComponent(`Hola ${primerNombre}! `) + "%F0%9F%8C%BF" + 
+                  encodeURIComponent(`\nTe regalamos un cupón de bienvenida:\n`) + "%F0%9F%8E%81" + 
+                  encodeURIComponent(` *BIENVENIDO10* — 10% off en tu próxima compra\nUso único — sin vencimiento\n\nQue tengas un excelente día!\nHuerta Urbana — 11 6177-1376`);
+    const url = `https://web.whatsapp.com/send?phone=${(c.telefono || '').replace(/\D/g, '')}&text=${texto}`;
+    window.open(url, '_blank');
   };
 
   const enviarCodigoReferido = (c) => {
@@ -91,8 +94,13 @@ export default function Clientes() {
     if (actualizarDatosCliente) actualizarDatosCliente(c.sheetRowIndex, { codigo_referido: codigo, referido_estado: 'Enviado' });
     
     const primerNombre = (c.nombre || '').split(' ')[0] || 'Cliente';
-    const msg = encodeURIComponent(`Hola ${primerNombre}! 🌿\nTu código de referido personal:\n👥 *${codigo}*\n\nCompartilo con amigos y familia:\n✅ Ellos reciben 10% de descuento\n✅ Vos recibís $5.000 de crédito por cada uno\nSin límite de referidos — válido 30 días!\n\nQue tengas un excelente día!\nHuerta Urbana — 11 6177-1376`);
-    window.open(`https://wa.me/${(c.telefono || '').replace(/\D/g, '')}?text=${msg}`, '_blank');
+    const texto = encodeURIComponent(`Hola ${primerNombre}! `) + "%F0%9F%8C%BF" + 
+                  encodeURIComponent(`\nTu código de referido personal:\n`) + "%F0%9F%91%A5" + 
+                  encodeURIComponent(` *${codigo}*\n\nCompartilo con amigos y familia:\n`) + "%E2%9C%85" + 
+                  encodeURIComponent(` Ellos reciben 10% de descuento\n`) + "%E2%9C%85" + 
+                  encodeURIComponent(` Vos recibís $5.000 de crédito por cada uno\nSin límite de referidos — válido 30 días!\n\nQue tengas un excelente día!\nHuerta Urbana — 11 6177-1376`);
+    const url = `https://web.whatsapp.com/send?phone=${(c.telefono || '').replace(/\D/g, '')}&text=${texto}`;
+    window.open(url, '_blank');
   };
 
   const renderWidgetBienvenida = (c) => {
@@ -106,15 +114,17 @@ export default function Clientes() {
     }
     if (c.cupon === 'BIENVENIDO10') {
       return (
-        <div className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border border-green-500/30 bg-green-500/10 h-24">
+        <div className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-green-500/30 bg-green-500/10 h-24">
+          <span className="text-[9px] font-black text-green-500/60 uppercase tracking-tighter">BIENVENIDA</span>
           <span className="text-xl">🟢</span>
-          <span className="text-[10px] font-bold text-green-400 uppercase text-center leading-tight">BIENVENIDO10<br/><span className="text-white opacity-80 mt-1 block">— Usado —</span></span>
+          <span className="text-[10px] font-bold text-green-400 uppercase text-center leading-tight">Canjeado<br/><span className="text-white opacity-80 mt-1 block">BIENVENIDO10</span></span>
         </div>
       );
     }
     if (c.cupon_bienvenida_estado === 'Enviado') {
       return (
-        <div className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border border-blue-500/30 bg-blue-500/10 h-24">
+        <div className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-blue-500/30 bg-blue-500/10 h-24">
+          <span className="text-[9px] font-black text-blue-500/60 uppercase tracking-tighter">BIENVENIDA</span>
           <span className="text-xl">🔵</span>
           <span className="text-[10px] font-bold text-blue-400 uppercase text-center leading-tight">Enviado<br/><span className="text-white opacity-80 mt-1 block">— Pendiente —</span></span>
         </div>
@@ -123,11 +133,12 @@ export default function Clientes() {
     return (
       <button 
         onClick={() => enviarCuponBienvenida(c)}
-        className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border border-gray-700 bg-gray-800/50 hover:bg-gray-800 active:scale-95 transition-all text-left h-24"
+        className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-gray-700 bg-gray-800/50 hover:bg-gray-800 active:scale-95 transition-all text-left h-24 w-full"
       >
+        <span className="text-[9px] font-black text-gray-500 uppercase tracking-tighter">BIENVENIDA</span>
         <span className="text-xl">🔘</span>
         <span className="text-[10px] font-bold text-gray-400 uppercase text-center leading-tight">Sin cupón</span>
-        <span className="text-[10px] mt-0.5 text-green-400 font-bold bg-green-500/10 border border-green-500/20 px-1.5 py-0.5 rounded flex items-center justify-center gap-1 w-full"><GiftIcon/> Enviar</span>
+        <span className="text-[10px] mt-1 text-green-400 font-bold bg-green-500/10 border border-green-500/20 px-2 py-0.5 rounded flex items-center justify-center gap-1 w-full"><GiftIcon/> Enviar</span>
       </button>
     );
   };
@@ -135,16 +146,17 @@ export default function Clientes() {
   const renderWidgetReferido = (c) => {
     if (c.referidos_count > 0) {
       return (
-        <div className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 h-24 relative overflow-hidden">
-          <div className="absolute inset-0 bg-yellow-500/5 blur-xl"></div>
+        <div className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-amber-500/30 bg-amber-500/10 h-24 relative overflow-hidden">
+          <span className="text-[9px] font-black text-amber-500/60 uppercase tracking-tighter relative z-10">REFERIDO</span>
           <span className="text-xl relative z-10">⭐</span>
-          <span className="text-[10px] font-bold text-amber-400 uppercase text-center leading-tight relative z-10">{c.referidos_count} Referidos<br/><span className="text-white text-base mt-0.5 block">{c.credito_acumulado ? $$(c.credito_acumulado) : "$0"}</span></span>
+          <span className="text-[10px] font-bold text-amber-400 uppercase text-center leading-tight relative z-10">{c.referidos_count} Activos<br/><span className="text-white text-base mt-0.5 block">{c.credito_acumulado ? $$(c.credito_acumulado) : "$0"}</span></span>
         </div>
       );
     }
     if (c.referido_estado === 'Enviado') {
       return (
-        <div className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border border-blue-500/30 bg-blue-500/10 h-24">
+        <div className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-blue-500/30 bg-blue-500/10 h-24">
+          <span className="text-[9px] font-black text-blue-500/60 uppercase tracking-tighter">REFERIDO</span>
           <span className="text-xl">🔵</span>
           <span className="text-[10px] font-bold text-blue-400 uppercase text-center leading-tight">Enviado<br/><span className="text-blue-300 opacity-90 mt-1 block text-[11px] bg-blue-500/20 px-2 py-0.5 rounded border border-blue-500/20">{c.codigo_referido}</span></span>
         </div>
@@ -153,11 +165,12 @@ export default function Clientes() {
     return (
       <button 
         onClick={() => enviarCodigoReferido(c)}
-        className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border border-gray-700 bg-gray-800/50 hover:bg-gray-800 active:scale-95 transition-all text-left h-24"
+        className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-gray-700 bg-gray-800/50 hover:bg-gray-800 active:scale-95 transition-all text-left h-24 w-full"
       >
+        <span className="text-[9px] font-black text-gray-500 uppercase tracking-tighter">REFERIDO</span>
         <span className="text-xl">🔘</span>
         <span className="text-[10px] font-bold text-gray-400 uppercase text-center leading-tight">No enviado</span>
-        <span className="text-[10px] mt-0.5 text-blue-400 font-bold bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 rounded flex items-center justify-center gap-1 w-full"><UsersIcon/> Generar</span>
+        <span className="text-[10px] mt-1 text-blue-400 font-bold bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded flex items-center justify-center gap-1 w-full"><UsersIcon/> Generar</span>
       </button>
     );
   };
