@@ -46,10 +46,10 @@ export default function ControlStock() {
   const [expandedCategory, setExpandedCategory] = useState(null);
 
   useEffect(() => {
-    cargarDatosIniciales();
+    cargarStockDesdeSheet();
   }, []);
 
-  const cargarDatosIniciales = async () => {
+  const cargarStockDesdeSheet = async () => {
     setCargando(true);
     setError(null);
     console.log('[CONTROL-STOCK] Iniciando carga...');
@@ -79,7 +79,7 @@ export default function ControlStock() {
       
       if (!rows || rows.length < 1) {
         console.warn('[CONTROL-STOCK] No hay filas en el Sheet');
-        inicializarConMaster(master, []);
+        inicializarConDatos(master, []);
         return;
       }
       
@@ -91,7 +91,7 @@ export default function ControlStock() {
       });
       
       console.log('[CONTROL-STOCK] Filas parseadas:', parsedRows);
-      inicializarConMaster(master, parsedRows);
+      inicializarConDatos(master, parsedRows);
     } catch (err) {
       console.error('[CONTROL-STOCK] Error crítico:', err);
       setError('No se pudo leer el stock. Revisa la conexión.');
@@ -100,12 +100,17 @@ export default function ControlStock() {
     }
   };
 
-  const inicializarConMaster = (master, remoteData) => {
+  const inicializarConDatos = (master, remoteData) => {
     const newStockData = {};
-    master.forEach(p => {
-      const remoteInfo = remoteData.find(r => r.nombre?.toLowerCase().trim() === p.nombre?.toLowerCase().trim());
+    
+    // Si master está vacío (ej: usuario Produccion), usar nombres de remoteData
+    const catalog = (master && master.length > 0) ? master : remoteData.map((r, idx) => ({ id: 1000 + idx, nombre: r.producto || r.nombre }));
+
+    catalog.forEach(p => {
+      if (!p.nombre) return;
+      const remoteInfo = remoteData.find(r => (r.producto || r.nombre)?.toLowerCase().trim() === p.nombre?.toLowerCase().trim());
       
-      // Clasificación automática priorizada
+      // Clasificación automática
       const autoTipo = getTipoByNombre(p.nombre);
 
       if (remoteInfo) {
@@ -116,9 +121,16 @@ export default function ControlStock() {
           originalLoad: { '500g': Number(remoteInfo.original_load_500g || remoteInfo.stock_500g || 0), '1kg': Number(remoteInfo.original_load_1kg || remoteInfo.stock_1kg || 0) },
           ultimoBandejeado: remoteInfo.ultimo_bandejeado || null,
           tipo: remoteInfo.tipo || autoTipo,
-          totalDays: Number(remoteInfo.total_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.totalDays || 2),
-          urgentDays: Number(remoteInfo.urgent_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.alertDays || 1)
+          totalDays: Number(remoteInfo.total_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.totalDays || 4),
+          urgentDays: Number(remoteInfo.urgent_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.alertDays || 2)
         };
+      } else if (p.fila) {
+         // Si venía de remoteData pero no tiene match (raro)
+         const def = DEFAULTS_BY_TYPE[autoTipo];
+         newStockData[p.id] = {
+           nombre: p.nombre, fila: p.fila, stock: { '500g': 0, '1kg': 0 }, originalLoad: { '500g': 0, '1kg': 0 },
+           ultimoBandejeado: null, tipo: autoTipo, totalDays: def.totalDays, urgentDays: def.alertDays
+         };
       } else {
         const def = DEFAULTS_BY_TYPE[autoTipo];
         newStockData[p.id] = {
@@ -208,7 +220,7 @@ export default function ControlStock() {
   };
 
   if (cargando) return <div className="flex flex-col items-center justify-center min-h-[400px] text-gray-500 gap-4"><Loader2 className="animate-spin text-green-500" size={40} /><p className="animate-pulse font-bold text-xs uppercase tracking-widest text-center">Cargando Stock...</p></div>;
-  if (error) return <div className="bg-red-500/10 border border-red-500/20 rounded-[2rem] p-10 text-center space-y-4"><AlertCircle className="mx-auto text-red-500" size={48} /><h3 className="text-white font-bold text-lg">Error</h3><p className="text-red-400 text-sm max-w-md mx-auto">{error}</p><button onClick={cargarDatosIniciales} className="bg-red-500 text-white px-6 py-2 rounded-xl text-xs font-bold uppercase">Reintentar</button></div>;
+  if (error) return <div className="bg-red-500/10 border border-red-500/20 rounded-[2rem] p-10 text-center space-y-4"><AlertCircle className="mx-auto text-red-500" size={48} /><h3 className="text-white font-bold text-lg">Error</h3><p className="text-red-400 text-sm max-w-md mx-auto">{error}</p><button onClick={cargarStockDesdeSheet} className="bg-red-500 text-white px-6 py-2 rounded-xl text-xs font-bold uppercase">Reintentar</button></div>;
 
   const toggleCategory = (cat) => {
     setExpandedCategory(expandedCategory === cat ? null : cat);
@@ -221,7 +233,7 @@ export default function ControlStock() {
           <h2 className="text-xl font-bold text-white tracking-tight">Control de Stock</h2>
           <p className="text-gray-500 text-[10px] uppercase font-bold tracking-widest mt-1">Sincronizado vía Cloud API</p>
         </div>
-        <button onClick={cargarDatosIniciales} className="text-gray-500 hover:text-white transition-colors p-2.5 rounded-xl bg-white/5"><RotateCcw size={16} /></button>
+        <button onClick={cargarStockDesdeSheet} className="text-gray-500 hover:text-white transition-colors p-2.5 rounded-xl bg-white/5"><RotateCcw size={16} /></button>
       </div>
 
       <div className="flex flex-col gap-3">
