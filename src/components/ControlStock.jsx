@@ -14,7 +14,7 @@ const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 const COSTOS_KEY = 'huerta_data_costos_v1_productos';
 
 const DEFAULTS_BY_TYPE = {
-  'hoja verde': { totalDays: 2, alertDays: 1, icon: '🌿', labels: { small: '250g', large: '500g' } },
+  'hoja verde': { totalDays: 4, alertDays: 2, icon: '🌿', labels: { small: '250g', large: '500g' } },
   'blando': { totalDays: 7, alertDays: 4, icon: '🍑', labels: { small: '500g', large: '1kg' } },
   'duro': { totalDays: 15, alertDays: 11, icon: '🥔', labels: { small: '500g', large: '1kg' } }
 };
@@ -191,10 +191,17 @@ export default function ControlStock() {
     const { stock_1kg, stock_500g, fecha } = formData;
     const newData = { ...stockData };
     const prod = newData[pid];
+    
+    // Asignación automática de días según tipo al cargar
+    const typeDef = DEFAULTS_BY_TYPE[prod.tipo] || DEFAULTS_BY_TYPE['hoja verde'];
+    prod.totalDays = typeDef.totalDays;
+    prod.urgentDays = typeDef.alertDays;
+
     prod.stock['1kg'] = Math.max(0, Number(stock_1kg) || 0);
     prod.stock['500g'] = Math.max(0, Number(stock_500g) || 0);
     prod.originalLoad = { ...prod.stock }; 
     prod.ultimoBandejeado = fecha;
+    
     setStockData(newData);
     syncWithSheet(prod);
     setShowFormId(null);
@@ -316,6 +323,18 @@ function StatusAccordion({ title, icon, items, isOpen, onToggle, color, type }) 
 
 function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
   const [editing, setEditing] = useState(false);
+  // Estado local para edición de ajustes antes de guardar
+  const [localSettings, setLocalSettings] = useState({ tipo: product.tipo, totalDays: product.totalDays, urgentDays: product.urgentDays });
+
+  useEffect(() => {
+    if (editing) setLocalSettings({ tipo: product.tipo, totalDays: product.totalDays, urgentDays: product.urgentDays });
+  }, [editing, product]);
+
+  const handleSaveSettings = () => {
+    onUpdate(localSettings);
+    setEditing(false);
+  };
+
   const typeConfig = DEFAULTS_BY_TYPE[product.tipo] || DEFAULTS_BY_TYPE['hoja verde'];
   const icon = typeConfig.icon;
   const labels = typeConfig.labels;
@@ -406,28 +425,42 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
         )}
       </div>
       {editing && (
-        <div className="absolute inset-0 bg-gray-900/95 z-30 p-3 rounded-2xl flex flex-col justify-center gap-2 animate-in slide-in-from-bottom-2">
+        <div className="absolute inset-0 bg-gray-900/95 z-30 p-4 rounded-3xl flex flex-col justify-center gap-3 animate-in slide-in-from-bottom-2">
           <div className="flex justify-between items-center mb-1">
-            <span className="text-[9px] font-bold text-gray-500 uppercase">Ajustes</span>
-            <button onClick={() => setEditing(false)}><X size={10} className="text-gray-500"/></button>
+            <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Ajustes</span>
+            <button onClick={() => setEditing(false)}><X size={14} className="text-gray-500 hover:text-white"/></button>
           </div>
           <div className="space-y-1">
-             <p className="text-[8px] text-gray-600 uppercase font-black">Tipo</p>
+             <p className="text-[9px] text-gray-600 uppercase font-black">Categoría</p>
              <div className="grid grid-cols-3 gap-1">
                 {Object.keys(DEFAULTS_BY_TYPE).map(t => (
-                  <button key={t} onClick={() => { onUpdate({ tipo: t, urgentDays: DEFAULTS_BY_TYPE[t].days }); setEditing(false); }} className={`p-1 rounded text-[8px] font-bold ${product.tipo === t ? 'bg-green-600 text-white' : 'bg-white/5 text-gray-500'}`}>{t.split(' ')[0]}</button>
+                  <button 
+                    key={t} 
+                    onClick={() => {
+                       const def = DEFAULTS_BY_TYPE[t];
+                       setLocalSettings({ ...localSettings, tipo: t, totalDays: def.totalDays, urgentDays: def.alertDays });
+                    }} 
+                    className={`p-1.5 rounded text-[8px] font-black uppercase tracking-tighter ${localSettings.tipo === t ? 'bg-green-600 text-white' : 'bg-white/5 text-gray-500'}`}
+                  >
+                    {t.split(' ')[0]}
+                  </button>
                 ))}
              </div>
           </div>
-          <div className="space-y-1 mt-1">
-              <p className="text-[8px] text-gray-600 uppercase font-black">Vida Útil (Total)</p>
-              <input type="number" className="w-full bg-black text-[10px] text-white p-1 rounded border border-gray-800" value={product.totalDays} onChange={(e) => onUpdate({ totalDays: Number(e.target.value) })} />
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+                <p className="text-[8px] text-gray-600 uppercase font-black">Vida Útil</p>
+                <input type="number" className="w-full bg-black text-[12px] font-bold text-white px-2 py-1.5 rounded border border-gray-800 outline-none" value={localSettings.totalDays} onChange={(e) => setLocalSettings({...localSettings, totalDays: Number(e.target.value)})} />
+            </div>
+            <div className="space-y-1">
+               <p className="text-[8px] text-gray-600 uppercase font-black">Urgente</p>
+               <input type="number" className="w-full bg-black text-[12px] font-bold text-white px-2 py-1.5 rounded border border-gray-800 outline-none" value={localSettings.urgentDays} onChange={(e) => setLocalSettings({...localSettings, urgentDays: Number(e.target.value)})} />
+            </div>
           </div>
-          <div className="space-y-1 mt-1">
-             <p className="text-[8px] text-gray-600 uppercase font-black">Urgente si quedan (días)</p>
-             <input type="number" className="w-full bg-black text-[10px] text-white p-1 rounded border border-gray-800" value={product.urgentDays} onChange={(e) => onUpdate({ urgentDays: Number(e.target.value) })} />
+          <div className="pt-2 space-y-2">
+            <button onClick={handleSaveSettings} className="w-full bg-green-600 hover:bg-green-500 text-white text-[10px] font-black uppercase py-2.5 rounded-xl shadow-lg border-b-2 border-green-800 active:border-0 active:translate-y-0.5">Guardar Cambios</button>
+            <button onClick={() => { if(confirm("¿Resetear stock y fechas?")) onUpdate({ stock: { '500g': 0, '1kg': 0 }, ultimoBandejeado: null }); setEditing(false); }} className="w-full text-red-500/60 hover:text-red-500 text-[8px] font-bold uppercase py-1">Reset Stock</button>
           </div>
-          <button onClick={() => { onUpdate({ stock: { '500g': 0, '1kg': 0 }, ultimoBandejeado: null }); setEditing(false); }} className="w-full bg-red-900/30 text-red-500 text-[8px] font-black py-1 rounded mt-1 border border-red-900/50">RESET TOTAL</button>
         </div>
       )}
     </div>
@@ -437,43 +470,43 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
 function AddStockInline({ nombre, labels, currentStock, onCancel, onSave }) {
   const [data, setData] = useState({ stock_1kg: currentStock['1kg'], stock_500g: currentStock['500g'], fecha: new Date().toISOString().split('T')[0] });
   return (
-    <div className="space-y-4">
-      <div className="text-center mb-2 text-green-400 border-b border-white/10 pb-2">
-        <p className="text-base font-black truncate uppercase tracking-widest">{nombre}</p>
+    <div className="flex flex-col h-full justify-between py-1">
+      <div className="text-center border-b border-white/10 pb-1">
+        <p className="text-[12px] font-black truncate uppercase tracking-widest text-green-400">{nombre}</p>
       </div>
-      <div className="space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <span className="text-sm text-gray-400 font-black uppercase tracking-widest">{labels.large}:</span>
+      <div className="space-y-2 mt-2">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[11px] text-gray-400 font-bold uppercase tracking-tighter">{labels.large}:</span>
           <input 
             type="number" 
             autoFocus
-            className="w-24 h-12 bg-black text-lg font-black text-white p-2 rounded-xl border border-gray-700 focus:border-green-500 outline-none text-center shadow-inner"
+            className="w-16 h-8 bg-black text-sm font-black text-white px-2 rounded-lg border border-gray-700 focus:border-green-500 outline-none text-center"
             value={data.stock_1kg} 
             onChange={(e) => setData({...data, stock_1kg: e.target.value})} 
           />
         </div>
-        <div className="flex items-center justify-between gap-4">
-          <span className="text-sm text-gray-400 font-black uppercase tracking-widest">{labels.small}:</span>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[11px] text-gray-400 font-bold uppercase tracking-tighter">{labels.small}:</span>
           <input 
             type="number" 
-            className="w-24 h-12 bg-black text-lg font-black text-white p-2 rounded-xl border border-gray-700 focus:border-green-500 outline-none text-center shadow-inner"
+            className="w-16 h-8 bg-black text-sm font-black text-white px-2 rounded-lg border border-gray-700 focus:border-green-500 outline-none text-center"
             value={data.stock_500g} 
             onChange={(e) => setData({...data, stock_500g: e.target.value})} 
           />
         </div>
-        <div className="space-y-1">
-          <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest ml-1">Fecha de Bandejeado</label>
+        <div className="flex flex-col gap-0.5">
+          <label className="text-[8px] font-black text-gray-600 uppercase tracking-widest ml-1">Fecha</label>
           <input 
             type="date" 
-            className="w-full h-12 bg-black text-sm font-bold text-white px-4 rounded-xl border border-gray-700 focus:border-green-500 outline-none shadow-inner"
+            className="w-full h-8 bg-black text-[12px] font-bold text-white px-2 rounded-lg border border-gray-700 focus:border-green-500 outline-none"
             value={data.fecha} 
             onChange={(e) => setData({...data, fecha: e.target.value})} 
           />
         </div>
       </div>
-      <div className="flex gap-2 pt-4">
-        <button onClick={onCancel} className="flex-1 h-14 bg-gray-800 text-gray-400 font-black text-sm uppercase tracking-widest rounded-2xl hover:bg-gray-700 transition-all">Salir</button>
-        <button onClick={() => onSave(data)} className="flex-[2] h-14 bg-green-600 text-white font-black text-sm uppercase tracking-widest rounded-2xl shadow-lg border-b-4 border-green-800 active:border-b-0 active:translate-y-1 transition-all">Listo</button>
+      <div className="flex gap-1.5 mt-3">
+        <button onClick={onCancel} className="flex-1 h-9 bg-gray-800 text-gray-400 font-black text-[10px] uppercase tracking-tighter rounded-xl">Salir</button>
+        <button onClick={() => onSave(data)} className="flex-[2] h-9 bg-green-600 text-white font-black text-[10px] uppercase tracking-widest rounded-xl border-b-2 border-green-800 shadow-md">Guardar</button>
       </div>
     </div>
   );
