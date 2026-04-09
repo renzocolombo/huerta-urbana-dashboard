@@ -10,6 +10,8 @@ const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 
 export function GoogleSheetsProvider({ children }) {
   const [pedidos, setPedidos]         = useState(PEDIDOS_MOCK);
+  const [productosCostos, setProductosCostos] = useState([]);
+  const [stockData, setStockData]     = useState({});
   const [cargando, setCargando]       = useState(false);
   const [error, setError]             = useState(null);
   const [conectado, setConectado]     = useState(false);
@@ -85,6 +87,71 @@ export function GoogleSheetsProvider({ children }) {
       console.error('[SHEETS] ❌ Error al cargar:', e.message);
       setError(e.message);
       setConectado(false);
+    } finally {
+      setCargando(false);
+    }
+  };
+
+  const fetchPanelCostos = async () => {
+    if (!API_KEY || !SHEET_ID) return;
+    try {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/PanelCostos?key=${API_KEY}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok) return;
+      const rows = data.values;
+      if (!rows || rows.length < 2) return;
+      
+      const mapped = rows.slice(1).map((row, index) => ({
+        fila: index + 2,
+        id: index + 1,
+        nombre: row[0] || 'Sin nombre',
+        precioCajon: Number(row[1]) || 0,
+        cantidadCajon: Number(row[2]) || 1,
+        margen: Number(row[3]) || 60,
+        precioMaxManual: row[4] ? Number(row[4]) : null,
+        activo: row[5] === 'TRUE' || row[5] === 'true' || row[5] === '1',
+      }));
+      setProductosCostos(mapped);
+      localStorage.setItem('huerta_data_costos_v1_productos', JSON.stringify(mapped));
+    } catch (e) {
+      console.error('[SHEETS-COSTOS] Error:', e);
+    }
+  };
+
+  const fetchControlStock = async () => {
+    if (!API_KEY || !SHEET_ID) return;
+    try {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/ControlStock?key=${API_KEY}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok) return;
+      const rows = data.values;
+      if (!rows || rows.length < 2) return;
+
+      const headers = rows[0].map(h => h.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ /g, '_'));
+      const parsedRows = rows.slice(1).map((row, index) => {
+        const obj = { fila: index + 2 };
+        headers.forEach((h, i) => { obj[h] = row[i] || ''; });
+        return obj;
+      });
+      setStockData(parsedRows);
+    } catch (e) {
+      console.error('[SHEETS-STOCK] Error:', e);
+    }
+  };
+
+  const cargarTodo = async () => {
+    setCargando(true);
+    try {
+      await Promise.all([
+        fetchSheetPedidos(),
+        fetchPanelCostos(),
+        fetchControlStock()
+      ]);
+      setConectado(true);
+    } catch (e) {
+      console.error('[SHEETS-ALL] Error al cargar todo:', e);
     } finally {
       setCargando(false);
     }
@@ -168,11 +235,13 @@ export function GoogleSheetsProvider({ children }) {
   return (
     <GoogleSheetsContext.Provider value={{
       pedidos, setPedidos,
+      productosCostos, stockData,
       ultimoRefresco,
       cargando,
       error,
       conectado,
       fetchSheetPedidos,
+      cargarTodo,
       actualizarEstadoEnSheet,
       actualizarRemitoEnSheet,
       actualizarDatosCliente,

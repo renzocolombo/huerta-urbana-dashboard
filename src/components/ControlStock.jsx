@@ -38,6 +38,7 @@ function getTipoByNombre(nombre) {
 }
 
 export default function ControlStock() {
+  const { stockData: contextStock, productosCostos: contextMaster } = useGoogleSheets();
   const [productosMaster, setProductosMaster] = useState([]);
   const [stockData, setStockData] = useState({});
   const [showFormId, setShowFormId] = useState(null);
@@ -46,8 +47,16 @@ export default function ControlStock() {
   const [expandedCategory, setExpandedCategory] = useState(null);
 
   useEffect(() => {
-    cargarStockDesdeSheet();
-  }, []);
+    // Si ya tenemos los datos en el contexto (cargados al entrar), inicializar de una
+    if (contextStock && contextStock.length > 0 && contextMaster && contextMaster.length > 0) {
+      console.log('[CONTROL-STOCK] Usando datos pre-cargados del contexto');
+      setProductosMaster(contextMaster);
+      inicializarConDatos(contextMaster, contextStock);
+      setCargando(false);
+    } else {
+      cargarStockDesdeSheet();
+    }
+  }, [contextStock, contextMaster]);
 
   const cargarStockDesdeSheet = async () => {
     setCargando(true);

@@ -16,7 +16,7 @@ import PanelCostos from './components/PanelCostos';
 import ControlStock from './components/ControlStock';
 import Reportes from './components/Reportes';
 import IAFlotante from './components/IAFlotante';
-import { GoogleSheetsProvider } from './context/GoogleSheetsContext';
+import { useGoogleSheets } from './context/GoogleSheetsContext';
 
 // Mapa de secciones del dashboard
 const SECCIONES = {
@@ -32,6 +32,7 @@ const SECCIONES = {
 };
 
 export default function App() {
+  const { cargarTodo } = useGoogleSheets();
   const [logueado, setLogueado] = useState(false);
   const [rol, setRol] = useState('admin');
   const [usuario, setUsuario] = useState('');
@@ -45,36 +46,35 @@ export default function App() {
       setUsuario(u || '');
       if (r === 'repartidor') setSeccion('agenda');
       if (r === 'produccion') setSeccion('stock');
+      cargarTodo(); // Carga en paralelo: Pedidos, Costos y Stock
     }} />;
   }
 
   const ComponenteActual = SECCIONES[seccion]?.componente || Resumen;
 
   return (
-    <GoogleSheetsProvider>
-      <div className="min-h-screen bg-[#0f0f0f]">
-        {/* Header de navegación */}
-        <Header
-          seccion={seccion}
-          onNav={(id) => setSeccion(id)}
-          onLogout={() => { setLogueado(false); setSeccion('resumen'); setUsuario(''); }}
-          rol={rol}
-          usuario={usuario}
-        />
+    <div className="min-h-screen bg-[#0f0f0f]">
+      {/* Header de navegación */}
+      <Header
+        seccion={seccion}
+        onNav={(id) => setSeccion(id)}
+        onLogout={() => { setLogueado(false); setSeccion('resumen'); setUsuario(''); }}
+        rol={rol}
+        usuario={usuario}
+      />
 
-        {/* Contenido principal */}
-        <main className="pt-14">
-          <div className="max-w-7xl mx-auto px-4 py-6">
-            {/* Key fuerza remount al cambiar sección para animar entrada */}
-            <div key={seccion} className="fade-in">
-              <ComponenteActual rol={rol} />
-            </div>
+      {/* Contenido principal */}
+      <main className="pt-14">
+        <div className="max-w-7xl mx-auto px-4 py-6">
+          {/* Key fuerza remount al cambiar sección para animar entrada */}
+          <div key={seccion} className="fade-in">
+            <ComponenteActual rol={rol} />
           </div>
-        </main>
+        </div>
+      </main>
 
-        {/* Botón de IA flotante (Oculto para repartidores) */}
-        {rol === 'admin' && <IAFlotante />}
-      </div>
-    </GoogleSheetsProvider>
+      {/* Botón de IA flotante (Oculto para repartidores) */}
+      {rol === 'admin' && <IAFlotante />}
+    </div>
   );
 }

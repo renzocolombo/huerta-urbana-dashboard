@@ -16,7 +16,31 @@ const NAV_ITEMS = [
 
 export default function Header({ seccion, onNav, onLogout, rol, usuario, urlSheet, setSeccionActiva }) {
   const [menuAbierto, setMenuAbierto] = useState(false);
+  const [ahora, setAhora] = useState(new Date());
   const { conectado, ultimoRefresco } = useGoogleSheets();
+
+  useEffect(() => {
+    const timer = setInterval(() => setAhora(new Date()), 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatFecha = (date) => {
+    const opciones = { weekday: 'long', day: 'numeric', month: 'long' };
+    const fechaStr = date.toLocaleDateString('es-AR', opciones);
+    const horaStr = date.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    // Capitalizar primera letra: jueves -> Jueves
+    return `${fechaStr.charAt(0).toUpperCase() + fechaStr.slice(1)}, ${horaStr}hs`;
+  };
+
+  const getEstilosSaludo = (u) => {
+    const user = (u || '').toLowerCase();
+    if (user === 'ren' || user === 'nati') return { bg: 'bg-[#dcfce7]', text: 'text-green-800', emoji: '👋' };
+    if (user === 'rider') return { bg: 'bg-[#dbeafe]', text: 'text-blue-800', emoji: '🚴' };
+    if (user === 'produccion') return { bg: 'bg-[#fef9c3]', text: 'text-yellow-900', emoji: '🌿' };
+    return { bg: 'bg-white/5', text: 'text-white', emoji: '✨' };
+  };
+
+  const estilos = getEstilosSaludo(usuario);
 
 
   const itemsMostrar = rol === 'admin' ? NAV_ITEMS : (rol === 'repartidor' ? NAV_ITEMS.filter(item => item.id === 'agenda') : []);
@@ -35,15 +59,18 @@ export default function Header({ seccion, onNav, onLogout, rol, usuario, urlShee
               <span className="font-bold text-white text-sm">Huerta Urbana</span>
             </div>
 
-            {/* Saludo personalizado */}
+            {/* Saludo personalizado Premium */}
             {usuario && (
-              <div className="hidden sm:block border-l border-gray-800 pl-4 py-1">
-                <span className="text-xs text-gray-400 font-medium tracking-tight">
-                  {usuario.toLowerCase() === 'ren' && '¡Hola, Ren! 👋'}
-                  {usuario.toLowerCase() === 'nati' && '¡Hola, Nati! 👋'}
-                  {usuario.toLowerCase() === 'rider' && '¡Hola, Rider! 🚴'}
-                  {usuario.toLowerCase() === 'produccion' && '¡Hola, Producción! 🌿'}
-                </span>
+              <div className={`hidden sm:flex items-center gap-3 px-5 py-2 rounded-2xl ${estilos.bg} border-b-2 border-black/5 animate-in slide-in-from-left-4 duration-300`}>
+                <span className="text-xl drop-shadow-sm">{estilos.emoji}</span>
+                <div className="flex flex-col">
+                  <span className={`text-[15px] font-black leading-tight ${estilos.text}`}>
+                    ¡Buen día, {usuario}!
+                  </span>
+                  <span className={`text-[9.5px] font-bold uppercase tracking-wider opacity-70 ${estilos.text}`}>
+                    {formatFecha(ahora)}
+                  </span>
+                </div>
               </div>
             )}
           </div>

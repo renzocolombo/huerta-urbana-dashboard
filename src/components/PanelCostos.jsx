@@ -43,6 +43,7 @@ function getTipoByNombre(nombre) {
 }
 
 export default function PanelCostos() {
+  const { productosCostos: contextProds } = useGoogleSheets();
   const [productos, setProductos] = useState([]);
   const [combos, setCombos] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY + '_combos');
@@ -61,10 +62,15 @@ export default function PanelCostos() {
   const [publicando, setPublicando] = useState(false);
   const [error, setError] = useState(null);
 
-  // Carga inicial desde Google Sheets
+  // Carga inicial: Si contextProds ya tiene datos, usarlos.
   useEffect(() => {
-    cargarDatosDesdeSheet();
-  }, []);
+    if (contextProds && contextProds.length > 0) {
+      setProductos(contextProds);
+      setCargando(false);
+    } else {
+      cargarDatosDesdeSheet();
+    }
+  }, [contextProds]);
 
   const cargarDatosDesdeSheet = async () => {
     if (!API_KEY || !SHEET_ID) {
