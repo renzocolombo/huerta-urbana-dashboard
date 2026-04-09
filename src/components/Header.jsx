@@ -42,17 +42,17 @@ export default function Header({ seccion, onNav, onLogout, rol, usuario, urlShee
               </div>
               <span className="font-bold text-white text-sm">Huerta Urbana</span>
             </div>
-
-            {/* Saludo personalizado compacto */}
-            {usuario && (
-              <div className={`hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-xl ${estilos.bg} ${estilos.border} border animate-in slide-in-from-left-4 duration-300`}>
-                <span className="text-sm">{estilos.emoji}</span>
-                <span className={`text-xs font-bold ${estilos.text}`}>
-                  ¡Hola, {usuario}!
-                </span>
-              </div>
-            )}
           </div>
+
+          {/* Saludo personalizado compacto - Centrado Absoluto */}
+          {usuario && (
+            <div className={`hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-xl ${estilos.bg} ${estilos.border} border animate-in slide-in-from-top-4 duration-300 absolute left-1/2 -translate-x-1/2`}>
+              <span className="text-sm">{estilos.emoji}</span>
+              <span className={`text-xs font-bold ${estilos.text}`}>
+                ¡Hola, {usuario}!
+              </span>
+            </div>
+          )}
 
           {/* Nav desktop */}
           <nav className="hidden lg:flex items-center gap-1">
@@ -74,18 +74,6 @@ export default function Header({ seccion, onNav, onLogout, rol, usuario, urlShee
 
           {/* Acciones */}
           <div className="flex items-center gap-2 sm:gap-3">
-             {rol === 'repartidor' && (
-               <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-green-500/10 border border-green-500/20">
-                 <span className="text-[10px] sm:text-xs font-bold text-green-400">Bienvenido, Repartidor 🌿</span>
-               </div>
-             )}
-
-             {rol === 'produccion' && (
-               <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-green-500/10 border border-green-500/20">
-                 <span className="text-[10px] sm:text-xs font-bold text-green-400">Bienvenido, Producción 🌿</span>
-               </div>
-             )}
-
              {rol === 'admin' && (
                <>
                  {conectado ? (
