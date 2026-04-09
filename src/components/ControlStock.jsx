@@ -327,43 +327,60 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
   };
 
   return (
-    <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-3 flex flex-col justify-between hover:border-gray-700 transition-all relative group shadow-sm">
-      <div className={`absolute top-3 right-3 w-1.5 h-1.5 rounded-full ${statusColors[product.statusColor]} shadow-[0_0_8px]`} />
-      <div className="mb-2">
-        <div className="flex items-center gap-1.5 mb-1">
-          <span className="text-sm">{icon}</span>
-          <h4 className="font-bold text-white text-[11px] truncate leading-tight flex-1" title={product.nombre}>{product.nombre}</h4>
+    <div className="bg-[#1f2937] border border-gray-800 rounded-3xl p-5 flex flex-col justify-between hover:border-gray-700 transition-all relative group shadow-lg min-h-[220px]">
+      <div className={`absolute top-4 right-4 w-2 h-2 rounded-full ${statusColors[product.statusColor]} shadow-[0_0_10px]`} />
+      <div className="mb-3">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-lg">{icon}</span>
+          <h4 className="font-black text-white text-[13px] uppercase tracking-wide truncate leading-tight flex-1" title={product.nombre}>{product.nombre}</h4>
         </div>
-        <div className="flex items-center gap-0.5 mt-2">
-          <div className="flex-1 bg-black/30 rounded-lg p-1 text-center">
-            <span className="text-[8px] text-gray-500 block uppercase font-bold leading-none mb-0.5">{labels.small}</span>
-            <span className={`text-[11px] font-black ${product.stock['500g'] === 0 ? 'text-gray-700' : 'text-white'}`}>{product.stock['500g']}</span>
+
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-gray-400">
+             <span className="text-sm">📦</span>
+             <p className="text-[11px] font-bold">
+               {product.totalStock} {product.totalStock === 1 ? 'bandeja' : 'bandejas'} 
+               <span className="text-gray-600 ml-1 font-medium">
+                 ({product.stock['500g']}x{labels.small} | {product.stock['1kg']}x{labels.large})
+               </span>
+             </p>
           </div>
-          <div className="flex-1 bg-black/30 rounded-lg p-1 text-center">
-            <span className="text-[8px] text-gray-500 block uppercase font-bold leading-none mb-0.5">{labels.large}</span>
-            <span className={`text-[11px] font-black ${product.stock['1kg'] === 0 ? 'text-gray-700' : 'text-white'}`}>{product.stock['1kg']}</span>
+          
+          <div className="flex items-center gap-2 text-gray-500">
+             <span className="text-sm">📅</span>
+             <p className="text-[11px] font-bold uppercase tracking-tight">
+               {product.diasTranscurridos === 0 ? 'Bandejeado hoy' : 
+                product.diasTranscurridos === 1 ? 'Bandejeado hace 1 día' : 
+                `Bandejeado hace ${product.diasTranscurridos} días`}
+             </p>
           </div>
         </div>
       </div>
-      <div className="mt-auto pt-2 space-y-2">
-        <div className="space-y-1 bg-black/20 p-2 rounded-xl">
-           <p className="text-[8px] text-gray-400">Bandejeado: <span className="text-white font-bold">{product.diasTranscurridos ?? '-'} días</span></p>
-           <p className="text-[8px] text-gray-400">Frescura: <span className={product.statusColor === 'red' ? 'text-red-400 font-black' : 'text-green-400 font-bold'}>{product.diasRestantes ?? '-'} días restantes</span> de {product.totalDays}</p>
-           <p className="text-[8px] font-black uppercase text-gray-500 flex items-center gap-1">
-             {product.diasRestantes <= product.urgentDays ? (
-               <><span className="text-red-500 text-[10px]">⚠️</span> <span className="text-red-400">Urgente vender ahora</span></>
-             ) : (
-               <>Urgente vender en: <span className="text-gray-300">{product.diasRestantes - product.urgentDays} días</span></>
-             )}
-           </p>
+
+      <div className="mt-auto pt-4 space-y-3">
+        <div className="bg-black/40 p-3 rounded-2xl border border-white/5">
+           {product.diasRestantes <= 0 ? (
+             <p className="text-[12px] font-black text-red-500 flex items-center gap-2 animate-pulse">
+               🔴 VENDER HOY
+             </p>
+           ) : (
+             <p className="text-[11px] font-bold text-gray-300 flex items-center gap-2">
+               <span className="text-blue-400">⏳</span> Vence en: <span className={product.statusColor === 'red' ? 'text-red-400 font-black' : 'text-green-400 font-black'}>{product.diasRestantes} días</span>
+             </p>
+           )}
         </div>
+
         {!isAdding ? (
-          <div className="flex justify-between items-center gap-2">
-            <button onClick={onToggleAdd} className="flex-1 bg-gray-800/80 hover:bg-gray-700 text-white font-black text-[9px] py-1.5 rounded-lg border border-gray-700 flex items-center justify-center gap-1 transition-all"><Plus size={10} /> Cargar</button>
-            <button onClick={() => setEditing(true)} className="p-1.5 bg-white/5 rounded-lg text-gray-500 hover:text-white transition-all"><Settings size={12}/></button>
+          <div className="flex justify-between items-center gap-3">
+            <button onClick={onToggleAdd} className="flex-1 bg-green-600 hover:bg-green-500 text-white font-black text-[10px] py-3 rounded-xl shadow-lg border-b-4 border-green-800 active:border-b-0 active:translate-y-1 transition-all flex items-center justify-center gap-2 uppercase tracking-widest">
+              <Plus size={14} /> Cargar
+            </button>
+            <button onClick={() => setEditing(true)} className="p-3 bg-white/5 rounded-xl text-gray-400 hover:text-white hover:bg-white/10 transition-all">
+              <Settings size={16}/>
+            </button>
           </div>
         ) : (
-          <div className="bg-gray-900 absolute inset-0 z-20 p-2 rounded-2xl animate-in fade-in flex flex-col justify-center">
+          <div className="bg-gray-900 absolute inset-0 z-20 p-4 rounded-3xl animate-in fade-in zoom-in-95 flex flex-col justify-center">
             <AddStockInline nombre={product.nombre} labels={labels} currentStock={product.stock} onCancel={onToggleAdd} onSave={onSaveAdd} />
           </div>
         )}
