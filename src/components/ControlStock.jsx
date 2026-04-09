@@ -145,8 +145,9 @@ export default function ControlStock() {
       }
 
       const isFaltante = totalStock === 0;
-      // Urgente si quedan <= urgentDays O si totalStock > 0 y quedan <= 2 días
-      const isUrgente = !isFaltante && diasRestantes !== null && (diasRestantes <= item.urgentDays || diasRestantes <= 2);
+      
+      // Lógica solicitada: Urgente Vender si días restantes <= 2
+      const isUrgente = !isFaltante && diasRestantes !== null && (diasRestantes <= 2);
       const isStockBajo = !isFaltante && !isUrgente && totalOriginal > 0 && totalStock <= (totalOriginal / 2);
 
       let category = 'ok';
@@ -154,7 +155,7 @@ export default function ControlStock() {
       else if (isUrgente) category = 'urgente';
       else if (isStockBajo) category = 'bajo';
 
-      // Lógica de colores de semáforo
+      // Semáforo: Verde (> mitad), Amarillo (<= mitad), Rojo (<= 2), Gris (faltante)
       let statusColor = 'green';
       if (isFaltante) statusColor = 'gray';
       else if (diasRestantes !== null) {
@@ -319,68 +320,87 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
   const icon = typeConfig.icon;
   const labels = typeConfig.labels;
   
-  const statusColors = { 
+  const cardStyles = { 
+    red: 'bg-red-500/10 border-red-500/30 text-red-200', 
+    yellow: 'bg-amber-500/10 border-amber-500/30 text-amber-100', 
+    green: 'bg-green-500/10 border-green-500/20 text-green-100', 
+    gray: 'bg-gray-800/20 border-gray-800 text-gray-500' 
+  };
+
+  const statusDot = { 
     red: 'bg-red-500 shadow-red-500', 
     yellow: 'bg-amber-500 shadow-amber-500', 
     green: 'bg-green-500 shadow-green-500', 
-    gray: 'bg-gray-500 shadow-transparent' 
+    gray: 'bg-gray-500' 
   };
 
   return (
-    <div className="bg-[#1f2937] border border-gray-800 rounded-3xl p-5 flex flex-col justify-between hover:border-gray-700 transition-all relative group shadow-lg min-h-[220px]">
-      <div className={`absolute top-4 right-4 w-2 h-2 rounded-full ${statusColors[product.statusColor]} shadow-[0_0_10px]`} />
+    <div className={`${cardStyles[product.statusColor]} border rounded-3xl p-5 flex flex-col justify-between hover:scale-[1.02] transition-all relative group shadow-lg min-h-[230px]`}>
+      <div className={`absolute top-4 right-4 w-2 h-2 rounded-full ${statusDot[product.statusColor]} shadow-[0_0_10px]`} />
       <div className="mb-3">
         <div className="flex items-center gap-2 mb-3">
-          <span className="text-lg">{icon}</span>
-          <h4 className="font-black text-white text-[13px] uppercase tracking-wide truncate leading-tight flex-1" title={product.nombre}>{product.nombre}</h4>
+          <span className="text-xl">{icon}</span>
+          <h4 className="font-black text-white text-[14px] uppercase tracking-wide truncate leading-tight flex-1" title={product.nombre}>{product.nombre}</h4>
         </div>
 
         <div className="space-y-3">
-          <div className="flex items-center gap-2 text-gray-400">
-             <span className="text-sm">📦</span>
-             <p className="text-[11px] font-bold">
+          <div className="flex items-center gap-2">
+             <span className="text-base">📦</span>
+             <p className="text-[12px] font-bold">
                {product.totalStock} {product.totalStock === 1 ? 'bandeja' : 'bandejas'} 
-               <span className="text-gray-600 ml-1 font-medium">
+               <span className="opacity-60 ml-1 font-medium">
                  ({product.stock['500g']}x{labels.small} | {product.stock['1kg']}x{labels.large})
                </span>
              </p>
           </div>
           
-          <div className="flex items-center gap-2 text-gray-500">
-             <span className="text-sm">📅</span>
-             <p className="text-[11px] font-bold uppercase tracking-tight">
-               {product.diasTranscurridos === 0 ? 'Bandejeado hoy' : 
-                product.diasTranscurridos === 1 ? 'Bandejeado hace 1 día' : 
-                `Bandejeado hace ${product.diasTranscurridos} días`}
+          <div className="flex items-center gap-2 opacity-80">
+             <span className="text-base">📅</span>
+             <p className="text-[12px] font-bold uppercase tracking-tight">
+               {product.diasTranscurridos === 0 ? 'Cargado hoy' : 
+                product.diasTranscurridos === 1 ? 'Cargado hace 1 día' : 
+                `Cargado hace ${product.diasTranscurridos} días`}
              </p>
           </div>
         </div>
       </div>
 
       <div className="mt-auto pt-4 space-y-3">
-        <div className="bg-black/40 p-3 rounded-2xl border border-white/5">
+        <div className="bg-black/30 p-3 rounded-2xl border border-white/5">
            {product.diasRestantes <= 0 ? (
-             <p className="text-[12px] font-black text-red-500 flex items-center gap-2 animate-pulse">
+             <p className="text-[13px] font-black text-red-500 flex items-center gap-2 animate-pulse">
                🔴 VENDER HOY
              </p>
            ) : (
-             <p className="text-[11px] font-bold text-gray-300 flex items-center gap-2">
-               <span className="text-blue-400">⏳</span> Vence en: <span className={product.statusColor === 'red' ? 'text-red-400 font-black' : 'text-green-400 font-black'}>{product.diasRestantes} días</span>
-             </p>
+             <div className="space-y-1">
+               <p className="text-[12px] font-bold flex items-center gap-2">
+                 <span className="text-blue-400">⏳</span> {product.diasRestantes} días restantes
+               </p>
+               {product.diasRestantes > 2 && (
+                 <p className="text-[10px] font-black uppercase opacity-40 flex items-center gap-1">
+                   ⚠️ Urgente en: {product.diasRestantes - 2} días
+                 </p>
+               )}
+               {product.diasRestantes <= 2 && product.diasRestantes > 0 && (
+                 <p className="text-[11px] font-black uppercase text-red-400 flex items-center gap-1">
+                   ⚠️ Urgente: vender ahora
+                 </p>
+               )}
+             </div>
            )}
         </div>
 
         {!isAdding ? (
           <div className="flex justify-between items-center gap-3">
-            <button onClick={onToggleAdd} className="flex-1 bg-green-600 hover:bg-green-500 text-white font-black text-[10px] py-3 rounded-xl shadow-lg border-b-4 border-green-800 active:border-b-0 active:translate-y-1 transition-all flex items-center justify-center gap-2 uppercase tracking-widest">
-              <Plus size={14} /> Cargar
+            <button onClick={onToggleAdd} className="flex-1 bg-green-600 hover:bg-green-500 text-white font-black text-[11px] py-3.5 rounded-xl shadow-lg border-b-4 border-green-800 active:border-b-0 active:translate-y-1 transition-all flex items-center justify-center gap-2 uppercase tracking-[0.1em]">
+              <Plus size={16} /> Cargar
             </button>
-            <button onClick={() => setEditing(true)} className="p-3 bg-white/5 rounded-xl text-gray-400 hover:text-white hover:bg-white/10 transition-all">
-              <Settings size={16}/>
+            <button onClick={() => setEditing(true)} className="p-3.5 bg-white/5 rounded-xl text-gray-400 hover:text-white hover:bg-white/10 transition-all">
+              <Settings size={18}/>
             </button>
           </div>
         ) : (
-          <div className="bg-gray-900 absolute inset-0 z-20 p-4 rounded-3xl animate-in fade-in zoom-in-95 flex flex-col justify-center">
+          <div className="bg-gray-900 absolute inset-0 z-20 p-5 rounded-3xl animate-in fade-in zoom-in-95 flex flex-col justify-center">
             <AddStockInline nombre={product.nombre} labels={labels} currentStock={product.stock} onCancel={onToggleAdd} onSave={onSaveAdd} />
           </div>
         )}
@@ -417,24 +437,43 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
 function AddStockInline({ nombre, labels, currentStock, onCancel, onSave }) {
   const [data, setData] = useState({ stock_1kg: currentStock['1kg'], stock_500g: currentStock['500g'], fecha: new Date().toISOString().split('T')[0] });
   return (
-    <div className="space-y-2">
-      <div className="text-center mb-1 text-green-400">
-        <p className="text-[10px] font-black truncate">{nombre}</p>
+    <div className="space-y-4">
+      <div className="text-center mb-2 text-green-400 border-b border-white/10 pb-2">
+        <p className="text-base font-black truncate uppercase tracking-widest">{nombre}</p>
       </div>
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[9px] text-gray-500 font-bold uppercase">{labels.large}:</span>
-          <input type="number" value={data.stock_1kg} onChange={(e) => setData({...data, stock_1kg: e.target.value})} className="w-16 bg-black text-[10px] text-white p-1 rounded border border-gray-800 outline-none text-right" />
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-sm text-gray-400 font-black uppercase tracking-widest">{labels.large}:</span>
+          <input 
+            type="number" 
+            autoFocus
+            className="w-24 h-12 bg-black text-lg font-black text-white p-2 rounded-xl border border-gray-700 focus:border-green-500 outline-none text-center shadow-inner"
+            value={data.stock_1kg} 
+            onChange={(e) => setData({...data, stock_1kg: e.target.value})} 
+          />
         </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[9px] text-gray-500 font-bold uppercase">{labels.small}:</span>
-          <input type="number" value={data.stock_500g} onChange={(e) => setData({...data, stock_500g: e.target.value})} className="w-16 bg-black text-[10px] text-white p-1 rounded border border-gray-800 outline-none text-right" />
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-sm text-gray-400 font-black uppercase tracking-widest">{labels.small}:</span>
+          <input 
+            type="number" 
+            className="w-24 h-12 bg-black text-lg font-black text-white p-2 rounded-xl border border-gray-700 focus:border-green-500 outline-none text-center shadow-inner"
+            value={data.stock_500g} 
+            onChange={(e) => setData({...data, stock_500g: e.target.value})} 
+          />
         </div>
-        <input type="date" value={data.fecha} onChange={(e) => setData({...data, fecha: e.target.value})} className="w-full bg-black text-[9px] text-white p-1 rounded border border-gray-800 outline-none mt-1" />
+        <div className="space-y-1">
+          <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest ml-1">Fecha de Bandejeado</label>
+          <input 
+            type="date" 
+            className="w-full h-12 bg-black text-sm font-bold text-white px-4 rounded-xl border border-gray-700 focus:border-green-500 outline-none shadow-inner"
+            value={data.fecha} 
+            onChange={(e) => setData({...data, fecha: e.target.value})} 
+          />
+        </div>
       </div>
-      <div className="flex gap-1 pt-2">
-        <button onClick={onCancel} className="flex-1 text-[8px] text-gray-500 font-bold uppercase py-1">Salir</button>
-        <button onClick={() => onSave(data)} className="flex-1 bg-green-600 text-white text-[8px] font-black uppercase py-1 rounded">Listo</button>
+      <div className="flex gap-2 pt-4">
+        <button onClick={onCancel} className="flex-1 h-14 bg-gray-800 text-gray-400 font-black text-sm uppercase tracking-widest rounded-2xl hover:bg-gray-700 transition-all">Salir</button>
+        <button onClick={() => onSave(data)} className="flex-[2] h-14 bg-green-600 text-white font-black text-sm uppercase tracking-widest rounded-2xl shadow-lg border-b-4 border-green-800 active:border-b-0 active:translate-y-1 transition-all">Listo</button>
       </div>
     </div>
   );
