@@ -51,11 +51,15 @@ export default function ControlStock() {
   const cargarDatosIniciales = async () => {
     setCargando(true);
     setError(null);
+    console.log('[CONTROL-STOCK] Iniciando carga...');
+    
     const prodsSaved = localStorage.getItem(COSTOS_KEY);
     const master = prodsSaved ? JSON.parse(prodsSaved) : [];
+    console.log('[CONTROL-STOCK] Master list (localStorage):', master);
     setProductosMaster(master);
 
     if (!API_KEY || !SHEET_ID) {
+      console.error('[CONTROL-STOCK] Error: No hay API_KEY o SHEET_ID');
       setError('Faltan claves de configuración (SHEET_ID / API_KEY) en .env');
       setCargando(false);
       return;
@@ -63,22 +67,32 @@ export default function ControlStock() {
 
     try {
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/ControlStock?key=${API_KEY}`;
+      console.log('[CONTROL-STOCK] URL Fetch:', url);
+      
       const res = await fetch(url);
       const data = await res.json();
+      console.log('[CONTROL-STOCK] Respuesta:', data);
+      
       if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
       const rows = data.values;
+      
       if (!rows || rows.length < 1) {
+        console.warn('[CONTROL-STOCK] No hay filas en el Sheet');
         inicializarConMaster(master, []);
         return;
       }
+      
       const headers = rows[0].map(h => h.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ /g, '_'));
       const parsedRows = rows.slice(1).map((row, index) => {
         const obj = { fila: index + 2 };
         headers.forEach((h, i) => { obj[h] = row[i] || ''; });
         return obj;
       });
+      
+      console.log('[CONTROL-STOCK] Filas parseadas:', parsedRows);
       inicializarConMaster(master, parsedRows);
     } catch (err) {
+      console.error('[CONTROL-STOCK] Error crítico:', err);
       setError('No se pudo leer el stock. Revisa la conexión.');
     } finally {
       setCargando(false);

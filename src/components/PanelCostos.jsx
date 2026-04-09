@@ -6,7 +6,7 @@ import {
 
 const STORAGE_KEY = 'huerta_data_costos_v1';
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
-const API_KEY  = import.meta.env.VITE_GOOGLE_API_KEY;
+const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_KEY;
 const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
@@ -53,9 +53,13 @@ export default function PanelCostos() {
     }
 
     try {
+      console.log('[PANEL-COSTOS] Cargando desde Sheet...');
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/PanelCostos?key=${API_KEY}`;
+      console.log('[PANEL-COSTOS] URL:', url);
+      
       const res = await fetch(url);
       const data = await res.json();
+      console.log('[PANEL-COSTOS] Respuesta:', data);
       
       if (!res.ok) throw new Error(data?.error?.message || 'Error al conectar con el Sheet');
 
@@ -116,12 +120,13 @@ export default function PanelCostos() {
     }
   };
 
-  // Persistencia local para Combos y Config (hasta que tengan Sheet)
+  // Persistencia local para Combos, Config y Sincronización con Control de Stock
   useEffect(() => {
+    localStorage.setItem(STORAGE_KEY + '_productos', JSON.stringify(productos));
     localStorage.setItem(STORAGE_KEY + '_combos', JSON.stringify(combos));
     localStorage.setItem(STORAGE_KEY + '_minimo', JSON.stringify(montoMinimo));
     localStorage.setItem(STORAGE_KEY + '_msg', JSON.stringify(mensajeMinimo));
-  }, [combos, montoMinimo, mensajeMinimo]);
+  }, [productos, combos, montoMinimo, mensajeMinimo]);
 
   // Estados para el Modal de Producto
   const [showModalProd, setShowModalProd] = useState(false);
