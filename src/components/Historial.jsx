@@ -149,7 +149,21 @@ function EstadoBadge({ estado }) {
 }
 
 function PagoBadge({ estado }) {
-  const cfg = { pagado:'text-green-400', pendiente:'text-red-400', sin_pago:'text-gray-500' };
-  const labels = { pagado:'Pagado', pendiente:'Pendiente', sin_pago:'Sin pago' };
-  return <span className={`text-xs font-medium ${cfg[estado] || 'text-gray-400'}`}>{labels[estado] || estado}</span>;
+  const cfg = { 
+    pagado:   'text-green-400', 
+    pendiente: 'text-red-400', 
+    sin_pago:  'text-gray-500',
+    approved:  'bg-[#bbf7d0] text-green-900 px-2 py-0.5 rounded-full'
+  };
+  const labels = { 
+    pagado:   'Pagado', 
+    pendiente: 'Pendiente', 
+    sin_pago:  'Sin pago',
+    approved:  'Aprobado'
+  };
+  return (
+    <span className={`text-[10px] font-bold uppercase tracking-tighter ${cfg[estado] || 'text-gray-400'}`}>
+      {labels[estado] || estado}
+    </span>
+  );
 }
