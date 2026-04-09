@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import { KEYS } from '../config/keys';
 import { PEDIDOS as PEDIDOS_MOCK } from '../data/mockData';
+import { getTipoByNombre } from '../data/productUtils';
 
 const GoogleSheetsContext = createContext();
 
@@ -115,16 +116,21 @@ export function GoogleSheetsProvider({ children }) {
         return;
       }
       
-      const mapped = rows.slice(1).map((row, index) => ({
-        fila: index + 2,
-        id: index + 1,
-        nombre: row[0] || 'Sin nombre',
-        precioCajon: Number(row[1]) || 0,
-        cantidadCajon: Number(row[2]) || 1,
-        margen: Number(row[3]) || 60,
-        precioMaxManual: row[4] ? Number(row[4]) : null,
-        activo: row[5] === 'TRUE' || row[5] === 'true' || row[5] === '1',
-      }));
+      const mapped = rows.slice(1).map((row, index) => {
+        const nombre = row[0] || 'Sin nombre';
+        return {
+          fila: index + 2,
+          id: index + 1,
+          nombre: nombre,
+          precioCajon: Number(row[1]) || 0,
+          cantidadCajon: Number(row[2]) || 1,
+          margen: Number(row[3]) || 60,
+          precioMaxManual: row[4] ? Number(row[4]) : null,
+          activo: row[5] === 'TRUE' || row[5] === 'true' || row[5] === '1',
+          categoria: getTipoByNombre(nombre),
+          unidad: 'kg'
+        };
+      });
 
       console.log(`[SHEETS-COSTOS] ✅ ${mapped.length} productos procesados.`);
       setProductosCostos(mapped);

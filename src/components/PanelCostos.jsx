@@ -12,15 +12,7 @@ const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
-const PRODUCT_DATABASE = {
-  'hoja verde': ['espinaca', 'lechuga', 'rucula', 'acelga', 'perejil', 'albahaca', 'ciboulette', 'radicheta'],
-  'blando': ['tomate', 'tomate cherry', 'banana', 'durazno', 'frutilla', 'pera', 'morron', 'pepino', 'chaucha', 'berenjena'],
-  'duro': [
-    'papa', 'cebolla', 'cebolla comun', 'cebolla morada', 'zanahoria', 'zapallito', 'zapallo blanco', 'cabutia', 
-    'ajo', 'remolacha', 'hinojo', 'apio', 'brocoli', 'coliflor', 'repollo', 'choclo', 'huevos', 'miel pura',
-    'palta', 'manzana roja', 'manzana verde', 'naranja', 'limon', 'pomelo', 'uva', 'arandano', 'boniato'
-  ]
-};
+import { getTipoByNombre } from '../data/productUtils';
 
 const PRODUCTOS_INICIALES = [
   { id: 1, nombre: 'Papa', categoria: 'duro', cantidadCajon: 20, unidad: 'kg', precioCajon: 12000, margen: 60, activo: true },
@@ -34,14 +26,6 @@ const COMBOS_INICIALES = [
   { id: 105, nombre: 'Combo Vegetariano', precio: 65000, descripcion: '', productos: [], descuento: 0, activo: true },
   { id: 106, nombre: 'Combo Mensual', precio: 125000, descripcion: '', productos: [], descuento: 0, activo: true }
 ];
-
-function getTipoByNombre(nombre) {
-  const n = nombre.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (PRODUCT_DATABASE['hoja verde'].some(p => n.includes(p))) return 'hoja verde';
-  if (PRODUCT_DATABASE['blando'].some(p => n.includes(p))) return 'blando';
-  if (PRODUCT_DATABASE['duro'].some(p => n.includes(p))) return 'duro';
-  return 'hoja verde'; // Default
-}
 
 export default function PanelCostos() {
   const { productosCostos: contextProds } = useGoogleSheets();
