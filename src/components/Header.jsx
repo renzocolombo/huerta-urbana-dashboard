@@ -57,21 +57,23 @@ export default function Header({ seccion, onNav, onLogout, rol, usuario, urlShee
           </div>
 
           {/* Derecha: Navegación + Acciones */}
-          <div className="flex items-center gap-2 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 lg:pr-14">
             {/* Nav desktop */}
-            <nav className="hidden lg:flex items-center gap-1">
+            <nav className="hidden lg:flex items-center gap-1.5">
               {itemsMostrar.map(({ id, label, icon: Icon }) => (
                 <button
                   key={id}
                   onClick={() => onNav(id)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  className={`flex flex-col items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all min-w-[75px] ${
                     seccion === id
                       ? 'bg-green-500/15 text-green-400'
                       : 'text-gray-400 hover:text-white hover:bg-gray-800'
                   }`}
                 >
-                  <Icon size={13} />
-                  {label}
+                  <Icon size={14} />
+                  <span className="text-[10px] leading-[1.1] text-center max-w-[65px] h-[22px] flex items-center justify-center">
+                    {label}
+                  </span>
                 </button>
               ))}
             </nav>
