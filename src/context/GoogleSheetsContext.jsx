@@ -100,21 +100,15 @@ export function GoogleSheetsProvider({ children }) {
     }
     try {
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/PanelCostos?key=${API_KEY}`;
-      console.log('[SHEETS-COSTOS] Cargando desde:', url);
-      
       const res = await fetch(url);
       const data = await res.json();
-      console.log('[SHEETS-COSTOS] Datos recibidos del Sheet:', data);
 
       if (!res.ok) {
         throw new Error(data?.error?.message || `Error HTTP ${res.status}`);
       }
 
       const rows = data.values;
-      if (!rows || rows.length < 2) {
-        console.warn('[SHEETS-COSTOS] La hoja PanelCostos está vacía o solo tiene cabeceras.');
-        return;
-      }
+      if (!rows || rows.length < 2) return;
       
       const mapped = rows.slice(1).map((row, index) => {
         const nombre = row[0] || 'Sin nombre';
@@ -132,11 +126,10 @@ export function GoogleSheetsProvider({ children }) {
         };
       });
 
-      console.log(`[SHEETS-COSTOS] ✅ ${mapped.length} productos procesados.`);
       setProductosCostos(mapped);
       localStorage.setItem('huerta_data_costos_v1_productos', JSON.stringify(mapped));
     } catch (e) {
-      console.error('[SHEETS-COSTOS] ❌ Error fatal:', e.message);
+      console.error('[SHEETS-COSTOS] Error:', e.message);
     }
   };
 
