@@ -33,7 +33,7 @@ export default function Header({ seccion, onNav, onLogout, rol, usuario, urlShee
     <>
       {/* Header top bar */}
       <header className="fixed top-0 left-0 right-0 z-40 bg-[#0f0f0f]/95 backdrop-blur border-b border-gray-800">
-        <div className="flex items-center justify-between px-4 h-14 relative">
+        <div className="flex items-center gap-4 sm:gap-10 px-4 h-14 relative">
           {/* Logo (Izquierda) */}
           <div className="flex-shrink-0">
             <div className="flex items-center gap-2">
