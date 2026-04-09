@@ -14,9 +14,9 @@ const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 const COSTOS_KEY = 'huerta_data_costos_v1_productos';
 
 const DEFAULTS_BY_TYPE = {
-  'hoja verde': { days: 2, icon: '🌿', labels: { small: '250g', large: '500g' } },
-  'blando': { days: 4, icon: '🍑', labels: { small: '500g', large: '1kg' } },
-  'duro': { days: 10, icon: '🥔', labels: { small: '500g', large: '1kg' } }
+  'hoja verde': { totalDays: 2, alertDays: 1, icon: '🌿', labels: { small: '250g', large: '500g' } },
+  'blando': { totalDays: 7, alertDays: 4, icon: '🍑', labels: { small: '500g', large: '1kg' } },
+  'duro': { totalDays: 15, alertDays: 11, icon: '🥔', labels: { small: '500g', large: '1kg' } }
 };
 
 const PRODUCT_DATABASE = {
@@ -116,12 +116,14 @@ export default function ControlStock() {
           originalLoad: { '500g': Number(remoteInfo.original_load_500g || remoteInfo.stock_500g || 0), '1kg': Number(remoteInfo.original_load_1kg || remoteInfo.stock_1kg || 0) },
           ultimoBandejeado: remoteInfo.ultimo_bandejeado || null,
           tipo: remoteInfo.tipo || autoTipo,
-          urgentDays: Number(remoteInfo.urgent_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.days || 2)
+          totalDays: Number(remoteInfo.total_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.totalDays || 2),
+          urgentDays: Number(remoteInfo.urgent_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.alertDays || 1)
         };
       } else {
+        const def = DEFAULTS_BY_TYPE[autoTipo];
         newStockData[p.id] = {
           nombre: p.nombre, fila: null, stock: { '500g': 0, '1kg': 0 }, originalLoad: { '500g': 0, '1kg': 0 },
-          ultimoBandejeado: null, tipo: autoTipo, urgentDays: DEFAULTS_BY_TYPE[autoTipo].days
+          ultimoBandejeado: null, tipo: autoTipo, totalDays: def.totalDays, urgentDays: def.alertDays
         };
       }
     });
@@ -133,19 +135,34 @@ export default function ControlStock() {
       const item = stockData[id];
       const totalStock = Object.values(item.stock).reduce((s, c) => s + c, 0);
       const totalOriginal = Object.values(item.originalLoad || {}).reduce((s, c) => s + c, 0);
+      
       let diasTranscurridos = null;
+      let diasRestantes = null;
       if (item.ultimoBandejeado) {
         const diff = new Date() - new Date(item.ultimoBandejeado);
         diasTranscurridos = Math.floor(diff / (1000 * 60 * 60 * 24));
+        diasRestantes = Math.max(0, item.totalDays - diasTranscurridos);
       }
+
       const isFaltante = totalStock === 0;
-      const isUrgente = diasTranscurridos !== null && diasTranscurridos > item.urgentDays;
-      const isStockBajo = !isFaltante && totalOriginal > 0 && totalStock <= (totalOriginal / 2);
+      // Urgente si quedan <= urgentDays O si totalStock > 0 y quedan <= 2 días
+      const isUrgente = !isFaltante && diasRestantes !== null && (diasRestantes <= item.urgentDays || diasRestantes <= 2);
+      const isStockBajo = !isFaltante && !isUrgente && totalOriginal > 0 && totalStock <= (totalOriginal / 2);
+
       let category = 'ok';
       if (isFaltante) category = 'faltante';
       else if (isUrgente) category = 'urgente';
       else if (isStockBajo) category = 'bajo';
-      return { id: Number(id), ...item, totalStock, totalOriginal, diasTranscurridos, category };
+
+      // Lógica de colores de semáforo
+      let statusColor = 'green';
+      if (isFaltante) statusColor = 'gray';
+      else if (diasRestantes !== null) {
+        if (diasRestantes <= 2) statusColor = 'red';
+        else if (diasRestantes <= (item.totalDays / 2)) statusColor = 'yellow';
+      }
+
+      return { id: Number(id), ...item, totalStock, totalOriginal, diasTranscurridos, diasRestantes, category, statusColor };
     });
   }, [stockData]);
 
@@ -155,7 +172,7 @@ export default function ControlStock() {
       accion: 'updateStock', fila: updatedProduct.fila, nombre: updatedProduct.nombre,
       stock_500g: updatedProduct.stock['500g'], stock_1kg: updatedProduct.stock['1kg'],
       original_load_500g: updatedProduct.originalLoad['500g'], original_load_1kg: updatedProduct.originalLoad['1kg'],
-      tipo: updatedProduct.tipo, urgent_days: updatedProduct.urgentDays, ultimo_bandejeado: updatedProduct.ultimo_bandejeado
+      tipo: updatedProduct.tipo, total_days: updatedProduct.totalDays, urgent_days: updatedProduct.urgentDays, ultimo_bandejeado: updatedProduct.ultimo_bandejeado
     };
     try {
       await fetch(APPS_SCRIPT_URL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(payload) });
@@ -301,11 +318,17 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
   const typeConfig = DEFAULTS_BY_TYPE[product.tipo] || DEFAULTS_BY_TYPE['hoja verde'];
   const icon = typeConfig.icon;
   const labels = typeConfig.labels;
-  const categoryColor = { urgente: 'bg-red-500', bajo: 'bg-amber-500', faltante: 'bg-gray-500', ok: 'bg-green-500' };
+  
+  const statusColors = { 
+    red: 'bg-red-500 shadow-red-500', 
+    yellow: 'bg-amber-500 shadow-amber-500', 
+    green: 'bg-green-500 shadow-green-500', 
+    gray: 'bg-gray-500 shadow-transparent' 
+  };
 
   return (
     <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-3 flex flex-col justify-between hover:border-gray-700 transition-all relative group shadow-sm">
-      <div className={`absolute top-3 right-3 w-1.5 h-1.5 rounded-full ${categoryColor[product.category]} shadow-[0_0_8px] ${product.category === 'urgente' ? 'shadow-red-500' : ''}`} />
+      <div className={`absolute top-3 right-3 w-1.5 h-1.5 rounded-full ${statusColors[product.statusColor]} shadow-[0_0_8px]`} />
       <div className="mb-2">
         <div className="flex items-center gap-1.5 mb-1">
           <span className="text-sm">{icon}</span>
@@ -323,12 +346,22 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
         </div>
       </div>
       <div className="mt-auto pt-2 space-y-2">
-        <div className="flex justify-between items-center text-[9px]">
-          <span className="text-gray-500 font-bold">{product.diasTranscurridos ?? '-'} d frescura</span>
-          <button onClick={() => setEditing(!editing)} className="text-gray-600 hover:text-white"><Settings size={10}/></button>
+        <div className="space-y-1 bg-black/20 p-2 rounded-xl">
+           <p className="text-[8px] text-gray-400">Bandejeado: <span className="text-white font-bold">{product.diasTranscurridos ?? '-'} días</span></p>
+           <p className="text-[8px] text-gray-400">Frescura: <span className={product.statusColor === 'red' ? 'text-red-400 font-black' : 'text-green-400 font-bold'}>{product.diasRestantes ?? '-'} días restantes</span> de {product.totalDays}</p>
+           <p className="text-[8px] font-black uppercase text-gray-500 flex items-center gap-1">
+             {product.diasRestantes <= product.urgentDays ? (
+               <><span className="text-red-500 text-[10px]">⚠️</span> <span className="text-red-400">Urgente vender ahora</span></>
+             ) : (
+               <>Urgente vender en: <span className="text-gray-300">{product.diasRestantes - product.urgentDays} días</span></>
+             )}
+           </p>
         </div>
         {!isAdding ? (
-          <button onClick={onToggleAdd} className="w-full bg-gray-800/80 hover:bg-gray-700 text-white font-black text-[9px] py-1.5 rounded-lg border border-gray-700 flex items-center justify-center gap-1 transition-all"><Plus size={10} /> Cargar</button>
+          <div className="flex justify-between items-center gap-2">
+            <button onClick={onToggleAdd} className="flex-1 bg-gray-800/80 hover:bg-gray-700 text-white font-black text-[9px] py-1.5 rounded-lg border border-gray-700 flex items-center justify-center gap-1 transition-all"><Plus size={10} /> Cargar</button>
+            <button onClick={() => setEditing(true)} className="p-1.5 bg-white/5 rounded-lg text-gray-500 hover:text-white transition-all"><Settings size={12}/></button>
+          </div>
         ) : (
           <div className="bg-gray-900 absolute inset-0 z-20 p-2 rounded-2xl animate-in fade-in flex flex-col justify-center">
             <AddStockInline nombre={product.nombre} labels={labels} currentStock={product.stock} onCancel={onToggleAdd} onSave={onSaveAdd} />
@@ -350,7 +383,11 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
              </div>
           </div>
           <div className="space-y-1 mt-1">
-             <p className="text-[8px] text-gray-600 uppercase font-black">Días Alerta</p>
+              <p className="text-[8px] text-gray-600 uppercase font-black">Vida Útil (Total)</p>
+              <input type="number" className="w-full bg-black text-[10px] text-white p-1 rounded border border-gray-800" value={product.totalDays} onChange={(e) => onUpdate({ totalDays: Number(e.target.value) })} />
+          </div>
+          <div className="space-y-1 mt-1">
+             <p className="text-[8px] text-gray-600 uppercase font-black">Urgente si quedan (días)</p>
              <input type="number" className="w-full bg-black text-[10px] text-white p-1 rounded border border-gray-800" value={product.urgentDays} onChange={(e) => onUpdate({ urgentDays: Number(e.target.value) })} />
           </div>
           <button onClick={() => { onUpdate({ stock: { '500g': 0, '1kg': 0 }, ultimoBandejeado: null }); setEditing(false); }} className="w-full bg-red-900/30 text-red-500 text-[8px] font-black py-1 rounded mt-1 border border-red-900/50">RESET TOTAL</button>
