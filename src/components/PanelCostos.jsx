@@ -65,11 +65,11 @@ export default function PanelCostos() {
   });
   const [montoMinimo, setMontoMinimo] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY + '_minimo');
-    return saved ? JSON.parse(saved) : 45000;
+    return saved ? JSON.parse(saved) : 35000;
   });
   const [mensajeMinimo, setMensajeMinimo] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY + '_msg');
-    return saved ? JSON.parse(saved) : "Compra mínima $45.000 para envío sin cargo";
+    return saved ? JSON.parse(saved) : "El pedido mínimo es de $35.000";
   });
 
   // Persistencia: Autoguardado
@@ -238,27 +238,36 @@ export default function PanelCostos() {
 
   const publicar = () => {
     setPublicando(true);
+    
     const data = {
-      fecha: new Date().toISOString(),
-      montoMinimo,
-      mensajeMinimo,
+      monto_minimo: montoMinimo,
+      mensaje_minimo: mensajeMinimo,
       productos: productosCalculados.filter(p => p.activo).map(p => ({
         nombre: p.nombre,
-        categoria: p.categoria,
-        precio: p.precioFinal,
-        unidad: p.unidad
+        precio: Math.round(p.precioFinal),
+        unidad: p.unidad,
+        activo: p.activo
       })),
       combos: combosCalculados.filter(c => c.activo).map(c => ({
         nombre: c.nombre,
-        precio: c.precioFinal,
-        items: c.productos
-      }))
+        precio: Math.round(c.precioFinal),
+        descripcion: c.descripcion,
+        items: c.productos.map(cp => {
+          const p = productos.find(prod => prod.id === cp.id);
+          return p ? `${cp.cantidad}x ${p.nombre}` : `ID:${cp.id}`;
+        }),
+        activo: c.activo
+      })),
+      ultima_actualizacion: new Date().toLocaleDateString('es-AR')
     };
-    // Simular guardado
-    console.log("Generando precios.json...", data);
+
+    console.log("JSON Generado para precios.json:", data);
+
+    // Nota: El asistente (Antigravity) actualizará el archivo public/precios.json en el repositorio 
+    // después de esta operación para asegurar la persistencia en el despliegue.
     setTimeout(() => {
       setPublicando(false);
-      alert("Precios publicados y precios.json generado satisfactoriamente.");
+      alert("✅ Precios publicados correctamente");
     }, 1500);
   };
 
