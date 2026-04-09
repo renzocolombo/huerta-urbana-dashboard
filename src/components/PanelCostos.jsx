@@ -429,6 +429,9 @@ export default function PanelCostos() {
 
   if (cargando) return <div className="flex flex-col items-center justify-center min-h-[400px] text-gray-500 gap-4"><Loader2 className="animate-spin text-green-500" size={40} /><p className="animate-pulse font-bold text-xs uppercase tracking-widest text-center">Cargando Costos...</p></div>;
 
+  console.log('[PANEL-COSTOS] Productos en estado:', productos.length);
+  console.log('[PANEL-COSTOS] ProductosCalculados:', productosCalculados.length);
+
   return (
     <div className="space-y-8 pb-20">
       <div className="flex items-center justify-between">
