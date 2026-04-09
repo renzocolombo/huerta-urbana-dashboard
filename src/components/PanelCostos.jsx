@@ -219,13 +219,24 @@ export default function PanelCostos() {
     });
   }, [combos, productosCalculados]);
 
-  // Resumen financiero
+  // Resumen financiero corregido
   const resumen = useMemo(() => {
     const prodsActivos = productosCalculados.filter(p => p.activo);
+    
+    // Inversión Total: Suma de lo pagado por todos los cajones actuales
     const totalInvertido = prodsActivos.reduce((sum, p) => sum + p.precioCajon, 0);
-    const facturacionEstimada = prodsActivos.reduce((sum, p) => sum + p.precioFinal, 0);
-    const gananciaEstimada = facturacionEstimada - prodsActivos.reduce((sum, p) => sum + p.costoUnitario, 0);
-    const margenPromedio = prodsActivos.length > 0 ? prodsActivos.reduce((sum, p) => sum + p.margenReal, 0) / prodsActivos.length : 0;
+    
+    // Facturación Estimada: (Kilos por cajón * 0.90 de merma) * Precio de Venta Final
+    const facturacionEstimada = prodsActivos.reduce((sum, p) => {
+      const kilosUtiles = p.cantidadCajon * 0.90;
+      return sum + (kilosUtiles * p.precioFinal);
+    }, 0);
+    
+    // Ganancia Estimada: Facturación Total - Inversión Total
+    const gananciaEstimada = facturacionEstimada - totalInvertido;
+    
+    // Margen Promedio: (Ganancia Total / Facturación Total) * 100
+    const margenPromedio = facturacionEstimada > 0 ? (gananciaEstimada / facturacionEstimada) * 100 : 0;
 
     return {
       totalInvertido, facturacionEstimada, gananciaEstimada, margenPromedio,
@@ -431,10 +442,10 @@ export default function PanelCostos() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <ResumenCard titulo="Inversión total" valor={$$(resumen.totalInvertido)} sub="Total en cajones" icon={ShoppingCart} color="blue" />
-        <ResumenCard titulo="Facturación Est." valor={$$(resumen.facturacionEstimada)} sub="Venta x1 unidad cada prod." icon={TrendingUp} color="green" />
-        <ResumenCard titulo="Margen Promedio" valor={`${resumen.margenPromedio.toFixed(1)}%`} sub="Promedio ponderado" icon={TrendingUp} color="amber" />
-        <ResumenCard titulo="Estado Catálogo" valor={`${resumen.prodsActivos} Activos`} sub={`${resumen.combosActivos} Combos activos`} icon={Package} color="purple" />
+        <ResumenCard titulo="Inversión total" valor={$$(resumen.totalInvertido)} sub="Suma de costo de cajones" icon={ShoppingCart} color="blue" />
+        <ResumenCard titulo="Facturación Est." valor={$$(resumen.facturacionEstimada)} sub="Venta total (con 10% merma)" icon={TrendingUp} color="green" />
+        <ResumenCard titulo="Ganancia Est." valor={$$(resumen.gananciaEstimada)} sub="Diferencia (Fact. - Inv.)" icon={Check} color="amber" />
+        <ResumenCard titulo="Margen Promedio" valor={`${resumen.margenPromedio.toFixed(1)}%`} sub="Eficiencia sobre venta" icon={TrendingUp} color="purple" />
       </div>
 
       <div className="bg-[#1f2937] border border-gray-800 rounded-3xl overflow-hidden shadow-xl">
