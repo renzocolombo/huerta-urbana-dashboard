@@ -14,7 +14,7 @@ const NAV_ITEMS = [
   { id: 'reportes',  label: 'Reportes',          icon: FileText },
 ];
 
-export default function Header({ seccion, onNav, onLogout, rol, urlSheet, setSeccionActiva }) {
+export default function Header({ seccion, onNav, onLogout, rol, usuario, urlSheet, setSeccionActiva }) {
   const [menuAbierto, setMenuAbierto] = useState(false);
   const { conectado, ultimoRefresco } = useGoogleSheets();
 
@@ -27,11 +27,25 @@ export default function Header({ seccion, onNav, onLogout, rol, urlSheet, setSec
       <header className="fixed top-0 left-0 right-0 z-40 bg-[#0f0f0f]/95 backdrop-blur border-b border-gray-800">
         <div className="flex items-center justify-between px-4 h-14">
           {/* Logo */}
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 bg-green-500 rounded-lg flex items-center justify-center">
-              <Leaf size={15} className="text-white" />
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 bg-green-500 rounded-lg flex items-center justify-center">
+                <Leaf size={15} className="text-white" />
+              </div>
+              <span className="font-bold text-white text-sm">Huerta Urbana</span>
             </div>
-            <span className="font-bold text-white text-sm">Huerta Urbana</span>
+
+            {/* Saludo personalizado */}
+            {usuario && (
+              <div className="hidden sm:block border-l border-gray-800 pl-4 py-1">
+                <span className="text-xs text-gray-400 font-medium tracking-tight">
+                  {usuario.toLowerCase() === 'ren' && '¡Hola, Ren! 👋'}
+                  {usuario.toLowerCase() === 'nati' && '¡Hola, Nati! 👋'}
+                  {usuario.toLowerCase() === 'rider' && '¡Hola, Rider! 🚴'}
+                  {usuario.toLowerCase() === 'produccion' && '¡Hola, Producción! 🌿'}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Nav desktop */}

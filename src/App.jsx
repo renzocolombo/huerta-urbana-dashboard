@@ -34,13 +34,15 @@ const SECCIONES = {
 export default function App() {
   const [logueado, setLogueado] = useState(false);
   const [rol, setRol] = useState('admin');
+  const [usuario, setUsuario] = useState('');
   const [seccion, setSeccion] = useState('resumen');
 
   // Si no está logueado, mostrar pantalla de login
   if (!logueado) {
-    return <Login onLogin={(r) => { 
+    return <Login onLogin={(r, u) => { 
       setLogueado(true); 
       setRol(r || 'admin');
+      setUsuario(u || '');
       if (r === 'repartidor') setSeccion('agenda');
       if (r === 'produccion') setSeccion('stock');
     }} />;
@@ -55,8 +57,9 @@ export default function App() {
         <Header
           seccion={seccion}
           onNav={(id) => setSeccion(id)}
-          onLogout={() => { setLogueado(false); setSeccion('resumen'); }}
+          onLogout={() => { setLogueado(false); setSeccion('resumen'); setUsuario(''); }}
           rol={rol}
+          usuario={usuario}
         />
 
         {/* Contenido principal */}

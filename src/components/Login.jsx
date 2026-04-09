@@ -22,19 +22,19 @@ export default function Login({ onLogin }) {
       
       // Rider: Entrar sin contraseña
       if (uLower === 'rider') {
-        onLogin('repartidor');
+        onLogin('repartidor', 'Rider');
         return;
       }
 
       // Producción: Entrar sin contraseña
       if (uLower === 'produccion') {
-        onLogin('produccion');
+        onLogin('produccion', 'Produccion');
         return;
       }
       
       // Admin: Usuarios válidos y clave
       if (USUARIOS_VALIDOS.includes(usuario) && clave === CLAVE_VALIDA) {
-        onLogin('admin');
+        onLogin('admin', usuario);
       } else {
         setError('Usuario o contraseña incorrectos');
         setCargando(false);

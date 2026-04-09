@@ -375,8 +375,9 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
           
           <div className="flex items-center gap-2 opacity-80">
              <span className="text-base">📅</span>
-             <p className="text-[12px] font-bold uppercase tracking-tight">
-               {product.diasTranscurridos === 0 ? 'Cargado hoy' : 
+             <p className={`text-[12px] font-bold uppercase tracking-tight ${!product.ultimoBandejeado ? 'text-gray-600' : ''}`}>
+               {!product.ultimoBandejeado ? 'Sin stock cargado aún' : 
+                product.diasTranscurridos === 0 ? 'Cargado hoy' : 
                 product.diasTranscurridos === 1 ? 'Cargado hace 1 día' : 
                 `Cargado hace ${product.diasTranscurridos} días`}
              </p>
