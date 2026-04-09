@@ -31,8 +31,8 @@
     { "nombre": "Uva", "precio": 4800, "unidad": "kg", "activo": true },
     { "nombre": "Arándano", "precio": 3333, "unidad": "bandeja 250g", "activo": true },
     { "nombre": "Choclo", "precio": 720, "unidad": "unidad", "activo": true },
-    { "nombre": "Huevos", "precio": 6500, "unidad": "maple", "activo": true },
-    { "nombre": "Miel pura", "precio": 11000, "unidad": "kg", "activo": true }
+    { "nombre": "Huevos", "precio": 7200, "unidad": "maple", "activo": true },
+    { "nombre": "Miel pura", "precio": 12800, "unidad": "kg", "activo": true }
   ],
   "combos": [
     { "nombre": "Combo Familiar", "precio": 0, "descripcion": "", "items": [], "activo": true },

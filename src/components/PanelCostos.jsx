@@ -238,26 +238,51 @@ export default function PanelCostos() {
 
   const publicar = () => {
     setPublicando(true);
-    
+
+    // Mapeamos los precios para publicación usando la fórmula estricta
+    const prodsCalculadosPublicar = productosCalculados.filter(p => p.activo).map(p => ({
+      ...p,
+      precioPublicado: Math.round(p.costoUnitario * (1 + p.margen / 100))
+    }));
+
+    // Log detallado de auditoría por producto
+    console.log("--- AUDITORÍA DE PRECIOS A PUBLICAR ---");
+    prodsCalculadosPublicar.forEach(p => {
+      console.log(`Producto: ${p.nombre} | Costo U: $${p.costoUnitario.toFixed(2)} | Margen: ${p.margen}% | Precio Publicado: $${p.precioPublicado}`);
+    });
+    console.log("---------------------------------------");
+
     const data = {
       monto_minimo: montoMinimo,
       mensaje_minimo: mensajeMinimo,
-      productos: productosCalculados.filter(p => p.activo).map(p => ({
+      productos: prodsCalculadosPublicar.map(p => ({
         nombre: p.nombre,
-        precio: Math.round(p.precioFinal),
+        precio: p.precioPublicado,
         unidad: p.unidad,
         activo: p.activo
       })),
-      combos: combosCalculados.filter(c => c.activo).map(c => ({
-        nombre: c.nombre,
-        precio: Math.round(c.precioFinal),
-        descripcion: c.descripcion,
-        items: c.productos.map(cp => {
-          const p = productos.find(prod => prod.id === cp.id);
-          return p ? `${cp.cantidad}x ${p.nombre}` : `ID:${cp.id}`;
-        }),
-        activo: c.activo
-      })),
+      combos: combosCalculados.filter(c => c.activo).map(c => {
+        // Recalcular el precio del combo basado en el precio de publicación de cada ítem
+        let subtotalPublicado = 0;
+        c.productos.forEach(item => {
+          const prodPub = prodsCalculadosPublicar.find(p => p.id === item.id);
+          if (prodPub) {
+            subtotalPublicado += prodPub.precioPublicado * item.cantidad;
+          }
+        });
+        const precioFinalCombo = Math.round(subtotalPublicado * (1 - c.descuento / 100));
+
+        return {
+          nombre: c.nombre,
+          precio: precioFinalCombo,
+          descripcion: c.descripcion,
+          items: c.productos.map(cp => {
+            const p = productos.find(prod => prod.id === cp.id);
+            return p ? `${cp.cantidad}x ${p.nombre}` : `ID:${cp.id}`;
+          }),
+          activo: c.activo
+        };
+      }),
       ultima_actualizacion: new Date().toLocaleDateString('es-AR')
     };
 
