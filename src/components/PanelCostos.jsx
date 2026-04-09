@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
+import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { 
   Plus, Edit2, Check, Trash2, Package, ShoppingCart, 
   Settings, TrendingUp, AlertTriangle, Save, Globe, Lock, X, Loader2
