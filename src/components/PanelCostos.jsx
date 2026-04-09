@@ -21,6 +21,19 @@ const PRODUCT_DATABASE = {
   ]
 };
 
+const PRODUCTOS_INICIALES = [
+  { id: 1, nombre: 'Papa', categoria: 'duro', cantidadCajon: 20, unidad: 'kg', precioCajon: 12000, margen: 60, activo: true },
+];
+
+const COMBOS_INICIALES = [
+  { id: 101, nombre: 'Combo Básico', precio: 45000, descripcion: '', productos: [], descuento: 0, activo: true },
+  { id: 102, nombre: 'Combo Fit', precio: 50000, descripcion: '', productos: [], descuento: 0, activo: true },
+  { id: 103, nombre: 'Combo Familiar', precio: 55000, descripcion: '', productos: [], descuento: 0, activo: true },
+  { id: 104, nombre: 'Combo Premium', precio: 65000, descripcion: '', productos: [], descuento: 0, activo: true },
+  { id: 105, nombre: 'Combo Vegetariano', precio: 65000, descripcion: '', productos: [], descuento: 0, activo: true },
+  { id: 106, nombre: 'Combo Mensual', precio: 125000, descripcion: '', productos: [], descuento: 0, activo: true }
+];
+
 function getTipoByNombre(nombre) {
   const n = nombre.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   if (PRODUCT_DATABASE['hoja verde'].some(p => n.includes(p))) return 'hoja verde';
