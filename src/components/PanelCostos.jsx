@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
 import { 
   Plus, Edit2, Check, Trash2, Package, ShoppingCart, 
   Settings, TrendingUp, AlertTriangle, Save, Globe, Lock, X, Loader2
@@ -11,15 +11,23 @@ const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
-// Datos fallback en caso de que no cargue el Sheet
-const PRODUCTOS_INICIALES = [
-  { id: 1, nombre: 'Papa', categoria: 'Verdura', cantidadCajon: 20, unidad: 'kg', precioCajon: 12000, margen: 60, precioJumbo: null, precioMaxManual: null, activo: true },
-  { id: 2, nombre: 'Cebolla común', categoria: 'Verdura', cantidadCajon: 20, unidad: 'kg', precioCajon: 10000, margen: 60, precioJumbo: null, precioMaxManual: null, activo: true },
-];
+const PRODUCT_DATABASE = {
+  'hoja verde': ['espinaca', 'lechuga', 'rucula', 'acelga', 'perejil', 'albahaca', 'ciboulette', 'radicheta'],
+  'blando': ['tomate', 'tomate cherry', 'banana', 'durazno', 'frutilla', 'pera', 'morron', 'pepino', 'chaucha', 'berenjena'],
+  'duro': [
+    'papa', 'cebolla comun', 'cebolla morada', 'zanahoria', 'zapallito', 'zapallo blanco', 'cabutia', 
+    'ajo', 'remolacha', 'hinojo', 'apio', 'brocoli', 'coliflor', 'repollo', 'choclo', 'huevos', 'miel pura',
+    'palta', 'manzana roja', 'manzana verde', 'naranja', 'limon', 'pomelo', 'uva', 'arandano', 'boniato'
+  ]
+};
 
-const COMBOS_INICIALES = [
-  { id: 101, nombre: 'Combo Familiar', productos: [], descuento: 0, activo: true },
-];
+function getTipoByNombre(nombre) {
+  const n = nombre.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (PRODUCT_DATABASE['hoja verde'].some(p => n.includes(p))) return 'hoja verde';
+  if (PRODUCT_DATABASE['blando'].some(p => n.includes(p))) return 'blando';
+  if (PRODUCT_DATABASE['duro'].some(p => n.includes(p))) return 'duro';
+  return 'hoja verde'; // Default
+}
 
 export default function PanelCostos() {
   const [productos, setProductos] = useState([]);
@@ -70,19 +78,23 @@ export default function PanelCostos() {
       }
 
       // Mapeo dinámico: A=producto, B=costo, C=kilos, D=margen, E=max, F=activo, G=actualizado
-      const mapped = rows.slice(1).map((row, index) => ({
-        fila: index + 2,
-        id: index + 1, // ID temporal para React keys
-        nombre: row[0] || 'Sin nombre',
-        precioCajon: Number(row[1]) || 0,
-        cantidadCajon: Number(row[2]) || 1,
-        margen: Number(row[3]) || 60,
-        precioMaxManual: row[4] ? Number(row[4]) : null,
-        activo: row[5] === 'TRUE' || row[5] === 'true' || row[5] === '1',
-        ultimaActualizacion: row[6] || '',
-        categoria: 'General', // Se puede inferir o agregar columna
-        unidad: 'kg' // Se puede inferir o agregar columna
-      }));
+      const mapped = rows.slice(1).map((row, index) => {
+        const nombre = row[0] || 'Sin nombre';
+        const tipo = getTipoByNombre(nombre);
+        return {
+          fila: index + 2,
+          id: index + 1, // ID temporal para React keys
+          nombre: nombre,
+          precioCajon: Number(row[1]) || 0,
+          cantidadCajon: Number(row[2]) || 1,
+          margen: Number(row[3]) || 60,
+          precioMaxManual: row[4] ? Number(row[4]) : null,
+          activo: row[5] === 'TRUE' || row[5] === 'true' || row[5] === '1',
+          ultimaActualizacion: row[6] || '',
+          categoria: tipo, 
+          unidad: 'kg'
+        };
+      });
 
       setProductos(mapped);
     } catch (err) {
@@ -393,73 +405,91 @@ export default function PanelCostos() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
-              {productosCalculados.map(p => (
-                <tr key={p.id} className={`hover:bg-gray-800/40 transition-colors ${!p.activo ? 'opacity-40' : ''}`}>
-                  <td className="px-6 py-4">
-                    <p className="font-bold text-white text-sm">{p.nombre}</p>
-                    <p className="text-[10px] text-gray-600 font-medium">Fila: {p.fila || '-'}</p>
-                  </td>
-                  <td className="px-6 py-4 text-gray-400">
-                    <input 
-                      type="number" 
-                      className="bg-gray-900 border border-gray-800 rounded-lg w-20 px-2 py-1 mb-1 focus:border-green-500 outline-none text-white block"
-                      value={p.precioCajon}
-                      onChange={(e) => actualizarProducto(p.id, 'precioCajon', Number(e.target.value))}
-                    />
-                    <div className="flex items-center gap-1 mt-1">
-                      <input 
-                        type="number" 
-                        disabled
-                        className="bg-gray-900/50 border border-gray-800 rounded-lg w-12 px-1 text-gray-500"
-                        value={p.cantidadCajon}
-                      />
-                      <span className="text-[10px] text-gray-500 uppercase">{p.unidad}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 font-mono text-gray-400">{$$(p.costoUnitario.toFixed(0))}</td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-1">
-                      <input 
-                        type="number" 
-                        className="bg-gray-900 border border-gray-800 rounded-lg w-10 px-1 focus:border-green-500 outline-none text-white text-right"
-                        value={p.margen}
-                        onChange={(e) => actualizarProducto(p.id, 'margen', Number(e.target.value))}
-                      />
-                      <span className="text-gray-600">%</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 font-mono text-blue-400">{$$(p.precioConMargen.toFixed(0))}</td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-1">
-                      <Lock size={10} className="text-gray-600" />
-                      <input 
-                        type="number" 
-                        className="bg-gray-900 border border-gray-800 rounded w-16 px-1 focus:border-amber-500 outline-none"
-                        value={p.precioMaxManual || ''}
-                        onChange={(e) => actualizarProducto(p.id, 'precioMaxManual', e.target.value ? Number(e.target.value) : null)}
-                      />
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 relative">
-                    <span className="text-sm font-black text-green-400 font-mono">{$$(p.precioFinal.toFixed(0))}</span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className={`font-bold px-2 py-0.5 rounded-full ${p.margenReal > 50 ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-500'}`}>
-                      {p.margenReal.toFixed(1)}%
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 font-mono text-gray-500">+$ {p.gananciaUnidad.toFixed(0)}</td>
-                  <td className="px-6 py-4 flex items-center gap-3">
-                    <button 
-                      onClick={() => actualizarProducto(p.id, 'activo', !p.activo)}
-                      className={`w-10 h-5 rounded-full relative ${p.activo ? 'bg-green-600' : 'bg-gray-700'}`}
-                    >
-                      <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${p.activo ? 'right-1' : 'left-1'}`} />
-                    </button>
-                    <button onClick={() => eliminarProducto(p.id)} className="p-1.5 text-gray-500 hover:text-red-400"><Trash2 size={16} /></button>
-                  </td>
-                </tr>
-              ))}
+              {[
+                { id: 'hoja verde', label: '🌿 HOJA VERDE', color: 'text-green-500' },
+                { id: 'blando', label: '🍅 BLANDO', color: 'text-red-500' },
+                { id: 'duro', label: '🥔 DURO', color: 'text-amber-500' }
+              ].map(cat => {
+                const catItems = productosCalculados.filter(p => p.categoria === cat.id);
+                if (catItems.length === 0) return null;
+                
+                return (
+                  <Fragment key={cat.id}>
+                    <tr className="bg-gray-900/80">
+                      <td colSpan="10" className="px-6 py-2 border-y border-gray-800">
+                        <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${cat.color}`}>{cat.label}</span>
+                      </td>
+                    </tr>
+                    {catItems.map(p => (
+                      <tr key={p.id} className={`hover:bg-gray-800/40 transition-colors ${!p.activo ? 'opacity-40' : ''}`}>
+                        <td className="px-6 py-4">
+                          <p className="font-bold text-white text-sm">{p.nombre}</p>
+                          <p className="text-[10px] text-gray-600 font-medium">Fila: {p.fila || '-'}</p>
+                        </td>
+                        <td className="px-6 py-4 text-gray-400">
+                          <input 
+                            type="number" 
+                            className="bg-gray-900 border border-gray-800 rounded-lg w-20 px-2 py-1 mb-1 focus:border-green-500 outline-none text-white block"
+                            value={p.precioCajon}
+                            onChange={(e) => actualizarProducto(p.id, 'precioCajon', Number(e.target.value))}
+                          />
+                          <div className="flex items-center gap-1 mt-1">
+                            <input 
+                              type="number" 
+                              disabled
+                              className="bg-gray-900/50 border border-gray-800 rounded-lg w-12 px-1 text-gray-500"
+                              value={p.cantidadCajon}
+                            />
+                            <span className="text-[10px] text-gray-500 uppercase">{p.unidad}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 font-mono text-gray-400">{$$(p.costoUnitario.toFixed(0))}</td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-1">
+                            <input 
+                              type="number" 
+                              className="bg-gray-900 border border-gray-800 rounded-lg w-10 px-1 focus:border-green-500 outline-none text-white text-right"
+                              value={p.margen}
+                              onChange={(e) => actualizarProducto(p.id, 'margen', Number(e.target.value))}
+                            />
+                            <span className="text-gray-600">%</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 font-mono text-blue-400">{$$(p.precioConMargen.toFixed(0))}</td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-1">
+                            <Lock size={10} className="text-gray-600" />
+                            <input 
+                              type="number" 
+                              className="bg-gray-900 border border-gray-800 rounded w-16 px-1 focus:border-amber-500 outline-none"
+                              value={p.precioMaxManual || ''}
+                              onChange={(e) => actualizarProducto(p.id, 'precioMaxManual', e.target.value ? Number(e.target.value) : null)}
+                            />
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 relative">
+                          <span className="text-sm font-black text-green-400 font-mono">{$$(p.precioFinal.toFixed(0))}</span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`font-bold px-2 py-0.5 rounded-full ${p.margenReal > 50 ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-500'}`}>
+                            {p.margenReal.toFixed(1)}%
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 font-mono text-gray-500">+$ {p.gananciaUnidad.toFixed(0)}</td>
+                        <td className="px-6 py-4 flex items-center gap-3">
+                          <button 
+                            onClick={() => actualizarProducto(p.id, 'activo', !p.activo)}
+                            className={`w-10 h-5 rounded-full relative ${p.activo ? 'bg-green-600' : 'bg-gray-700'}`}
+                          >
+                            <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${p.activo ? 'right-1' : 'left-1'}`} />
+                          </button>
+                          <button onClick={() => eliminarProducto(p.id)} className="p-1.5 text-gray-500 hover:text-red-400"><Trash2 size={16} /></button>
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

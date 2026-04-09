@@ -21,10 +21,11 @@ const DEFAULTS_BY_TYPE = {
 
 const PRODUCT_DATABASE = {
   'hoja verde': ['espinaca', 'lechuga', 'rucula', 'acelga', 'perejil', 'albahaca', 'ciboulette', 'radicheta'],
-  'blando': ['tomate', 'tomate cherry', 'banana', 'durazno', 'frutilla', 'pera', 'ciruela', 'morron', 'pepino', 'chaucha', 'berenjena'],
+  'blando': ['tomate', 'tomate cherry', 'banana', 'durazno', 'frutilla', 'pera', 'morron', 'pepino', 'chaucha', 'berenjena'],
   'duro': [
-    'papa', 'cebolla', 'zanahoria', 'zapallo', 'manzana', 'naranja', 'limon', 'mandarina', 'pomelo', 
-    'boniato', 'ajo', 'remolacha', 'hinojo', 'apio', 'brocoli', 'coliflor', 'repollo', 'choclo', 'huevos'
+    'papa', 'cebolla comun', 'cebolla morada', 'zanahoria', 'zapallito', 'zapallo blanco', 'cabutia', 
+    'ajo', 'remolacha', 'hinojo', 'apio', 'brocoli', 'coliflor', 'repollo', 'choclo', 'huevos', 'miel pura',
+    'palta', 'manzana roja', 'manzana verde', 'naranja', 'limon', 'pomelo', 'uva', 'arandano', 'boniato'
   ]
 };
 
@@ -204,20 +205,36 @@ export default function ControlStock() {
         <StatusAccordion title="FALTANTE" icon="⚫" items={processedData.filter(d => d.category === 'faltante')} isOpen={expandedCategory === 'faltante'} onToggle={() => toggleCategory('faltante')} color="gray" type="faltante" />
       </div>
 
-      <div className="space-y-4 pt-10 border-t border-white/5">
-        <h3 className="text-[11px] font-black text-gray-500 uppercase tracking-[0.3em] font-mono">Inventario Completo</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-[12px]">
-          {processedData.map(p => (
-            <ProductCard 
-              key={p.id} 
-              product={p} 
-              onUpdate={(patch) => updateProductData(p.id, patch)}
-              isAdding={showFormId === p.id}
-              onToggleAdd={() => setShowFormId(showFormId === p.id ? null : p.id)}
-              onSaveAdd={(data) => guardarCarga(p.id, data)}
-            />
-          ))}
-        </div>
+      <div className="space-y-10 pt-10 border-t border-white/5">
+        {[
+          { id: 'hoja verde', label: '🌿 HOJA VERDE', color: 'text-green-500' },
+          { id: 'blando', label: '🍅 BLANDO', color: 'text-red-500' },
+          { id: 'duro', label: '🥔 DURO', color: 'text-amber-500' }
+        ].map(cat => {
+          const catItems = processedData.filter(p => p.tipo === cat.id);
+          if (catItems.length === 0) return null;
+          
+          return (
+            <div key={cat.id} className="space-y-4">
+              <h3 className={`text-[11px] font-black ${cat.color} uppercase tracking-[0.3em] font-mono flex items-center gap-2`}>
+                {cat.label}
+                <span className="h-[1px] flex-1 bg-white/5"></span>
+              </h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-[12px]">
+                {catItems.map(p => (
+                  <ProductCard 
+                    key={p.id} 
+                    product={p} 
+                    onUpdate={(patch) => updateProductData(p.id, patch)}
+                    isAdding={showFormId === p.id}
+                    onToggleAdd={() => setShowFormId(showFormId === p.id ? null : p.id)}
+                    onSaveAdd={(data) => guardarCarga(p.id, data)}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
