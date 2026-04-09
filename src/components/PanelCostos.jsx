@@ -242,20 +242,58 @@ export default function PanelCostos() {
   };
 
   const agregarProducto = () => {
-    setTempProd({ nombre: '', categoria: 'Verdura', cantidadCajon: 1, unidad: 'kg', precioCajon: 0, margen: 60, precioMaxManual: '' });
+    setTempProd({ 
+      nombre: '', 
+      categoria: 'hoja verde', 
+      cantidadCajon: 1, 
+      unidad: 'kg', 
+      precioCajon: 0, 
+      margen: 70, 
+      precioMaxManual: '' 
+    });
     setShowModalProd(true);
   };
 
-  const guardarNuevoProd = () => {
+  const guardarNuevoProd = async () => {
     if (!tempProd.nombre) return alert("El nombre es obligatorio");
+    
+    // 1. Crear el objeto para el estado local
     const nuevo = { 
       ...tempProd,
       id: Date.now(), 
       precioMaxManual: tempProd.precioMaxManual !== '' ? Number(tempProd.precioMaxManual) : null,
-      activo: true 
+      activo: true,
+      fila: null // Aún no tiene fila asignada por el Sheet
     };
-    alert("Para agregar nuevos productos, por favor regístralos primero en el Google Sheet pestaña PanelCostos.");
+
+    // 2. Actualizar estado local (y localStorage vía useEffect)
+    setProductos(prev => [...prev, nuevo]);
     setShowModalProd(false);
+
+    // 3. Sincronizar con Google Sheet vía Apps Script
+    if (APPS_SCRIPT_URL) {
+      const payload = { 
+        accion: 'updatePanelCostos',
+        producto: nuevo.nombre,
+        costo_cajon: nuevo.precioCajon,
+        kilos_cajon: nuevo.cantidadCajon,
+        margen: nuevo.margen,
+        precio_maximo: nuevo.precioMaxManual,
+        activo: true
+      };
+
+      try {
+        await fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(payload)
+        });
+        console.log('[PANEL-COSTOS] Nuevo producto enviado al Sheet:', nuevo.nombre);
+      } catch (e) {
+        console.error('Error enviando nuevo producto:', e);
+      }
+    }
   };
 
   const eliminarProducto = (id) => {
@@ -563,10 +601,102 @@ export default function PanelCostos() {
 
       {showModalProd && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm shadow-2xl">
-          <div className="bg-[#1f2937] border border-gray-800 rounded-3xl w-full max-w-2xl p-6">
-            <h3 className="text-lg font-bold text-white mb-4">AGREGAR PRODUCTO</h3>
-            <p className="text-sm text-gray-400 mb-6">Para mantener la integridad de la base de datos, los nuevos productos deben ser agregados directamente en la pestaña **PanelCostos** del Google Sheet. El dashboard sincronizará los cambios automáticamente.</p>
-            <button onClick={() => setShowModalProd(false)} className="w-full bg-green-500 text-white font-bold py-3 rounded-2xl">Cerrar</button>
+          <div className="bg-[#1f2937] border border-gray-800 rounded-3xl w-full max-w-lg overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-6 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Plus size={20} className="text-green-500" /> AGREGAR PRODUCTO
+              </h3>
+              <button onClick={() => setShowModalProd(false)} className="text-gray-500 hover:text-white"><X size={20} /></button>
+            </div>
+            
+            <div className="p-8 space-y-5 overflow-y-auto max-h-[70vh]">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Nombre del Producto</label>
+                <input 
+                  type="text" 
+                  autoFocus
+                  className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all"
+                  placeholder="Ej: Banana Ecuador"
+                  value={tempProd.nombre}
+                  onChange={(e) => setTempProd({...tempProd, nombre: e.target.value})}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-5">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Categoría</label>
+                  <div className="flex gap-2">
+                    {['hoja verde', 'blando', 'duro'].map(cat => (
+                      <button 
+                        key={cat}
+                        onClick={() => setTempProd({...tempProd, categoria: cat})}
+                        className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase tracking-tight transition-all border ${tempProd.categoria === cat ? 'bg-green-600 border-green-500 text-white' : 'bg-gray-900 border-gray-800 text-gray-500'}`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Kilos por Cajón</label>
+                  <input 
+                    type="number" 
+                    className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all"
+                    value={tempProd.cantidadCajon}
+                    onChange={(e) => setTempProd({...tempProd, cantidadCajon: Number(e.target.value)})}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Precio Cajón ($)</label>
+                  <input 
+                    type="number" 
+                    className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all"
+                    value={tempProd.precioCajon}
+                    onChange={(e) => setTempProd({...tempProd, precioCajon: Number(e.target.value)})}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Margen (%)</label>
+                  <input 
+                    type="number" 
+                    className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all font-bold text-green-500"
+                    value={tempProd.margen}
+                    onChange={(e) => setTempProd({...tempProd, margen: Number(e.target.value)})}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Tope Máximo (Opcional)</label>
+                  <input 
+                    type="number" 
+                    className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-amber-500 outline-none transition-all"
+                    placeholder="Desactivado"
+                    value={tempProd.precioMaxManual}
+                    onChange={(e) => setTempProd({...tempProd, precioMaxManual: e.target.value === '' ? '' : Number(e.target.value)})}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-gray-800 bg-gray-900/30 flex gap-3">
+              <button 
+                onClick={() => setShowModalProd(false)} 
+                className="flex-1 bg-gray-800 hover:bg-gray-700 text-white font-bold py-4 rounded-2xl transition-all"
+              >
+                Cancelar
+              </button>
+              <button 
+                onClick={guardarNuevoProd} 
+                className="flex-[2] bg-green-500 hover:bg-green-400 text-white font-black py-4 rounded-2xl shadow-lg shadow-green-500/20 transition-all border-b-4 border-green-700 active:border-b-0 active:translate-y-1"
+              >
+                GUARDAR PRODUCTO
+              </button>
+            </div>
           </div>
         </div>
       )}
