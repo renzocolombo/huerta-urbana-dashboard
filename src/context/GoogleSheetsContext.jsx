@@ -93,14 +93,27 @@ export function GoogleSheetsProvider({ children }) {
   };
 
   const fetchPanelCostos = async () => {
-    if (!API_KEY || !SHEET_ID) return;
+    if (!API_KEY || !SHEET_ID) {
+      console.warn('[SHEETS-COSTOS] No se puede cargar: Faltan API_KEY o SHEET_ID');
+      return;
+    }
     try {
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/PanelCostos?key=${API_KEY}`;
+      console.log('[SHEETS-COSTOS] Cargando desde:', url);
+      
       const res = await fetch(url);
       const data = await res.json();
-      if (!res.ok) return;
+      console.log('[SHEETS-COSTOS] Datos recibidos del Sheet:', data);
+
+      if (!res.ok) {
+        throw new Error(data?.error?.message || `Error HTTP ${res.status}`);
+      }
+
       const rows = data.values;
-      if (!rows || rows.length < 2) return;
+      if (!rows || rows.length < 2) {
+        console.warn('[SHEETS-COSTOS] La hoja PanelCostos está vacía o solo tiene cabeceras.');
+        return;
+      }
       
       const mapped = rows.slice(1).map((row, index) => ({
         fila: index + 2,
@@ -112,10 +125,12 @@ export function GoogleSheetsProvider({ children }) {
         precioMaxManual: row[4] ? Number(row[4]) : null,
         activo: row[5] === 'TRUE' || row[5] === 'true' || row[5] === '1',
       }));
+
+      console.log(`[SHEETS-COSTOS] ✅ ${mapped.length} productos procesados.`);
       setProductosCostos(mapped);
       localStorage.setItem('huerta_data_costos_v1_productos', JSON.stringify(mapped));
     } catch (e) {
-      console.error('[SHEETS-COSTOS] Error:', e);
+      console.error('[SHEETS-COSTOS] ❌ Error fatal:', e.message);
     }
   };
 

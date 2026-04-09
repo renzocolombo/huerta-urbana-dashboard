@@ -74,36 +74,43 @@ export default function PanelCostos() {
   }, [contextProds]);
 
   const cargarDatosDesdeSheet = async () => {
-    if (!API_KEY || !SHEET_ID) {
+    console.log('[PANEL-COSTOS] Iniciando carga...');
+    const SHEET_ID_VITE = import.meta.env.VITE_SHEET_ID;
+    const API_KEY_VITE = import.meta.env.VITE_GOOGLE_SHEETS_KEY;
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID_VITE}/values/PanelCostos?key=${API_KEY_VITE}`;
+    
+    console.log('[PANEL-COSTOS] URL:', url);
+
+    if (!API_KEY_VITE || !SHEET_ID_VITE) {
+      console.error('[PANEL-COSTOS] Error: Faltan variables de entorno VITE_SHEET_ID o VITE_GOOGLE_SHEETS_KEY');
       setProductos(PRODUCTOS_INICIALES);
       setCargando(false);
       return;
     }
 
     try {
-      console.log('[PANEL-COSTOS] Cargando desde Sheet...');
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/PanelCostos?key=${API_KEY}`;
-      console.log('[PANEL-COSTOS] URL:', url);
+      const response = await fetch(url);
+      const data = await response.json();
+      console.log('[PANEL-COSTOS] Datos recibidos:', data);
       
-      const res = await fetch(url);
-      const data = await res.json();
-      console.log('[PANEL-COSTOS] Respuesta:', data);
-      
-      if (!res.ok) throw new Error(data?.error?.message || 'Error al conectar con el Sheet');
+      if (!response.ok) {
+        throw new Error(data?.error?.message || `Error HTTP ${response.status}`);
+      }
 
       const rows = data.values;
       if (!rows || rows.length < 1) {
+        console.warn('[PANEL-COSTOS] No se encontraron datos en la hoja PanelCostos');
         setProductos(PRODUCTOS_INICIALES);
         return;
       }
 
-      // Mapeo dinámico: A=producto, B=costo, C=kilos, D=margen, E=max, F=activo, G=actualizado
+      // Mapeo dinámico: A=producto, B=costo, C=kilos, D=margen, E=max, f=activo, g=actualizado
       const mapped = rows.slice(1).map((row, index) => {
         const nombre = row[0] || 'Sin nombre';
         const tipo = getTipoByNombre(nombre);
         return {
           fila: index + 2,
-          id: index + 1, // ID temporal para React keys
+          id: index + 1, 
           nombre: nombre,
           precioCajon: Number(row[1]) || 0,
           cantidadCajon: Number(row[2]) || 1,
@@ -116,10 +123,11 @@ export default function PanelCostos() {
         };
       });
 
+      console.log('[PANEL-COSTOS] Productos procesados:', mapped.length);
       setProductos(mapped);
     } catch (err) {
-      console.error(err);
-      setError('No se pudo sincronizar el Panel de Costos. Usando datos locales temporales.');
+      console.error('[PANEL-COSTOS] Error fatal durante el fetch:', err);
+      setError('No se pudo sincronizar el Panel de Costos. Revisa la consola para más detalles.');
       setProductos(PRODUCTOS_INICIALES);
     } finally {
       setCargando(false);
