@@ -42,6 +42,7 @@ export default function App() {
       setLogueado(true); 
       setRol(r || 'admin');
       if (r === 'repartidor') setSeccion('agenda');
+      if (r === 'produccion') setSeccion('stock');
     }} />;
   }
 
@@ -69,7 +70,7 @@ export default function App() {
         </main>
 
         {/* Botón de IA flotante (Oculto para repartidores) */}
-        {rol !== 'repartidor' && <IAFlotante />}
+        {rol === 'admin' && <IAFlotante />}
       </div>
     </GoogleSheetsProvider>
   );

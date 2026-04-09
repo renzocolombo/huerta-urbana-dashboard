@@ -25,6 +25,12 @@ export default function Login({ onLogin }) {
         onLogin('repartidor');
         return;
       }
+
+      // Producción: Entrar sin contraseña
+      if (uLower === 'produccion') {
+        onLogin('produccion');
+        return;
+      }
       
       // Admin: Usuarios válidos y clave
       if (USUARIOS_VALIDOS.includes(usuario) && clave === CLAVE_VALIDA) {
