@@ -56,6 +56,12 @@ export default function ControlStock() {
       if (Array.isArray(contextStock) || Object.keys(contextStock).length === 0) {
         console.log('[CONTROL-STOCK] Inicializando stock local desde datos crudos...');
         const initial = inicializarStockLocal(contextMaster, contextStock);
+        
+        // Logs de depuración solicitados
+        console.log('[CONTROL-STOCK] Datos crudos recibidos:', contextStock);
+        console.log('[CONTROL-STOCK] Stock procesado (objeto):', initial);
+        console.log('[CONTROL-STOCK] Total productos base:', Object.keys(initial).length);
+        
         setStockData(initial);
       }
       setCargando(false);
@@ -161,9 +167,12 @@ export default function ControlStock() {
   };
 
   const processedData = useMemo(() => {
-    if (!stockData || typeof stockData !== 'object' || Array.isArray(stockData)) return [];
+    if (!stockData || typeof stockData !== 'object' || Array.isArray(stockData)) {
+      console.log('[CONTROL-STOCK] processedData: stockData no es objeto válido', typeof stockData);
+      return [];
+    }
 
-    return Object.keys(stockData).map(id => {
+    const res = Object.keys(stockData).map(id => {
       const item = stockData[id];
       if (!item) return null;
 
@@ -199,6 +208,10 @@ export default function ControlStock() {
 
       return { id: Number(id), ...item, totalStock, totalOriginal, diasTranscurridos, diasRestantes, category, statusColor };
     }).filter(Boolean);
+
+    console.log('[CONTROL-STOCK] processedData output:', res);
+    console.log('[CONTROL-STOCK] Total productos finales:', res.length);
+    return res;
   }, [stockData]);
 
   const syncWithSheet = async (updatedProduct) => {
