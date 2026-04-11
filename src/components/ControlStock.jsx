@@ -49,7 +49,6 @@ export default function ControlStock() {
   useEffect(() => {
     // Si ya tenemos los datos en el contexto (cargados al entrar), inicializar de una
     if (contextStock && contextStock.length > 0 && contextMaster && contextMaster.length > 0) {
-      console.log('[CONTROL-STOCK] Usando datos pre-cargados del contexto');
       setProductosMaster(contextMaster);
       inicializarConDatos(contextMaster, contextStock);
       setCargando(false);
@@ -61,11 +60,9 @@ export default function ControlStock() {
   const cargarStockDesdeSheet = async () => {
     setCargando(true);
     setError(null);
-    console.log('[CONTROL-STOCK] Iniciando carga...');
     
     const prodsSaved = localStorage.getItem(COSTOS_KEY);
     const master = prodsSaved ? JSON.parse(prodsSaved) : [];
-    console.log('[CONTROL-STOCK] Master list (localStorage):', master);
     setProductosMaster(master);
 
     if (!API_KEY || !SHEET_ID) {
@@ -77,17 +74,13 @@ export default function ControlStock() {
 
     try {
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/ControlStock?key=${API_KEY}`;
-      console.log('[CONTROL-STOCK] URL Fetch:', url);
-      
       const res = await fetch(url);
       const data = await res.json();
-      console.log('[CONTROL-STOCK] Respuesta:', data);
       
       if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
       const rows = data.values;
       
       if (!rows || rows.length < 1) {
-        console.warn('[CONTROL-STOCK] No hay filas en el Sheet');
         inicializarConDatos(master, []);
         return;
       }
@@ -99,7 +92,6 @@ export default function ControlStock() {
         return obj;
       });
       
-      console.log('[CONTROL-STOCK] Filas parseadas:', parsedRows);
       inicializarConDatos(master, parsedRows);
     } catch (err) {
       console.error('[CONTROL-STOCK] Error crítico:', err);

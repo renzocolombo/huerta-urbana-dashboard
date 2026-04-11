@@ -194,7 +194,9 @@ export default function AgendaEntregas({ rol }) {
 
     // Sincronización
     aImprimir.forEach(p => {
-      console.log(`[SYNC] Marcando pedido #${p.numero_pedido} como remito_impreso = SI`);
+      setPedidos(prev => prev.map(item => 
+        item.numero_pedido === p.numero_pedido ? { ...item, remito_impreso: true } : item
+      ));
       if (p.sheetRowIndex) {
         actualizarRemitoEnSheet(p.sheetRowIndex, true);
       }

@@ -287,9 +287,7 @@ export default function PanelCostos() {
           method: 'POST',
           mode: 'no-cors',
           headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify(payload)
         });
-        console.log('[PANEL-COSTOS] Nuevo producto enviado al Sheet:', nuevo.nombre);
       } catch (e) {
         console.error('Error enviando nuevo producto:', e);
       }
@@ -354,12 +352,6 @@ export default function PanelCostos() {
       precioPublicado: Math.round(p.costoUnitario * (1 + p.margen / 100))
     }));
 
-    console.log("--- AUDITORÍA DE PRECIOS A PUBLICAR ---");
-    prodsCalculadosPublicar.forEach(p => {
-      console.log(`Producto: ${p.nombre} | Costo U: $${p.costoUnitario.toFixed(2)} | Margen: ${p.margen}% | Precio Publicado: $${p.precioPublicado}`);
-    });
-    console.log("---------------------------------------");
-
     const data = {
       monto_minimo: montoMinimo,
       mensaje_minimo: mensajeMinimo,
@@ -392,8 +384,6 @@ export default function PanelCostos() {
       }),
       ultima_actualizacion: new Date().toLocaleDateString('es-AR')
     };
-
-    console.log("JSON Generado para precios.json:", data);
 
     setTimeout(() => {
       setPublicando(false);
