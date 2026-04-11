@@ -3,7 +3,7 @@ export default async function handler(req, res) {
 
   const { contenido } = req.body
   const token = process.env.VITE_GITHUB_TOKEN
-  const repo = 'renzocolombo/huerta-urbana-dos'
+  const repo = 'renzocolombo/HUERTA-URBANA-2'
   const path = 'precios.json'
 
   try {
