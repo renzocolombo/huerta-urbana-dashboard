@@ -40,6 +40,7 @@ export default function Resumen() {
 
   // Filtrar solo ventas reales (aprobadas) para TODA la sección de resumen
   const ventasAprobadas = useMemo(() => {
+    if (!PEDIDOS || !Array.isArray(PEDIDOS)) return [];
     return PEDIDOS.filter(p => (p.estado_pago || '').toLowerCase() === 'approved');
   }, [PEDIDOS]);
 
@@ -98,6 +99,7 @@ export default function Resumen() {
   }, [config, ventasAprobadas]);
 
   const productStats = useMemo(() => {
+    if (!ventasAprobadas || !Array.isArray(ventasAprobadas)) return null;
     const counts = {};
     ventasAprobadas.forEach(p => {
       const prod = (p.producto || '').trim();

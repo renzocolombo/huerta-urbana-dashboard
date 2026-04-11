@@ -53,14 +53,19 @@ export default function ControlStock() {
       
       // SOLO inicializar localmente si el stock global es un Array (crudo del fetch) o está vacío.
       // Si ya es un Objeto, significa que ya fue procesado y no debemos sobreescribirlo/re-ciclar.
-      if (Array.isArray(contextStock) || Object.keys(contextStock).length === 0) {
+      const isStockArray = Array.isArray(contextStock);
+      const isStockEmpty = contextStock && !isStockArray && Object.keys(contextStock).length === 0;
+
+      if (isStockArray || isStockEmpty) {
         console.log('[CONTROL-STOCK] Inicializando stock local desde datos crudos...');
         const initial = inicializarStockLocal(contextMaster, contextStock);
         
         // Logs de depuración solicitados
         console.log('[CONTROL-STOCK] Datos crudos recibidos:', contextStock);
         console.log('[CONTROL-STOCK] Stock procesado (objeto):', initial);
-        console.log('[CONTROL-STOCK] Total productos base:', Object.keys(initial).length);
+        if (initial) {
+          console.log('[CONTROL-STOCK] Total productos base:', Object.keys(initial).length);
+        }
         
         setStockData(initial);
       }
@@ -68,7 +73,7 @@ export default function ControlStock() {
     } else if (contextMaster?.length > 0 && Array.isArray(contextStock)) {
       // Caso donde tenemos el catálogo pero no hay filas en ControlStock sheet aún
       setProductosMaster(contextMaster);
-      if (Object.keys(stockData).length === 0) {
+      if (!stockData || Object.keys(stockData).length === 0) {
         const initial = inicializarStockLocal(contextMaster, contextStock);
         setStockData(initial);
       }

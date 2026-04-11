@@ -11,6 +11,7 @@ export default function Clientes() {
 
   // Clientes reales: al menos un pedido con estado_pago === 'approved'
   const clientes = useMemo(() => {
+    if (!PEDIDOS || !Array.isArray(PEDIDOS)) return [];
     const mapa = {};
     PEDIDOS.forEach(p => {
       if ((p.estado_pago || '').toLowerCase() !== 'approved') return;
@@ -53,6 +54,7 @@ export default function Clientes() {
 
   // Carritos abandonados: pedidos con datos del cliente pero sin pago aprobado
   const carritosAbandonados = useMemo(() => {
+    if (!PEDIDOS || !Array.isArray(PEDIDOS)) return [];
     return PEDIDOS.filter(p => {
       const estadoPago = (p.estado_pago || '').toLowerCase().trim();
       const tieneAprobado = estadoPago === 'approved';

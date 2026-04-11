@@ -54,16 +54,16 @@ export default function Reportes() {
       <h2>Por producto</h2>
       <table>
         <tr><th>Producto</th><th>Unidades</th><th>Facturado</th></tr>
-        ${Object.entries(porProducto).sort((a,b)=>b[1].unidades-a[1].unidades).map(([nombre, d]) =>
+        ${(porProducto && Object.keys(porProducto).length > 0) ? Object.entries(porProducto).sort((a,b)=>b[1].unidades-a[1].unidades).map(([nombre, d]) =>
           `<tr><td>${nombre}</td><td>${d.unidades}</td><td>${$$(d.total)}</td></tr>`
-        ).join('')}
+        ).join('') : '<tr><td colspan="3">No hay datos disponibles</td></tr>'}
       </table>
       <h2>Por localidad</h2>
       <table>
         <tr><th>Localidad</th><th>Pedidos</th></tr>
-        ${Object.entries(porLocalidad).sort((a,b)=>b[1]-a[1]).map(([loc, cant]) =>
+        ${(porLocalidad && Object.keys(porLocalidad).length > 0) ? Object.entries(porLocalidad).sort((a,b)=>b[1]-a[1]).map(([loc, cant]) =>
           `<tr><td>${loc}</td><td>${cant}</td></tr>`
-        ).join('')}
+        ).join('') : '<tr><td colspan="2">No hay datos disponibles</td></tr>'}
       </table>
       <p style="margin-top:30px;color:#999;font-size:11px;">Generado el ${new Date().toLocaleString('es-AR')} · Huerta Urbana, Pilar</p>
       </body></html>`);
@@ -134,13 +134,17 @@ export default function Reportes() {
             </tr>
           </thead>
           <tbody>
-            {Object.entries(porProducto).sort((a,b)=>b[1].unidades-a[1].unidades).map(([nombre, d]) => (
+            {porProducto && Object.keys(porProducto).length > 0 ? Object.entries(porProducto).sort((a,b)=>b[1].unidades-a[1].unidades).map(([nombre, d]) => (
               <tr key={nombre} className="border-b border-gray-800/40 hover:bg-gray-800/20">
                 <td className="px-5 py-3 text-white text-xs font-medium">{nombre}</td>
                 <td className="px-5 py-3 text-gray-400 text-xs">{d.unidades}</td>
                 <td className="px-5 py-3 text-green-400 text-xs font-semibold">{$$(d.total)}</td>
               </tr>
-            ))}
+            )) : (
+              <tr>
+                <td colSpan="3" className="px-5 py-10 text-center text-gray-500 italic">No hay datos de productos para este período</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
