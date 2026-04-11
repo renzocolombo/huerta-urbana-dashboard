@@ -46,8 +46,10 @@ export default function ControlStock() {
   const [expandedCategory, setExpandedCategory] = useState(null);
 
   useEffect(() => {
+    console.log('[CONTROL-STOCK] useEffect disparado. contextMaster:', contextMaster?.length, 'contextStock:', contextStock?.length);
     // contextMaster y contextStock vienen del fetch inicial en el contexto
     if (contextMaster?.length > 0 && contextStock?.length > 0) {
+      console.log('[CONTROL-STOCK] Usando datos del contexto.');
       setProductosMaster(contextMaster);
       // Solo inicializar si el stock global está vacío o es un array (crudo de fetch)
       if (!stockData || Object.keys(stockData).length === 0 || Array.isArray(stockData)) {
@@ -56,6 +58,7 @@ export default function ControlStock() {
       }
       setCargando(false);
     } else {
+      console.log('[CONTROL-STOCK] Datos del contexto no disponibles, cargando desde Sheet...');
       cargarStockDesdeSheet();
     }
   }, [contextMaster, contextStock]);
@@ -75,10 +78,13 @@ export default function ControlStock() {
       return;
     }
 
+    console.log('[CONTROL-STOCK] Iniciando carga desde cargarStockDesdeSheet...');
     try {
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/ControlStock?key=${API_KEY}`;
+      console.log('[CONTROL-STOCK] URL:', url);
       const res = await fetch(url);
       const data = await res.json();
+      console.log('[CONTROL-STOCK] Respuesta:', data);
       
       if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
       const rows = data.values;
