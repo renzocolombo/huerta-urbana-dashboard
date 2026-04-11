@@ -25,7 +25,8 @@ export function GoogleSheetsProvider({ children }) {
     fetchSheetPedidos();
   }, []);
 
-  const fetchSheetPedidos = async () => {
+  // Estabilización de funciones con useCallback
+  const fetchSheetPedidos = useCallback(async () => {
     if (!API_KEY || !SHEET_ID) {
       console.warn('[SHEETS] Faltan VITE_SHEET_ID o API_KEY en .env');
       return;
@@ -91,9 +92,9 @@ export function GoogleSheetsProvider({ children }) {
     } finally {
       setCargando(false);
     }
-  };
+  }, []);
 
-  const fetchPanelCostos = async () => {
+  const fetchPanelCostos = useCallback(async () => {
     if (!API_KEY || !SHEET_ID) {
       console.warn('[SHEETS-COSTOS] No se puede cargar: Faltan API_KEY o SHEET_ID');
       return;
@@ -131,9 +132,9 @@ export function GoogleSheetsProvider({ children }) {
     } catch (e) {
       console.error('[SHEETS-COSTOS] Error:', e.message);
     }
-  };
+  }, []);
 
-  const fetchControlStock = async () => {
+  const fetchControlStock = useCallback(async () => {
     if (!API_KEY || !SHEET_ID) return;
     try {
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/ControlStock?key=${API_KEY}`;
@@ -149,13 +150,16 @@ export function GoogleSheetsProvider({ children }) {
         headers.forEach((h, i) => { obj[h] = row[i] || ''; });
         return obj;
       });
+      
+      // Nota: Aquí se guarda como Array crudo del Sheet.
+      // ControlStock.jsx se encargará de indexarlo como objeto si es necesario.
       setStockData(parsedRows);
     } catch (e) {
       console.error('[SHEETS-STOCK] Error:', e);
     }
-  };
+  }, []);
 
-  const cargarTodo = async () => {
+  const cargarTodo = useCallback(async () => {
     setCargando(true);
     try {
       await Promise.all([
@@ -169,49 +173,32 @@ export function GoogleSheetsProvider({ children }) {
     } finally {
       setCargando(false);
     }
-  };
+  }, [fetchSheetPedidos, fetchPanelCostos, fetchControlStock]);
 
-  // Actualización optimista + POST a Webhook de Apps Script (Estado)
-  const actualizarEstadoEnSheet = async (fila, nuevoEstado) => {
-    // 1. UI reactiva inmediata
+  const actualizarEstadoEnSheet = useCallback(async (fila, nuevoEstado) => {
     setPedidos(current =>
       current.map(p => p.sheetRowIndex === fila ? { ...p, estado: nuevoEstado } : p)
     );
 
-    if (!APPS_SCRIPT_URL) {
-      console.warn('[SYNC] Falta VITE_APPS_SCRIPT_URL. Cambio solo local.');
-      return;
-    }
-
-    const payload = { fila, estado: nuevoEstado };
-    console.log(`[SYNC PREPARANDO] Enviando a Webhook:`, payload);
-
-    // 2. Lógica de Descuento de Stock Automático (Delegada al Apps Script si aplica)
-    if (nuevoEstado.toLowerCase() === 'preparado') {
-      console.log(`[STOCK] 🔄 El descuento de stock para "${pedidos.find(p => p.sheetRowIndex === fila)?.producto}" debe ser procesado por el Apps Script.`);
-    }
+    if (!APPS_SCRIPT_URL) return;
 
     try {
       await fetch(APPS_SCRIPT_URL, {
         method:  'POST',
         mode:    'no-cors',
         headers: { 'Content-Type': 'text/plain' },
-        body:    JSON.stringify(payload),
+        body:    JSON.stringify({ fila, estado: nuevoEstado }),
       });
-      console.log(`✅ [SYNC ENVIADO] Orden a fila ${fila} disparada (Estado: "${nuevoEstado}"). Webhook Opaco.`);
     } catch (e) {
-      console.error(`❌ [SYNC ERROR] Excepción de red enviando estado al Webhook:`, e.message);
+      console.error(`❌ [SYNC ERROR]`, e.message);
     }
-  };
+  }, []);
 
-  // Actualización optimista + POST a Webhook de Apps Script (Remito Impreso)
-  const actualizarRemitoEnSheet = async (fila, impreso) => {
+  const actualizarRemitoEnSheet = useCallback(async (fila, impreso) => {
     setPedidos(current =>
       current.map(p => p.sheetRowIndex === fila ? { ...p, remito_impreso: impreso } : p)
     );
-
     if (!APPS_SCRIPT_URL) return;
-
     try {
       await fetch(APPS_SCRIPT_URL, {
         method:  'POST',
@@ -220,19 +207,15 @@ export function GoogleSheetsProvider({ children }) {
         body:    JSON.stringify({ fila, remito_impreso: impreso }),
       });
     } catch (e) {
-      console.error(`[SYNC ERROR] Excepción de red al actualizar remito vía Webhook:`, e.message);
+      console.error(`[SYNC ERROR]`, e.message);
     }
-  };
+  }, []);
 
-  // Actualización optimista + POST a Webhook de Apps Script (Múltiples datos de cliente)
-  const actualizarDatosCliente = async (fila, payload) => {
-    // UI reactiva
+  const actualizarDatosCliente = useCallback(async (fila, payload) => {
     setPedidos(current =>
       current.map(p => p.sheetRowIndex === fila ? { ...p, ...payload } : p)
     );
-
     if (!APPS_SCRIPT_URL) return;
-
     try {
       await fetch(APPS_SCRIPT_URL, {
         method:  'POST',
@@ -240,11 +223,10 @@ export function GoogleSheetsProvider({ children }) {
         headers: { 'Content-Type': 'text/plain' },
         body:    JSON.stringify({ fila, ...payload }),
       });
-      console.log(`✅ [SYNC ENVIADO] Datos de cliente enviados (Fila: ${fila}). Payload:`, payload);
     } catch (e) {
-      console.error(`[SYNC ERROR] Excepción de red al actualizar datos del cliente:`, e.message);
+      console.error(`[SYNC ERROR]`, e.message);
     }
-  };
+  }, []);
 
   return (
     <GoogleSheetsContext.Provider value={{
