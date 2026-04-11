@@ -38,24 +38,27 @@ function getTipoByNombre(nombre) {
 }
 
 export default function ControlStock() {
-  const { stockData: contextStock, productosCostos: contextMaster } = useGoogleSheets();
+  const { stockData, setStockData, productosCostos: contextMaster, stockData: contextStock } = useGoogleSheets();
   const [productosMaster, setProductosMaster] = useState([]);
-  const [stockData, setStockData] = useState({});
   const [showFormId, setShowFormId] = useState(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState(null);
   const [expandedCategory, setExpandedCategory] = useState(null);
 
   useEffect(() => {
-    // Si ya tenemos los datos en el contexto (cargados al entrar), inicializar de una
-    if (contextStock && contextStock.length > 0 && contextMaster && contextMaster.length > 0) {
+    // contextMaster y contextStock vienen del fetch inicial en el contexto
+    if (contextMaster?.length > 0 && contextStock?.length > 0) {
       setProductosMaster(contextMaster);
-      inicializarConDatos(contextMaster, contextStock);
+      // Solo inicializar si el stock global está vacío o es un array (crudo de fetch)
+      if (!stockData || Object.keys(stockData).length === 0 || Array.isArray(stockData)) {
+        const initial = inicializarStockLocal(contextMaster, contextStock);
+        setStockData(initial);
+      }
       setCargando(false);
     } else {
       cargarStockDesdeSheet();
     }
-  }, [contextStock, contextMaster]);
+  }, [contextMaster, contextStock]);
 
   const cargarStockDesdeSheet = async () => {
     setCargando(true);
@@ -92,7 +95,8 @@ export default function ControlStock() {
         return obj;
       });
       
-      inicializarConDatos(master, parsedRows);
+      const initial = inicializarStockLocal(master, parsedRows);
+      setStockData(initial);
     } catch (err) {
       console.error('[CONTROL-STOCK] Error crítico:', err);
       setError('No se pudo leer el stock. Revisa la conexión.');
@@ -101,7 +105,7 @@ export default function ControlStock() {
     }
   };
 
-  const inicializarConDatos = (master, remoteData) => {
+  const inicializarStockLocal = (master, remoteData) => {
     const newStockData = {};
     
     // Si master está vacío (ej: usuario Produccion), usar nombres de remoteData

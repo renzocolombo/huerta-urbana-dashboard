@@ -249,7 +249,7 @@ export function GoogleSheetsProvider({ children }) {
   return (
     <GoogleSheetsContext.Provider value={{
       pedidos, setPedidos,
-      productosCostos, stockData,
+      productosCostos, stockData, setStockData,
       ultimoRefresco,
       cargando,
       error,

@@ -67,9 +67,12 @@ export default function IAFlotante() {
       const facturacionHoy = pedidosHoyMap.reduce((s, p) => s + p.total, 0);
       const pedidosPendientes = pedidosHoyMap.filter(p => p.estado === 'pendiente');
       
-      const stockArray = Array.isArray(stockData) ? stockData : [];
+      const stockArray = Array.isArray(stockData) 
+        ? stockData 
+        : Object.values(stockData || {});
+
       const stockTexto = stockArray.length > 0 
-        ? stockArray.map(p => `${p.producto}: ${p.stock_500g || 0} bandejas 500g y ${p.stock_1kg || 0} bandejas 1kg`).join(', ')
+        ? stockArray.map(p => `${p.producto || p.nombre}: ${p.stock_500g || p.stock?.['500g'] || 0} bandejas 500g y ${p.stock_1kg || p.stock?.['1kg'] || 0} bandejas 1kg`).join(', ')
         : "No hay stock cargado aun";
 
       const contextoBase = `
