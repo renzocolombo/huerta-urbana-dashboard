@@ -92,6 +92,8 @@ export default function ControlStock() {
       const res = await fetch(url);
       const data = await res.json();
       console.log('[CONTROL-STOCK] Respuesta:', data);
+      console.log('[CONTROL-STOCK] Valores recibidos:', JSON.stringify(data));
+      console.log('[CONTROL-STOCK] Filas:', data.values ? data.values.length : 'sin valores');
       
       if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
       const rows = data.values;
@@ -136,11 +138,14 @@ export default function ControlStock() {
           nombre: p.nombre,
           fila: remoteInfo.fila,
           stock: { '500g': Number(remoteInfo.stock_500g || 0), '1kg': Number(remoteInfo.stock_1kg || 0) },
-          originalLoad: { '500g': Number(remoteInfo.original_load_500g || remoteInfo.stock_500g || 0), '1kg': Number(remoteInfo.original_load_1kg || remoteInfo.stock_1kg || 0) },
-          ultimoBandejeado: remoteInfo.ultimo_bandejeado || null,
+          originalLoad: { 
+            '500g': Number(remoteInfo.original_load_500g || remoteInfo.stock_500g || 0), 
+            '1kg': Number(remoteInfo.original_load_1kg || remoteInfo.stock_1kg || 0) 
+          },
+          ultimoBandejeado: remoteInfo.fecha_bandejeado || remoteInfo.ultimo_bandejeado || null,
           tipo: remoteInfo.tipo || autoTipo,
           totalDays: Number(remoteInfo.total_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.totalDays || 4),
-          urgentDays: Number(remoteInfo.urgent_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.alertDays || 2)
+          urgentDays: Number(remoteInfo.dias_alerta || remoteInfo.urgent_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.alertDays || 2)
         };
       } else if (p.fila) {
          // Si venía de remoteData pero no tiene match (raro)
