@@ -148,9 +148,9 @@ export default function ControlStock() {
   };
 
   const processedData = useMemo(() => {
-    return Object.keys(stockData).map(id => {
+    return Object.keys(stockData || {}).map(id => {
       const item = stockData[id];
-      const totalStock = Object.values(item.stock).reduce((s, c) => s + c, 0);
+      const totalStock = Object.values(item.stock || {}).reduce((s, c) => s + c, 0);
       const totalOriginal = Object.values(item.originalLoad || {}).reduce((s, c) => s + c, 0);
       
       let diasTranscurridos = null;
