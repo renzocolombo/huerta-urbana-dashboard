@@ -372,26 +372,37 @@ export default function PanelCostos() {
     };
 
     try {
-      if (!APPS_SCRIPT_URL) {
-        throw new Error("No se encontró la URL del Apps Script en las variables de entorno (.env)");
+      // 1. PUBLICAR EN GOOGLE SHEETS (Vía Apps Script)
+      if (APPS_SCRIPT_URL) {
+        await fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(dataPayload)
+        });
       }
 
-      await fetch(APPS_SCRIPT_URL, {
+      // 2. PUBLICAR EN GITHUB PAGES (Vía Vercel Serverless Function)
+      const githubRes = await fetch('/api/publicar-precios', {
         method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify(dataPayload)
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contenido: dataPayload })
       });
+
+      if (!githubRes.ok) {
+        const ghErr = await githubRes.json();
+        throw new Error(`GitHub: ${ghErr.error || 'Error desconocido'}`);
+      }
 
       const ahora = new Date().toLocaleString('es-AR', { 
         day: '2-digit', month: '2-digit', year: 'numeric', 
         hour: '2-digit', minute: '2-digit' 
       });
-      alert(`✅ Precios publicados correctamente en Google Sheets\nFecha: ${ahora}`);
+      alert(`✅ Precios publicados correctamente en Google Sheets y GitHub\nFecha: ${ahora}`);
     } catch (err) {
       console.error('Error publicando precios:', err);
       setError("Error al publicar: " + err.message);
-      alert("❌ Error al publicar precios. Ver consola.");
+      alert(`❌ Error al publicar precios:\n${err.message}`);
     } finally {
       setPublicando(false);
     }
