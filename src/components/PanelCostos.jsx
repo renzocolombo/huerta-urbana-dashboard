@@ -345,6 +345,7 @@ export default function PanelCostos() {
   };
 
   const publicar = () => {
+    console.log('[PUBLICAR] Botón apretado - iniciando publicación...');
     setPublicando(true);
 
     const prodsCalculadosPublicar = productosCalculados.filter(p => p.activo).map(p => ({
