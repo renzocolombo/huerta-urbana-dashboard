@@ -349,42 +349,45 @@ export default function PanelCostos() {
     setPublicando(true);
     setError(null);
 
+    const dataPayload = {
+      accion: 'publicarPrecios',
+      monto_minimo: montoMinimo,
+      mensaje_minimo: `El pedido mínimo es de $${montoMinimo.toLocaleString('es-AR')}`,
+      productos: productosCalculados.filter(p => p.activo).map(p => ({
+        nombre: p.nombre,
+        precio: p.precioFinal,
+        unidad: p.unidad,
+        activo: true
+      })),
+      combos: combosCalculados.filter(c => c.activo).map(c => ({
+        nombre: c.nombre,
+        precio: c.precioFinal || 0,
+        descripcion: c.descripcion || '',
+        items: c.productos.map(cp => {
+          const p = productos.find(prod => prod.id === cp.id || prod.nombre === cp.nombre);
+          return p ? `${cp.cantidad}x ${p.nombre}` : `ID:${cp.id}`;
+        }),
+        activo: true
+      }))
+    };
 
     try {
       if (!APPS_SCRIPT_URL) {
         throw new Error("No se encontró la URL del Apps Script en las variables de entorno (.env)");
       }
 
-      const payload = {
-        accion: 'publicarPrecios',
-        monto_minimo: montoMinimo,
-        mensaje_minimo: `El pedido mínimo es de $${montoMinimo.toLocaleString('es-AR')}`,
-        productos: productosCalculados.filter(p => p.activo).map(p => ({
-          nombre: p.nombre,
-          precio: p.precioFinal,
-          unidad: p.unidad,
-          activo: true
-        })),
-        combos: combosCalculados.filter(c => c.activo).map(c => ({
-          nombre: c.nombre,
-          precio: c.precioFinal || 0,
-          descripcion: c.descripcion || '',
-          items: c.productos.map(cp => {
-            const p = productos.find(prod => prod.id === cp.id || prod.nombre === cp.nombre);
-            return p ? `${cp.cantidad}x ${p.nombre}` : `ID:${cp.id}`;
-          }),
-          activo: true
-        }))
-      };
-
       await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
         mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(dataPayload)
       });
 
-      alert(`✅ Precios publicados correctamente en Google Sheets\nFecha: ${new Date().toLocaleString('es-AR')}`);
+      const ahora = new Date().toLocaleString('es-AR', { 
+        day: '2-digit', month: '2-digit', year: 'numeric', 
+        hour: '2-digit', minute: '2-digit' 
+      });
+      alert(`✅ Precios publicados correctamente en Google Sheets\nFecha: ${ahora}`);
     } catch (err) {
       console.error('Error publicando precios:', err);
       setError("Error al publicar: " + err.message);
