@@ -44,47 +44,38 @@ export default function ControlStock() {
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState(null);
   const [expandedCategory, setExpandedCategory] = useState(null);
+  const isCargando = useRef(false);
 
   useEffect(() => {
-    // contextMaster y contextStock vienen del fetch inicial en el contexto
-    // contextStock (alias de stockData) puede ser un Array al inicio después del fetch del contexto
+    // Si ya tenemos datos procesados en stockData (que es un Objeto), no inicializar de nuevo
+    const hasData = stockData && typeof stockData === 'object' && !Array.isArray(stockData) && Object.keys(stockData).length > 0;
+    
+    if (hasData) {
+      setCargando(false);
+      return;
+    }
+
+    // Si los datos están en el contexto pero no procesados localmente todavía
     if (contextMaster?.length > 0 && contextStock?.length > 0) {
       setProductosMaster(contextMaster);
       
-      // SOLO inicializar localmente si el stock global es un Array (crudo del fetch) o está vacío.
-      // Si ya es un Objeto, significa que ya fue procesado y no debemos sobreescribirlo/re-ciclar.
       const isStockArray = Array.isArray(contextStock);
-      const isStockEmpty = contextStock && !isStockArray && Object.keys(contextStock).length === 0;
-
-      if (isStockArray || isStockEmpty) {
-        console.log('[CONTROL-STOCK] Inicializando stock local desde datos crudos...');
-        const initial = inicializarStockLocal(contextMaster, contextStock);
-        
-        // Logs de depuración solicitados
-        console.log('[CONTROL-STOCK] Datos crudos recibidos:', contextStock);
-        console.log('[CONTROL-STOCK] Stock procesado (objeto):', initial);
-        if (initial) {
-          console.log('[CONTROL-STOCK] Total productos base:', Object.keys(initial).length);
-        }
-        
-        setStockData(initial);
-      }
-      setCargando(false);
-    } else if (contextMaster?.length > 0 && Array.isArray(contextStock)) {
-      // Caso donde tenemos el catálogo pero no hay filas en ControlStock sheet aún
-      setProductosMaster(contextMaster);
-      if (!stockData || Object.keys(stockData).length === 0) {
+      if (isStockArray) {
+        console.log('[CONTROL-STOCK] Inicializando stock local desde contexto...');
         const initial = inicializarStockLocal(contextMaster, contextStock);
         setStockData(initial);
       }
       setCargando(false);
     } else {
-      // Si no hay nada, intentar carga forzada local
+      // Si no hay datos en el contexto, forzar carga desde la Sheet
       cargarStockDesdeSheet();
     }
-  }, [contextMaster, contextStock]);
+  }, []); // Solo al montar
 
   const cargarStockDesdeSheet = async () => {
+    if (isCargando.current) return;
+    isCargando.current = true;
+    
     setCargando(true);
     setError(null);
     
@@ -96,6 +87,7 @@ export default function ControlStock() {
       console.error('[CONTROL-STOCK] Error: No hay API_KEY o SHEET_ID');
       setError('Faltan claves de configuración (SHEET_ID / API_KEY) en .env');
       setCargando(false);
+      isCargando.current = false;
       return;
     }
 
@@ -108,7 +100,7 @@ export default function ControlStock() {
       const rows = data.values;
       
       if (!rows || rows.length < 1) {
-        inicializarConDatos(master, []);
+        setCargando(false);
         return;
       }
       
@@ -126,6 +118,7 @@ export default function ControlStock() {
       setError('No se pudo leer el stock. Revisa la conexión.');
     } finally {
       setCargando(false);
+      isCargando.current = false;
     }
   };
 
