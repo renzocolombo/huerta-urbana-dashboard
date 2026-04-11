@@ -344,9 +344,10 @@ export default function PanelCostos() {
     });
   };
 
-  const publicar = () => {
+  const publicar = async () => {
     console.log('[PUBLICAR] Botón apretado - iniciando publicación...');
     setPublicando(true);
+    setError(null);
 
     const prodsCalculadosPublicar = productosCalculados.filter(p => p.activo).map(p => ({
       ...p,
@@ -386,10 +387,29 @@ export default function PanelCostos() {
       ultima_actualizacion: new Date().toLocaleDateString('es-AR')
     };
 
-    setTimeout(() => {
+    try {
+      if (!APPS_SCRIPT_URL) {
+        throw new Error("No se encontró la URL del Apps Script en las variables de entorno (.env)");
+      }
+
+      await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({
+          accion: 'updatePreciosWeb',
+          data: JSON.stringify(data)
+        })
+      });
+
+      alert("✅ Precios publicados correctamente en Google Sheets");
+    } catch (err) {
+      console.error('Error publicando precios:', err);
+      setError("Error al publicar: " + err.message);
+      alert("❌ Error al publicar precios. Ver consola.");
+    } finally {
       setPublicando(false);
-      alert("✅ Precios publicados correctamente");
-    }, 1500);
+    }
   };
 
   if (cargando) return <div className="flex flex-col items-center justify-center min-h-[400px] text-gray-500 gap-4"><Loader2 className="animate-spin text-green-500" size={40} /><p className="animate-pulse font-bold text-xs uppercase tracking-widest text-center">Cargando Costos...</p></div>;
