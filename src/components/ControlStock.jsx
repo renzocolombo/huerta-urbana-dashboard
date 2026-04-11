@@ -143,15 +143,21 @@ export default function ControlStock() {
       const autoTipo = getTipoByNombre(p.nombre);
 
       if (remoteInfo) {
+        // Mapeo robusto: acepta tanto nombres de propiedades como índices si fuera necesario
+        const stock_500 = Number(remoteInfo.stock_500g || remoteInfo[3] || 0);
+        const stock_1k = Number(remoteInfo.stock_1kg || remoteInfo[4] || 0);
+        const orig_500 = Number(remoteInfo.original_load_500g || remoteInfo.stock_500g || remoteInfo[3] || 0);
+        const orig_1k = Number(remoteInfo.original_load_1kg || remoteInfo.stock_1kg || remoteInfo[4] || 0);
+
         newStockData[p.id] = {
           nombre: p.nombre,
-          fila: remoteInfo.fila,
-          stock: { '500g': Number(remoteInfo.stock_500g || 0), '1kg': Number(remoteInfo.stock_1kg || 0) },
-          originalLoad: { '500g': Number(remoteInfo.original_load_500g || remoteInfo.stock_500g || 0), '1kg': Number(remoteInfo.original_load_1kg || remoteInfo.stock_1kg || 0) },
-          ultimoBandejeado: remoteInfo.ultimo_bandejeado || null,
-          tipo: remoteInfo.tipo || autoTipo,
-          totalDays: Number(remoteInfo.total_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.totalDays || 4),
-          urgentDays: Number(remoteInfo.urgent_days || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.alertDays || 2)
+          fila: remoteInfo.fila || remoteInfo.fila_index,
+          stock: { '500g': stock_500, '1kg': stock_1k },
+          originalLoad: { '500g': orig_500, '1kg': orig_1k },
+          ultimoBandejeado: remoteInfo.ultimo_bandejeado || remoteInfo[5] || null,
+          tipo: remoteInfo.tipo || remoteInfo[1] || autoTipo,
+          totalDays: Number(remoteInfo.total_days || remoteInfo.dias_alerta || remoteInfo[2] || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.totalDays || 4),
+          urgentDays: Number(remoteInfo.urgent_days || (remoteInfo.dias_alerta ? 2 : null) || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.alertDays || 2)
         };
       } else if (p.fila) {
          // Si venía de remoteData pero no tiene match (raro)
@@ -168,7 +174,7 @@ export default function ControlStock() {
         };
       }
     });
-    setStockData(newStockData);
+    return newStockData;
   };
 
   const processedData = useMemo(() => {
