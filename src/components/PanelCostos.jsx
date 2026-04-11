@@ -349,60 +349,42 @@ export default function PanelCostos() {
     setPublicando(true);
     setError(null);
 
-    const prodsCalculadosPublicar = productosCalculados.filter(p => p.activo).map(p => ({
-      ...p,
-      precioPublicado: Math.round(p.costoUnitario * (1 + p.margen / 100))
-    }));
-
-    const data = {
-      monto_minimo: montoMinimo,
-      mensaje_minimo: mensajeMinimo,
-      productos: prodsCalculadosPublicar.map(p => ({
-        nombre: p.nombre,
-        precio: p.precioPublicado,
-        unidad: p.unidad,
-        activo: p.activo
-      })),
-      combos: combosCalculados.filter(c => c.activo).map(c => {
-        let subtotalPublicado = 0;
-        c.productos.forEach(item => {
-          const prodPub = prodsCalculadosPublicar.find(p => p.id === item.id || p.nombre === item.nombre);
-          if (prodPub) {
-            subtotalPublicado += prodPub.precioPublicado * item.cantidad;
-          }
-        });
-        const precioFinalCombo = Math.round(subtotalPublicado * (1 - c.descuento / 100));
-
-        return {
-          nombre: c.nombre,
-          precio: precioFinalCombo,
-          descripcion: c.descripcion,
-          items: c.productos.map(cp => {
-            const p = productos.find(prod => prod.id === cp.id || prod.nombre === cp.nombre);
-            return p ? `${cp.cantidad}x ${p.nombre}` : `ID:${cp.id}`;
-          }),
-          activo: c.activo
-        };
-      }),
-      ultima_actualizacion: new Date().toLocaleDateString('es-AR')
-    };
 
     try {
       if (!APPS_SCRIPT_URL) {
         throw new Error("No se encontró la URL del Apps Script en las variables de entorno (.env)");
       }
 
+      const payload = {
+        accion: 'publicarPrecios',
+        monto_minimo: montoMinimo,
+        mensaje_minimo: `El pedido mínimo es de $${montoMinimo.toLocaleString('es-AR')}`,
+        productos: productosCalculados.filter(p => p.activo).map(p => ({
+          nombre: p.nombre,
+          precio: p.precioFinal,
+          unidad: p.unidad,
+          activo: true
+        })),
+        combos: combosCalculados.filter(c => c.activo).map(c => ({
+          nombre: c.nombre,
+          precio: c.precioFinal || 0,
+          descripcion: c.descripcion || '',
+          items: c.productos.map(cp => {
+            const p = productos.find(prod => prod.id === cp.id || prod.nombre === cp.nombre);
+            return p ? `${cp.cantidad}x ${p.nombre}` : `ID:${cp.id}`;
+          }),
+          activo: true
+        }))
+      };
+
       await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
         mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({
-          accion: 'updatePreciosWeb',
-          data: JSON.stringify(data)
-        })
+        body: JSON.stringify(payload)
       });
 
-      alert("✅ Precios publicados correctamente en Google Sheets");
+      alert(`✅ Precios publicados correctamente en Google Sheets\nFecha: ${new Date().toLocaleString('es-AR')}`);
     } catch (err) {
       console.error('Error publicando precios:', err);
       setError("Error al publicar: " + err.message);
