@@ -148,9 +148,13 @@ export default function ControlStock() {
   };
 
   const processedData = useMemo(() => {
+    if (!stockData || typeof stockData !== 'object' || Array.isArray(stockData)) return [];
+
     return Object.keys(stockData).map(id => {
       const item = stockData[id];
-      const totalStock = Object.values(item.stock).reduce((s, c) => s + c, 0);
+      if (!item) return null;
+
+      const totalStock = Object.values(item.stock || {}).reduce((s, c) => s + c, 0);
       const totalOriginal = Object.values(item.originalLoad || {}).reduce((s, c) => s + c, 0);
       
       let diasTranscurridos = null;
@@ -181,7 +185,7 @@ export default function ControlStock() {
       }
 
       return { id: Number(id), ...item, totalStock, totalOriginal, diasTranscurridos, diasRestantes, category, statusColor };
-    });
+    }).filter(Boolean);
   }, [stockData]);
 
   const syncWithSheet = async (updatedProduct) => {
