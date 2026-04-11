@@ -67,6 +67,11 @@ export default function IAFlotante() {
       const facturacionHoy = pedidosHoyMap.reduce((s, p) => s + p.total, 0);
       const pedidosPendientes = pedidosHoyMap.filter(p => p.estado === 'pendiente');
       
+      const stockArray = Array.isArray(stockData) ? stockData : [];
+      const stockTexto = stockArray.length > 0 
+        ? stockArray.map(p => `${p.producto}: ${p.stock_500g || 0} bandejas 500g y ${p.stock_1kg || 0} bandejas 1kg`).join(', ')
+        : "No hay stock cargado aun";
+
       const contextoBase = `
 Sos Luma, la asistente de Huerta Urbana.
 
@@ -75,13 +80,17 @@ DATOS ACTUALES DEL NEGOCIO:
 - Facturación de hoy: $${facturacionHoy.toLocaleString('es-AR')}
 
 STOCK ACTUAL:
-${stockData.map(p => `- ${p.producto}: ${p.stock_500g} bandejas 500g / ${p.stock_1kg} bandejas 1kg (${p.tipo})`).join('\n')}
+${stockTexto}
 
 PEDIDOS PENDIENTES HOY:
-${pedidosPendientes.map(p => `- ${p.nombre} — ${p.producto} — ${p.localidad}`).join('\n')}
+${pedidosPendientes.length > 0 
+  ? pedidosPendientes.map(p => `- ${p.nombre} — ${p.producto} — ${p.localidad}`).join('\n')
+  : "No hay pedidos pendientes hoy."}
 
 Respondé preguntas sobre el stock, pedidos y negocio usando estos datos reales.
 `;
+
+      console.log('[LUMA] Contexto enviado:', contextoBase);
 
       const historialCorte = nuevosMensajes.slice(-10).map(m => ({
         role: m.rol === 'ia' ? 'assistant' : 'user',
