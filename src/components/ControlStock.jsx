@@ -1,5 +1,5 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   AlertTriangle, TrendingUp, Package, Plus, History, 
   Check, Info, Box, Edit2, RotateCcw, X, Save,
