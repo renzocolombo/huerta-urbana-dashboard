@@ -23,7 +23,7 @@ function generarContexto(pedidos) {
 }
 
 export default function IAFlotante() {
-  const { pedidos: PEDIDOS } = useGoogleSheets();
+  const { pedidos: PEDIDOS, stockData } = useGoogleSheets();
 
   const [abierto, setAbierto] = useState(false);
   const [mensajes, setMensajes] = useState([
@@ -62,13 +62,26 @@ export default function IAFlotante() {
     }
 
     try {
-      const quiereResumen = /hoy|voy|resumen|ventas|cuanto/i.test(pregunta);
-      let contextExtra = "";
+      // --- CÁLCULO DE CONTEXTO REAL ---
+      const pedidosHoyMap = PEDIDOS.filter(p => p.fecha === HOY);
+      const facturacionHoy = pedidosHoyMap.reduce((s, p) => s + p.total, 0);
+      const pedidosPendientes = pedidosHoyMap.filter(p => p.estado === 'pendiente');
       
-      if (quiereResumen) {
-        const stats = generarContexto(PEDIDOS);
-        contextExtra = `\nREPORTE ACTUAL DEL DÍA: Pedidos: ${stats.totalPedidos}, Facturado: $${stats.facturacionHoy.toLocaleString('es-AR')}, Producto estrella: ${stats.productoEstrella}.`;
-      }
+      const contextoBase = `
+Sos Luma, la asistente de Huerta Urbana.
+
+DATOS ACTUALES DEL NEGOCIO:
+- Pedidos de hoy: ${pedidosHoyMap.length}
+- Facturación de hoy: $${facturacionHoy.toLocaleString('es-AR')}
+
+STOCK ACTUAL:
+${stockData.map(p => `- ${p.producto}: ${p.stock_500g} bandejas 500g / ${p.stock_1kg} bandejas 1kg (${p.tipo})`).join('\n')}
+
+PEDIDOS PENDIENTES HOY:
+${pedidosPendientes.map(p => `- ${p.nombre} — ${p.producto} — ${p.localidad}`).join('\n')}
+
+Respondé preguntas sobre el stock, pedidos y negocio usando estos datos reales.
+`;
 
       const historialCorte = nuevosMensajes.slice(-10).map(m => ({
         role: m.rol === 'ia' ? 'assistant' : 'user',
@@ -88,7 +101,7 @@ export default function IAFlotante() {
             messages: [
               {
                 role: 'system',
-                content: `Soy Luma 🌿, la asistente inteligente de Huerta Urbana, negocio de frutas y verduras a domicilio en Pilar, Buenos Aires. Entregas martes y jueves en dos turnos. Monto mínimo $45.000. Respondé directo y en español argentino informal.${contextExtra}`
+                content: contextoBase
               },
               ...historialCorte
             ],
