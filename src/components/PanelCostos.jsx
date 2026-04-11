@@ -402,15 +402,7 @@ export default function PanelCostos() {
           <p className="text-gray-500 text-sm mt-1">{error || 'Sincronizado con Google Sheets'}</p>
         </div>
         <div className="flex gap-3">
-          <button onClick={cargarDatosDesdeSheet} className="p-3 bg-gray-800 hover:bg-gray-700 text-white rounded-2xl transition-all"><Globe size={18} /></button>
-          <button
-            onClick={publicar}
-            disabled={publicando}
-            className="flex items-center gap-2 bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white font-bold px-6 py-3 rounded-2xl transition-all shadow-lg hover:shadow-green-500/20"
-          >
-            {publicando ? <Settings className="animate-spin" size={20} /> : <Globe size={20} />}
-            {publicando ? 'Publicando...' : 'Publicar precios'}
-          </button>
+          {/* Botones movidos abajo para evitar obstrucciones */}
         </div>
       </div>
 
@@ -534,6 +526,30 @@ export default function PanelCostos() {
               })}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div className="flex flex-col md:flex-row items-center justify-between gap-4 bg-gray-900/40 p-6 rounded-3xl border border-gray-800">
+        <div>
+          <h3 className="text-lg font-bold text-white">Acciones de Publicación</h3>
+          <p className="text-xs text-gray-500">Sincronizá con Google Sheets y publicá los precios actualizados</p>
+        </div>
+        <div className="flex gap-3 relative z-10">
+          <button 
+            onClick={cargarDatosDesdeSheet} 
+            className="flex items-center gap-2 p-4 bg-gray-800 hover:bg-gray-700 text-white rounded-2xl transition-all border border-gray-700"
+          >
+            <Globe size={18} />
+            <span className="text-xs font-bold">Sincronizar Sheet</span>
+          </button>
+          <button
+            onClick={publicar}
+            disabled={publicando}
+            className="flex items-center gap-2 bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white font-bold px-8 py-4 rounded-2xl transition-all shadow-lg hover:shadow-green-500/20 active:scale-95 pointer-events-auto"
+          >
+            {publicando ? <Settings className="animate-spin" size={20} /> : <Globe size={20} />}
+            {publicando ? 'Publicando...' : 'Publicar precios'}
+          </button>
         </div>
       </div>
 
