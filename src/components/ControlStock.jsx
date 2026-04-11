@@ -46,22 +46,29 @@ export default function ControlStock() {
   const [expandedCategory, setExpandedCategory] = useState(null);
 
   useEffect(() => {
-    console.log('[CONTROL-STOCK] useEffect disparado. contextMaster:', contextMaster?.length, 'contextStock:', contextStock?.length);
-    // contextMaster y contextStock vienen del fetch inicial en el contexto
-    if (contextMaster?.length > 0 && contextStock?.length > 0) {
-      console.log('[CONTROL-STOCK] Usando datos del contexto.');
-      setProductosMaster(contextMaster);
-      // Solo inicializar si el stock global está vacío o es un array (crudo de fetch)
-      if (!stockData || Object.keys(stockData).length === 0 || Array.isArray(stockData)) {
-        const initial = inicializarStockLocal(contextMaster, contextStock);
-        setStockData(initial);
-      }
+    console.log('[CONTROL-STOCK] useEffect inicial ejecutado (one-mount).');
+    
+    // 1. Si ya tenemos datos procesados, no hacemos nada
+    if (stockData && !Array.isArray(stockData) && Object.keys(stockData).length > 0) {
+      console.log('[CONTROL-STOCK] Datos ya presentes, omitiendo carga inicial.');
       setCargando(false);
-    } else {
-      console.log('[CONTROL-STOCK] Datos del contexto no disponibles, cargando desde Sheet...');
-      cargarStockDesdeSheet();
+      return;
     }
-  }, [contextMaster, contextStock]);
+
+    // 2. Si el contexto ya tiene datos crudos, inicializar con ellos
+    if (contextMaster?.length > 0 && contextStock?.length > 0) {
+      console.log('[CONTROL-STOCK] Inicializando con datos del contexto.');
+      setProductosMaster(contextMaster);
+      const initial = inicializarStockLocal(contextMaster, contextStock);
+      setStockData(initial);
+      setCargando(false);
+      return;
+    }
+
+    // 3. Fallback: Cargar desde el Sheet directamente
+    console.log('[CONTROL-STOCK] Sin datos en contexto, disparando cargarStockDesdeSheet...');
+    cargarStockDesdeSheet();
+  }, []); // Array vacío para evitar loops infinitos
 
   const cargarStockDesdeSheet = async () => {
     setCargando(true);
