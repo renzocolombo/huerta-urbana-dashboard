@@ -1,61 +1,38 @@
 export default async function handler(req, res) {
-  console.log('[PUBLICAR-API] Iniciando...')
+  console.log('[PUBLICAR-API] Iniciando proceso de publicación única...')
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   const { contenido } = req.body
   const token = process.env.VITE_GITHUB_TOKEN
   const repo = 'renzocolombo/HUERTA-URBANA-2'
-  const path = 'precios.json'
 
   try {
-    // 1. Obtener el SHA actual de precios.json
-    const getRes = await fetch(`https://api.github.com/repos/${repo}/contents/${path}`, {
-      headers: { Authorization: `token ${token}`, 'User-Agent': 'Huerta-Urbana' }
-    })
+    // 1. Obtener contenido actual de index.html y sw.js para modificarlos
+    console.log('[PUBLICAR-API] Obteniendo archivos base de GitHub...')
     
-    if (!getRes.ok && getRes.status !== 404) {
-      const err = await getRes.json()
-      return res.status(500).json({ success: false, error: `Error obteniendo SHA: ${err.message}` })
-    }
-
-    const getJson = await getRes.json()
-    const sha = getJson.sha
-
-    // 2. Actualizar precios.json
-    console.log('[PUBLICAR-API] Actualizando precios.json...')
-    const updateRes = await fetch(`https://api.github.com/repos/${repo}/contents/${path}`, {
-      method: 'PUT',
-      headers: {
-        Authorization: `token ${token}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'Huerta-Urbana'
-      },
-      body: JSON.stringify({
-        message: 'feat: actualizar precios y productos desde dashboard',
-        content: Buffer.from(JSON.stringify(contenido, null, 2), 'utf-8').toString('base64'),
-        sha: sha
+    const [htmlRes, swRes] = await Promise.all([
+      fetch(`https://api.github.com/repos/${repo}/contents/index.html`, {
+        headers: { Authorization: `token ${token}`, 'User-Agent': 'Huerta-Urbana' }
+      }),
+      fetch(`https://api.github.com/repos/${repo}/contents/sw.js`, {
+        headers: { Authorization: `token ${token}`, 'User-Agent': 'Huerta-Urbana' }
       })
-    })
+    ])
 
-    if (!updateRes.ok) {
-      const err = await updateRes.json()
-      return res.status(500).json({ success: false, error: `Error actualizando precios: ${err.message}` })
+    if (!htmlRes.ok || !swRes.ok) {
+      return res.status(500).json({ success: false, error: 'Error obteniendo archivos base de GitHub' })
     }
 
-    console.log('[PUBLICAR-API] precios.json actualizado ✅')
-
-    // 3. Actualizar index.html directamente (Sincronización Web)
-    // Leer index.html actual
-    console.log('[PUBLICAR-API] Leyendo index.html...')
-    const htmlRes = await fetch(`https://api.github.com/repos/${repo}/contents/index.html`, {
-      headers: { Authorization: `token ${token}`, 'User-Agent': 'Huerta-Urbana' }
-    })
     const htmlJson = await htmlRes.json()
-    const htmlContent = Buffer.from(htmlJson.content, 'base64').toString('utf-8')
-    const htmlSha = htmlJson.sha
-    console.log('[PUBLICAR-API] index.html leído, SHA:', htmlSha)
+    const swJson = await swRes.json()
 
-    // Actualizar monto mínimo en los spans del HTML
+    const htmlContent = Buffer.from(htmlJson.content, 'base64').toString('utf-8')
+    const swContent = Buffer.from(swJson.content, 'base64').toString('utf-8')
+
+    // 2. Preparar los contenidos actualizados
+    console.log('[PUBLICAR-API] Preparando actualizaciones...')
+
+    // A. index.html
     const monto = Math.floor(contenido.monto_minimo).toLocaleString('es-AR')
     let htmlActualizado = htmlContent
       .replace(/(<span id="envio-gratis-monto">)[^<]*/g, `$1$${monto}`)
@@ -63,7 +40,6 @@ export default async function handler(req, res) {
       .replace(/(<span id="footer-minima-monto">)[^<]*/g, `$1$${monto}`)
       .replace(/data-monto-minimo="\d+"/, `data-monto-minimo="${Math.floor(contenido.monto_minimo)}"`)
 
-    // Clasificar productos para el catálogo web
     const VERDURAS = ['Papa', 'Cebolla común', 'Cebolla morada', 'Tomate', 'Tomate cherry', 
       'Zanahoria', 'Lechuga', 'Zapallito', 'Zapallo blanco', 'Morrón rojo', 'Rúcula', 
       'Espinaca', 'Remolacha', 'Pepino', 'Brócoli', 'Cabutia', 'Ajo', 'Berenjena']
@@ -81,7 +57,7 @@ export default async function handler(req, res) {
         id: p.nombre.toLowerCase().replace(/ /g, '-'),
         name: capitalizar(p.nombre),
         price: Math.floor(p.precio),
-        unit: p.unit || p.unidad, // Soportar ambos nombres de propiedad
+        unit: p.unit || p.unidad,
         step: 0.5,
         min: 0.5
       }))
@@ -105,7 +81,6 @@ export default async function handler(req, res) {
       extras
     }
 
-    // Reemplazar el bloque de productos en el HTML
     htmlActualizado = htmlActualizado.replace(
       /\/\/ PRODUCTOS_START[\s\S]*?\/\/ PRODUCTOS_END/,
       `// PRODUCTOS_START
@@ -113,55 +88,74 @@ const PRODUCTOS_DATA = ${JSON.stringify(todosProductos, null, 2)};
 // PRODUCTOS_END`
     )
 
-    // Escribir index.html actualizado
-    console.log('[PUBLICAR-API] Actualizando index.html...')
-    await fetch(`https://api.github.com/repos/${repo}/contents/index.html`, {
-      method: 'PUT',
-      headers: {
-        Authorization: `token ${token}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'Huerta-Urbana'
-      },
-      body: JSON.stringify({
-        message: 'feat: actualizar precios en web',
-        content: Buffer.from(htmlActualizado, 'utf-8').toString('base64'),
-        sha: htmlSha
-      })
-    })
-
-    console.log('[PUBLICAR-API] index.html actualizado ✅')
-
-    // 4. Actualizar version cache service worker (Forzar recarga)
-    console.log('[PUBLICAR-API] Actualizando sw.js...')
-    const swRes = await fetch(`https://api.github.com/repos/${repo}/contents/sw.js`, {
-      headers: { Authorization: `token ${token}`, 'User-Agent': 'Huerta-Urbana' }
-    })
-    const swJson = await swRes.json()
-    const swContent = Buffer.from(swJson.content, 'base64').toString('utf-8')
-    const swSha = swJson.sha
-
+    // B. sw.js
     const timestamp = Date.now()
     const swActualizado = swContent.replace(
       /const CACHE_NAME = 'huerta-urbana-[^']*'/,
       `const CACHE_NAME = 'huerta-urbana-${timestamp}'`
     )
 
-    await fetch(`https://api.github.com/repos/${repo}/contents/sw.js`, {
-      method: 'PUT',
-      headers: {
-        Authorization: `token ${token}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'Huerta-Urbana'
-      },
+    // 3. Flujo API Git Trees (Commit único)
+    console.log('[PUBLICAR-API] Iniciando commit atómico via Git Trees...')
+
+    // 3.1 Obtener el último commit
+    const refRes = await fetch(`https://api.github.com/repos/${repo}/git/refs/heads/main`, {
+      headers: { Authorization: `token ${token}`, 'User-Agent': 'Huerta-Urbana' }
+    })
+    const refJson = await refRes.json()
+    const latestCommitSha = refJson.object.sha
+    console.log('[PUBLICAR-API] Último commit SHA:', latestCommitSha)
+
+    // 3.2 Obtener el tree del último commit
+    const commitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits/${latestCommitSha}`, {
+      headers: { Authorization: `token ${token}`, 'User-Agent': 'Huerta-Urbana' }
+    })
+    const commitJson = await commitRes.json()
+    const treeSha = commitJson.tree.sha
+
+    // 3.3 Crear nuevo tree con los 3 archivos actualizados
+    const newTreeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees`, {
+      method: 'POST',
+      headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'Huerta-Urbana' },
       body: JSON.stringify({
-        message: 'feat: actualizar version cache service worker',
-        content: Buffer.from(swActualizado, 'utf-8').toString('base64'),
-        sha: swSha
+        base_tree: treeSha,
+        tree: [
+          { path: 'precios.json', mode: '100644', type: 'blob', content: JSON.stringify(contenido, null, 2) },
+          { path: 'index.html', mode: '100644', type: 'blob', content: htmlActualizado },
+          { path: 'sw.js', mode: '100644', type: 'blob', content: swActualizado }
+        ]
       })
     })
-    console.log('[PUBLICAR-API] sw.js actualizado ✅')
+    const newTree = await newTreeRes.json()
+    console.log('[PUBLICAR-API] Nuevo Tree creado:', newTree.sha)
+
+    // 3.4 Crear nuevo commit
+    const newCommitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits`, {
+      method: 'POST',
+      headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'Huerta-Urbana' },
+      body: JSON.stringify({
+        message: 'feat: actualizar precios, index y sw en un solo commit',
+        tree: newTree.sha,
+        parents: [latestCommitSha]
+      })
+    })
+    const newCommit = await newCommitRes.json()
+    console.log('[PUBLICAR-API] Nuevo Commit creado:', newCommit.sha)
+
+    // 3.5 Actualizar la referencia main
+    const updateRefRes = await fetch(`https://api.github.com/repos/${repo}/git/refs/heads/main`, {
+      method: 'PATCH',
+      headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'Huerta-Urbana' },
+      body: JSON.stringify({ sha: newCommit.sha })
+    })
+
+    if (!updateRefRes.ok) {
+        throw new Error('Error al actualizar la referencia main')
+    }
+    console.log('[PUBLICAR-API] Referencia main actualizada ✅')
 
     // 4. Disparar el workflow de GitHub Actions
+    console.log('[PUBLICAR-API] Disparando Repository Dispatch...')
     await fetch(`https://api.github.com/repos/${repo}/dispatches`, {
       method: 'POST',
       headers: {
@@ -172,8 +166,10 @@ const PRODUCTOS_DATA = ${JSON.stringify(todosProductos, null, 2)};
       body: JSON.stringify({ event_type: 'actualizar-precios' })
     })
 
-    res.status(200).json({ success: true })
+    console.log('[PUBLICAR-API] Proceso completado exitosamente.')
+    res.status(200).json({ success: true, commit: newCommit.sha })
   } catch (error) {
+    console.error('[PUBLICAR-API] Error:', error)
     res.status(500).json({ success: false, error: error.message })
   }
 }
