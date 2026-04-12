@@ -82,7 +82,16 @@ export default function PanelCostos() {
 
       // Mapeo dinámico: A=producto, B=costo, C=kilos, D=margen, E=max, f=activo, g=actualizado
       const mapped = rows.slice(1).map((row, index) => {
-        const nombre = row[0] || 'Sin nombre';
+        let nombre = row[0] || 'Sin nombre';
+        const fixAcentos = (str) => str
+            .replace(/\bmorron\b/gi, m => m[0] === m[0].toUpperCase() ? 'Morrón' : 'morrón')
+            .replace(/\brucula\b/gi, m => m[0] === m[0].toUpperCase() ? 'Rúcula' : 'rúcula')
+            .replace(/\bbrocoli\b/gi, m => m[0] === m[0].toUpperCase() ? 'Brócoli' : 'brócoli')
+            .replace(/\blimon\b/gi, m => m[0] === m[0].toUpperCase() ? 'Limón' : 'limón')
+            .replace(/\barandanos\b/gi, m => m[0] === m[0].toUpperCase() ? 'Arándanos' : 'arándanos')
+            .replace(/\barandano\b/gi, m => m[0] === m[0].toUpperCase() ? 'Arándano' : 'arándano');
+        nombre = fixAcentos(nombre);
+
         const tipo = getTipoByNombre(nombre);
         return {
           fila: index + 2,

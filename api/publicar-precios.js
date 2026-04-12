@@ -29,8 +29,8 @@ export default async function handler(req, res) {
         'User-Agent': 'Huerta-Urbana'
       },
       body: JSON.stringify({
-        message: 'feat: actualizar precios desde dashboard',
-        content: btoa(unescape(encodeURIComponent(JSON.stringify(contenido, null, 2)))),
+        message: 'feat: actualizar precios y productos desde dashboard',
+        content: Buffer.from(JSON.stringify(contenido, null, 2), 'utf-8').toString('base64'),
         sha: sha
       })
     })
