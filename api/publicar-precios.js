@@ -1,4 +1,5 @@
 export default async function handler(req, res) {
+  console.log('[PUBLICAR-API] Iniciando...')
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   const { contenido } = req.body
@@ -21,6 +22,7 @@ export default async function handler(req, res) {
     const sha = getJson.sha
 
     // 2. Actualizar precios.json
+    console.log('[PUBLICAR-API] Actualizando precios.json...')
     const updateRes = await fetch(`https://api.github.com/repos/${repo}/contents/${path}`, {
       method: 'PUT',
       headers: {
@@ -40,14 +42,18 @@ export default async function handler(req, res) {
       return res.status(500).json({ success: false, error: `Error actualizando precios: ${err.message}` })
     }
 
+    console.log('[PUBLICAR-API] precios.json actualizado ✅')
+
     // 3. Actualizar index.html directamente (Sincronización Web)
     // Leer index.html actual
+    console.log('[PUBLICAR-API] Leyendo index.html...')
     const htmlRes = await fetch(`https://api.github.com/repos/${repo}/contents/index.html`, {
       headers: { Authorization: `token ${token}`, 'User-Agent': 'Huerta-Urbana' }
     })
     const htmlJson = await htmlRes.json()
     const htmlContent = Buffer.from(htmlJson.content, 'base64').toString('utf-8')
     const htmlSha = htmlJson.sha
+    console.log('[PUBLICAR-API] index.html leído, SHA:', htmlSha)
 
     // Actualizar monto mínimo en los spans del HTML
     const monto = Math.floor(contenido.monto_minimo).toLocaleString('es-AR')
@@ -107,6 +113,7 @@ const PRODUCTOS_DATA = ${JSON.stringify(todosProductos, null, 2)};
     )
 
     // Escribir index.html actualizado
+    console.log('[PUBLICAR-API] Actualizando index.html...')
     await fetch(`https://api.github.com/repos/${repo}/contents/index.html`, {
       method: 'PUT',
       headers: {
@@ -120,6 +127,8 @@ const PRODUCTOS_DATA = ${JSON.stringify(todosProductos, null, 2)};
         sha: htmlSha
       })
     })
+
+    console.log('[PUBLICAR-API] index.html actualizado ✅')
 
     // 4. Disparar el workflow de GitHub Actions
     await fetch(`https://api.github.com/repos/${repo}/dispatches`, {

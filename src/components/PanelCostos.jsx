@@ -412,6 +412,8 @@ export default function PanelCostos() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contenido: dataPayload })
       });
+      
+      console.log('[PUBLICAR] Respuesta de la API:', await githubRes.clone().json())
 
       if (!githubRes.ok) {
         const ghErr = await githubRes.json();
