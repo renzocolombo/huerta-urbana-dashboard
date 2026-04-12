@@ -154,17 +154,6 @@ const PRODUCTOS_DATA = ${JSON.stringify(todosProductos, null, 2)};
     }
     console.log('[PUBLICAR-API] Referencia main actualizada ✅')
 
-    // 4. Disparar el workflow de GitHub Actions
-    console.log('[PUBLICAR-API] Disparando Repository Dispatch...')
-    await fetch(`https://api.github.com/repos/${repo}/dispatches`, {
-      method: 'POST',
-      headers: {
-        Authorization: `token ${token}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'Huerta-Urbana'
-      },
-      body: JSON.stringify({ event_type: 'actualizar-precios' })
-    })
 
     console.log('[PUBLICAR-API] Proceso completado exitosamente.')
     res.status(200).json({ success: true, commit: newCommit.sha })
