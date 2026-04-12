@@ -131,6 +131,36 @@ const PRODUCTOS_DATA = ${JSON.stringify(todosProductos, null, 2)};
 
     console.log('[PUBLICAR-API] index.html actualizado ✅')
 
+    // 4. Actualizar version cache service worker (Forzar recarga)
+    console.log('[PUBLICAR-API] Actualizando sw.js...')
+    const swRes = await fetch(`https://api.github.com/repos/${repo}/contents/sw.js`, {
+      headers: { Authorization: `token ${token}`, 'User-Agent': 'Huerta-Urbana' }
+    })
+    const swJson = await swRes.json()
+    const swContent = Buffer.from(swJson.content, 'base64').toString('utf-8')
+    const swSha = swJson.sha
+
+    const timestamp = Date.now()
+    const swActualizado = swContent.replace(
+      /const CACHE_NAME = 'huerta-urbana-[^']*'/,
+      `const CACHE_NAME = 'huerta-urbana-${timestamp}'`
+    )
+
+    await fetch(`https://api.github.com/repos/${repo}/contents/sw.js`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `token ${token}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'Huerta-Urbana'
+      },
+      body: JSON.stringify({
+        message: 'feat: actualizar version cache service worker',
+        content: Buffer.from(swActualizado, 'utf-8').toString('base64'),
+        sha: swSha
+      })
+    })
+    console.log('[PUBLICAR-API] sw.js actualizado ✅')
+
     // 4. Disparar el workflow de GitHub Actions
     await fetch(`https://api.github.com/repos/${repo}/dispatches`, {
       method: 'POST',
