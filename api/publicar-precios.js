@@ -87,6 +87,14 @@ export default async function handler(req, res) {
 const PRODUCTOS_DATA = ${JSON.stringify(todosProductos, null, 2)};
 // PRODUCTOS_END`
     )
+    
+    // Incrementar versión del CSS para forzar recarga
+    const versionActual = htmlActualizado.match(/style\.css\?v=([\d.]+)/)?.[1] || '1'
+    const versionNueva = (parseFloat(versionActual) + 0.1).toFixed(1)
+    htmlActualizado = htmlActualizado.replace(
+      /style\.css\?v=[\d.]+/g,
+      `style.css?v=${versionNueva}`
+    )
 
     // B. sw.js
     const timestamp = Date.now()
