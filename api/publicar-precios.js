@@ -61,6 +61,7 @@ export default async function handler(req, res) {
       .replace(/(<span id="envio-gratis-monto">)[^<]*/g, `$1$${monto}`)
       .replace(/(<span id="compra-minima-monto">)[^<]*/g, `$1$${monto}`)
       .replace(/(<span id="footer-minima-monto">)[^<]*/g, `$1$${monto}`)
+      .replace(/data-monto-minimo="\d+"/, `data-monto-minimo="${Math.floor(contenido.monto_minimo)}"`)
 
     // Clasificar productos para el catálogo web
     const VERDURAS = ['Papa', 'Cebolla común', 'Cebolla morada', 'Tomate', 'Tomate cherry', 
