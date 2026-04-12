@@ -36,6 +36,16 @@ export default async function handler(req, res) {
     })
 
     if (updateRes.ok) {
+      // Disparar el workflow después de actualizar precios.json
+      await fetch(`https://api.github.com/repos/${repo}/dispatches`, {
+        method: 'POST',
+        headers: {
+          Authorization: `token ${token}`,
+          'Content-Type': 'application/json',
+          'User-Agent': 'Huerta-Urbana'
+        },
+        body: JSON.stringify({ event_type: 'actualizar-precios' })
+      })
       res.status(200).json({ success: true })
     } else {
       const err = await updateRes.json()
