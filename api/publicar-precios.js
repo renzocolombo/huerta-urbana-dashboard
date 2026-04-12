@@ -10,24 +10,16 @@ export default async function handler(req, res) {
     // 1. Obtener contenido actual de index.html y sw.js para modificarlos
     console.log('[PUBLICAR-API] Obteniendo archivos base de GitHub...')
     
-    const [htmlRes, swRes] = await Promise.all([
-      fetch(`https://api.github.com/repos/${repo}/contents/index.html`, {
-        headers: { Authorization: `token ${token}`, 'User-Agent': 'Huerta-Urbana' }
-      }),
-      fetch(`https://api.github.com/repos/${repo}/contents/sw.js`, {
-        headers: { Authorization: `token ${token}`, 'User-Agent': 'Huerta-Urbana' }
-      })
-    ])
+    const htmlRes = await fetch(`https://api.github.com/repos/${repo}/contents/index.html`, {
+      headers: { Authorization: `token ${token}`, 'User-Agent': 'Huerta-Urbana' }
+    })
 
-    if (!htmlRes.ok || !swRes.ok) {
-      return res.status(500).json({ success: false, error: 'Error obteniendo archivos base de GitHub' })
+    if (!htmlRes.ok) {
+      return res.status(500).json({ success: false, error: 'Error obteniendo index.html de GitHub' })
     }
 
     const htmlJson = await htmlRes.json()
-    const swJson = await swRes.json()
-
     const htmlContent = Buffer.from(htmlJson.content, 'base64').toString('utf-8')
-    const swContent = Buffer.from(swJson.content, 'base64').toString('utf-8')
 
     // 2. Preparar los contenidos actualizados
     console.log('[PUBLICAR-API] Preparando actualizaciones...')
@@ -96,12 +88,6 @@ const PRODUCTOS_DATA = ${JSON.stringify(todosProductos, null, 2)};
       `style.css?v=${versionNueva}`
     )
 
-    // B. sw.js
-    const timestamp = Date.now()
-    const swActualizado = swContent.replace(
-      /const CACHE_NAME = 'huerta-urbana-[^']*'/,
-      `const CACHE_NAME = 'huerta-urbana-${timestamp}'`
-    )
 
     // 3. Flujo API Git Trees (Commit único)
     console.log('[PUBLICAR-API] Iniciando commit atómico via Git Trees...')
@@ -129,8 +115,7 @@ const PRODUCTOS_DATA = ${JSON.stringify(todosProductos, null, 2)};
         base_tree: treeSha,
         tree: [
           { path: 'precios.json', mode: '100644', type: 'blob', content: JSON.stringify(contenido, null, 2) },
-          { path: 'index.html', mode: '100644', type: 'blob', content: htmlActualizado },
-          { path: 'sw.js', mode: '100644', type: 'blob', content: swActualizado }
+          { path: 'index.html', mode: '100644', type: 'blob', content: htmlActualizado }
         ]
       })
     })
@@ -142,7 +127,7 @@ const PRODUCTOS_DATA = ${JSON.stringify(todosProductos, null, 2)};
       method: 'POST',
       headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'Huerta-Urbana' },
       body: JSON.stringify({
-        message: 'feat: actualizar precios, index y sw en un solo commit',
+        message: 'feat: actualizar precios e index en un solo commit',
         tree: newTree.sha,
         parents: [latestCommitSha]
       })
