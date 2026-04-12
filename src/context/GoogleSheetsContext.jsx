@@ -111,7 +111,7 @@ export function GoogleSheetsProvider({ children }) {
       const rows = data.values;
       if (!rows || rows.length < 2) return;
       
-      const mapped = rows.slice(1).map((row, index) => {
+      let mapped = rows.slice(1).map((row, index) => {
         let nombre = row[0] || 'Sin nombre';
         const fixAcentos = (str) => str
             .replace(/\bmorron\b/gi, m => m[0] === m[0].toUpperCase() ? 'Morrón' : 'morrón')
@@ -134,6 +134,22 @@ export function GoogleSheetsProvider({ children }) {
           categoria: getTipoByNombre(nombre),
           unidad: 'kg'
         };
+      });
+
+      // Eliminar el producto 'Huevos' genérico
+      mapped = mapped.filter(p => typeof p.nombre === 'string' && p.nombre.toLowerCase().trim() !== 'huevos');
+
+      // Agregar los 3 productos nuevos de huevos
+      const huevosNuevos = [
+        { id: 9001, nombre: 'Huevos Nº1', categoria: 'otros', cantidadCajon: 12, unidad: 'maples', precioCajon: 54000, margen: 70, precioMaxManual: 6500, activo: true, fila: null },
+        { id: 9002, nombre: 'Huevos Nº2', categoria: 'otros', cantidadCajon: 12, unidad: 'maples', precioCajon: 0, margen: 70, precioMaxManual: 0, activo: false, fila: null },
+        { id: 9003, nombre: 'Huevos Súper', categoria: 'otros', cantidadCajon: 12, unidad: 'maples', precioCajon: 0, margen: 70, precioMaxManual: 0, activo: false, fila: null }
+      ];
+
+      huevosNuevos.forEach(nuevo => {
+        if (!mapped.some(p => p.nombre === nuevo.nombre)) {
+          mapped.push(nuevo);
+        }
       });
 
       setProductosCostos(mapped);

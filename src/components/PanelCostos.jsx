@@ -80,8 +80,7 @@ export default function PanelCostos() {
         return;
       }
 
-      // Mapeo dinámico: A=producto, B=costo, C=kilos, D=margen, E=max, f=activo, g=actualizado
-      const mapped = rows.slice(1).map((row, index) => {
+      let mapped = rows.slice(1).map((row, index) => {
         let nombre = row[0] || 'Sin nombre';
         const fixAcentos = (str) => str
             .replace(/\bmorron\b/gi, m => m[0] === m[0].toUpperCase() ? 'Morrón' : 'morrón')
@@ -106,6 +105,22 @@ export default function PanelCostos() {
           categoria: tipo, 
           unidad: 'kg'
         };
+      });
+
+      // Eliminar producto "Huevos" genérico anticuado
+      mapped = mapped.filter(p => typeof p.nombre === 'string' && p.nombre.toLowerCase().trim() !== 'huevos');
+
+      // Agregar los 3 productos nuevos de huevos si no existen
+      const huevosNuevos = [
+        { id: 9001, nombre: 'Huevos Nº1', categoria: 'otros', cantidadCajon: 12, unidad: 'maples', precioCajon: 54000, margen: 70, precioMaxManual: 6500, activo: true, fila: null },
+        { id: 9002, nombre: 'Huevos Nº2', categoria: 'otros', cantidadCajon: 12, unidad: 'maples', precioCajon: 0, margen: 70, precioMaxManual: 0, activo: false, fila: null },
+        { id: 9003, nombre: 'Huevos Súper', categoria: 'otros', cantidadCajon: 12, unidad: 'maples', precioCajon: 0, margen: 70, precioMaxManual: 0, activo: false, fila: null }
+      ];
+
+      huevosNuevos.forEach(nuevo => {
+        if (!mapped.some(p => p.nombre === nuevo.nombre)) {
+          mapped.push(nuevo);
+        }
       });
 
       setProductos(mapped);
@@ -467,7 +482,8 @@ export default function PanelCostos() {
               {[
                 { id: 'hoja verde', label: '🌿 HOJA VERDE', color: 'text-green-500' },
                 { id: 'blando', label: '🍅 BLANDO', color: 'text-red-500' },
-                { id: 'duro', label: '🥔 DURO', color: 'text-amber-500' }
+                { id: 'duro', label: '🥔 DURO', color: 'text-amber-500' },
+                { id: 'otros', label: '🥚 OTROS', color: 'text-purple-500' }
               ].map(cat => {
                 const catItems = productosCalculados.filter(p => p.categoria === cat.id);
                 if (catItems.length === 0) return null;
@@ -658,7 +674,7 @@ export default function PanelCostos() {
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Categoría</label>
                   <div className="flex gap-2">
-                    {['hoja verde', 'blando', 'duro'].map(cat => (
+                    {['hoja verde', 'blando', 'duro', 'otros'].map(cat => (
                       <button 
                         key={cat}
                         onClick={() => setTempProd({...tempProd, categoria: cat})}
