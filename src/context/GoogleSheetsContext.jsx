@@ -69,7 +69,7 @@ export function GoogleSheetsProvider({ children }) {
           producto:        obj.producto || obj.combo || '',
           cantidades:      Number(obj.cantidades || 1),
           observaciones:   obj.observaciones || obj.notas || '',
-          total:           Number(obj.total || 0),
+          total:           Number((obj.total || '0').toString().replace(/[$.]/g, '').replace(',', '.')) || 0,
           estado_pago:     obj.estado_pago || obj.pago || 'pendiente',
           dia_entrega:     obj.dia_entrega || obj.dia || 'Martes',
           horario_entrega: obj.horario_entrega || obj.turno_entrega || obj.turno || '09:00 - 13:00',

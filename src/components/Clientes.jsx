@@ -2,7 +2,10 @@ import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { MessageCircle, ShoppingBag, DollarSign, Calendar, ShoppingCart, AlertTriangle } from 'lucide-react';
 
-const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
+const $$ = (n) => {
+  const num = Number(n);
+  return isNaN(num) ? '$0' : `$${num.toLocaleString('es-AR')}`;
+};
 
 export default function Clientes() {
   const { pedidos: PEDIDOS, actualizarDatosCliente } = useGoogleSheets();
@@ -326,9 +329,14 @@ export default function Clientes() {
 
                 {/* Info del carrito */}
                 <div className="bg-[#111827] border border-gray-800 rounded-xl p-3 mb-4 space-y-1.5">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[11px] text-gray-500">Producto</span>
-                    <span className="text-xs font-medium text-white truncate max-w-[60%] text-right">{c.producto || '-'}</span>
+                  <div className="flex justify-between items-start">
+                    <span className="text-[11px] text-gray-500 mt-0.5">Producto</span>
+                    <span 
+                      className="text-xs font-medium text-white text-right max-w-[70%] cursor-help"
+                      title={c.producto}
+                    >
+                      {c.producto || '-'}
+                    </span>
                   </div>
                   <div className="flex justify-between items-center border-t border-gray-800 pt-1.5">
                     <span className="text-[11px] text-gray-500">Monto</span>
