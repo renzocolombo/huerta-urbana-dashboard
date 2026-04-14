@@ -139,11 +139,10 @@ export function GoogleSheetsProvider({ children }) {
       // Eliminar el producto 'Huevos' genérico
       mapped = mapped.filter(p => typeof p.nombre === 'string' && p.nombre.toLowerCase().trim() !== 'huevos');
 
-      // Agregar los 3 productos nuevos de huevos
       const huevosNuevos = [
-        { id: 9001, nombre: 'Huevos Nº1', categoria: 'otros', cantidadCajon: 12, unidad: 'maples', precioCajon: 54000, margen: 70, precioMaxManual: 6500, activo: true, fila: null },
-        { id: 9002, nombre: 'Huevos Nº2', categoria: 'otros', cantidadCajon: 12, unidad: 'maples', precioCajon: 0, margen: 70, precioMaxManual: 0, activo: false, fila: null },
-        { id: 9003, nombre: 'Huevos Súper', categoria: 'otros', cantidadCajon: 12, unidad: 'maples', precioCajon: 0, margen: 70, precioMaxManual: 0, activo: false, fila: null }
+        { id: 9001, nombre: 'Huevos Nº1', categoria: 'otros', cantidadCajon: 12, unidad: 'maple x30 uds', precioCajon: 54000, margen: 70, precioMaxManual: 6500, activo: true, fila: null },
+        { id: 9002, nombre: 'Huevos Nº2', categoria: 'otros', cantidadCajon: 12, unidad: 'maple x30 uds', precioCajon: 0, margen: 70, precioMaxManual: 0, activo: false, fila: null },
+        { id: 9003, nombre: 'Huevos Súper', categoria: 'otros', cantidadCajon: 12, unidad: 'maple x30 uds', precioCajon: 0, margen: 70, precioMaxManual: 0, activo: false, fila: null }
       ];
 
       huevosNuevos.forEach(nuevo => {
