@@ -73,12 +73,15 @@ export default async function handler(req, res) {
       extras
     }
 
-    htmlActualizado = htmlActualizado.replace(
-      /\/\/ PRODUCTOS_START[\s\S]*?\/\/ PRODUCTOS_END/,
-      `// PRODUCTOS_START
-const PRODUCTOS_DATA = ${JSON.stringify(todosProductos, null, 2)};
-// PRODUCTOS_END`
-    )
+    // Reemplazar el objeto individual en PRODUCTS
+    const regexIndividual = /('verduras'\s*:\s*\[[\s\S]*?'extras'\s*:\s*\[[\s\S]*?\])/
+    if (regexIndividual.test(htmlActualizado)) {
+      const nuevoIndividual = `'verduras': ${JSON.stringify(todosProductos.verduras)},\n    'frutas': ${JSON.stringify(todosProductos.frutas)},\n    'extras': ${JSON.stringify(todosProductos.extras)}`
+      htmlActualizado = htmlActualizado.replace(regexIndividual, nuevoIndividual)
+      console.log('[PUBLICAR-API] ✅ Productos reemplazados en HTML')
+    } else {
+      console.log('[PUBLICAR-API] ⚠️ No se encontró el objeto individual')
+    }
     
     // Incrementar versión del CSS para forzar recarga
     const versionActual = htmlActualizado.match(/style\.css\?v=([\d.]+)/)?.[1] || '1'
