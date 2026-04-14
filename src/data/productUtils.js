@@ -18,3 +18,21 @@ export function getTipoByNombre(nombre) {
   if (PRODUCT_DATABASE['otros'].some(p => n.includes(p))) return 'otros';
   return 'hoja verde'; // Default
 }
+
+export function getUnidadByNombre(nombre) {
+  if (!nombre) return 'kg';
+  const n = nombre.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  
+  if (n.includes('huevo')) return 'maple x30 uds';
+  if (n.includes('palta')) return 'unidad';
+  if (n.includes('ajo')) return 'cabeza';
+  if (n.includes('choclo')) return 'unidad';
+  if (n.includes('lechuga')) return 'unidad';
+  if (n.includes('rucula')) return 'atado';
+  if (n.includes('remolacha')) return 'unidad';
+  if (n.includes('brocoli')) return 'unidad';
+  if (n.includes('albahaca')) return 'atado';
+  if (n.includes('perejil')) return 'atado';
+  
+  return 'kg'; // Default
+}

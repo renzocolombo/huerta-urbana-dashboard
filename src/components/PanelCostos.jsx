@@ -12,7 +12,7 @@ const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
-import { getTipoByNombre } from '../data/productUtils';
+import { getTipoByNombre, getUnidadByNombre } from '../data/productUtils';
 
 const PRODUCTOS_INICIALES = [
   { id: 1, nombre: 'Papa', categoria: 'duro', cantidadCajon: 20, unidad: 'kg', precioCajon: 12000, margen: 60, activo: true },
@@ -103,7 +103,7 @@ export default function PanelCostos() {
           activo: row[5] === 'TRUE' || row[5] === 'true' || row[5] === '1',
           ultimaActualizacion: row[6] || '',
           categoria: tipo, 
-          unidad: 'kg'
+          unidad: getUnidadByNombre(nombre)
         };
       });
 

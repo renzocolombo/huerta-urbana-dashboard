@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { KEYS } from '../config/keys';
 import { PEDIDOS as PEDIDOS_MOCK } from '../data/mockData';
-import { getTipoByNombre } from '../data/productUtils';
+import { getTipoByNombre, getUnidadByNombre } from '../data/productUtils';
 
 const GoogleSheetsContext = createContext();
 
@@ -132,7 +132,7 @@ export function GoogleSheetsProvider({ children }) {
           precioMaxManual: row[4] ? Number(row[4]) : null,
           activo: row[5] === 'TRUE' || row[5] === 'true' || row[5] === '1',
           categoria: getTipoByNombre(nombre),
-          unidad: 'kg'
+          unidad: getUnidadByNombre(nombre)
         };
       });
 
