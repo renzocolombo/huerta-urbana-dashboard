@@ -249,12 +249,28 @@ export default function Clientes() {
                     <div className="flex items-center justify-between gap-2">
                       <p className="font-semibold text-white text-sm truncate">{c.nombre}</p>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <div title={`TyC: ${c.acepto_tyc || 'NO'}`} className={`w-5 h-5 rounded-full flex items-center justify-center ${c.acepto_tyc?.toUpperCase().startsWith('SI') ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                          {c.acepto_tyc?.toUpperCase().startsWith('SI') ? <Check size={10} strokeWidth={3} /> : <X size={10} strokeWidth={3} />}
-                        </div>
-                        <div title={`Publicidad: ${c.acepto_publicidad || 'NO'}`} className={`w-5 h-5 rounded-full flex items-center justify-center ${c.acepto_publicidad?.toUpperCase() === 'SI' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                          {c.acepto_publicidad?.toUpperCase() === 'SI' ? <Check size={10} strokeWidth={3} /> : <X size={10} strokeWidth={3} />}
-                        </div>
+                        {(() => {
+                          const val = c.acepto_tyc || '';
+                          const isSi = val.toUpperCase().startsWith('SI');
+                          const isNo = val.toUpperCase() === 'NO';
+                          const colorClass = isSi ? 'bg-[#dcfce7] text-[#16a34a] border-[#16a34a]' : isNo ? 'bg-[#fee2e2] text-[#dc2626] border-[#dc2626]' : 'bg-[#f3f4f6] text-[#6b7280] border-[#d1d5db]';
+                          return (
+                            <div title={`TyC: ${val || 'Sin datos'}`} className={`px-2 py-0.5 rounded-[6px] border text-[11px] font-semibold flex items-center gap-1 ${colorClass}`}>
+                              T&C {isSi ? '✓' : '✗'}
+                            </div>
+                          );
+                        })()}
+                        {(() => {
+                          const val = c.acepto_publicidad || '';
+                          const isSi = val.toUpperCase() === 'SI';
+                          const isNo = val.toUpperCase() === 'NO';
+                          const colorClass = isSi ? 'bg-[#dcfce7] text-[#16a34a] border-[#16a34a]' : isNo ? 'bg-[#fee2e2] text-[#dc2626] border-[#dc2626]' : 'bg-[#f3f4f6] text-[#6b7280] border-[#d1d5db]';
+                          return (
+                            <div title={`Publicidad: ${val || 'Sin datos'}`} className={`px-2 py-0.5 rounded-[6px] border text-[11px] font-semibold flex items-center gap-1 ${colorClass}`}>
+                              Pub {isSi ? '✓' : '✗'}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                     <p className="text-xs text-gray-500 truncate">{c.localidad}</p>
@@ -335,12 +351,28 @@ export default function Clientes() {
                       <div className="flex items-center justify-between gap-2">
                         <p className="font-semibold text-white text-sm truncate">{c.nombre}</p>
                         <div className="flex items-center gap-1.5 shrink-0">
-                          <div title={`TyC: ${c.acepto_tyc || 'NO'}`} className={`w-5 h-5 rounded-full flex items-center justify-center ${c.acepto_tyc?.toUpperCase().startsWith('SI') ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                            {c.acepto_tyc?.toUpperCase().startsWith('SI') ? <Check size={10} strokeWidth={3} /> : <X size={10} strokeWidth={3} />}
-                          </div>
-                          <div title={`Publicidad: ${c.acepto_publicidad || 'NO'}`} className={`w-5 h-5 rounded-full flex items-center justify-center ${c.acepto_publicidad?.toUpperCase() === 'SI' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                            {c.acepto_publicidad?.toUpperCase() === 'SI' ? <Check size={10} strokeWidth={3} /> : <X size={10} strokeWidth={3} />}
-                          </div>
+                          {(() => {
+                            const val = c.acepto_tyc || '';
+                            const isSi = val.toUpperCase().startsWith('SI');
+                            const isNo = val.toUpperCase() === 'NO';
+                            const colorClass = isSi ? 'bg-[#dcfce7] text-[#16a34a] border-[#16a34a]' : isNo ? 'bg-[#fee2e2] text-[#dc2626] border-[#dc2626]' : 'bg-[#f3f4f6] text-[#6b7280] border-[#d1d5db]';
+                            return (
+                              <div title={`TyC: ${val || 'Sin datos'}`} className={`px-2 py-0.5 rounded-[6px] border text-[11px] font-semibold flex items-center gap-1 ${colorClass}`}>
+                                T&C {isSi ? '✓' : '✗'}
+                              </div>
+                            );
+                          })()}
+                          {(() => {
+                            const val = c.acepto_publicidad || '';
+                            const isSi = val.toUpperCase() === 'SI';
+                            const isNo = val.toUpperCase() === 'NO';
+                            const colorClass = isSi ? 'bg-[#dcfce7] text-[#16a34a] border-[#16a34a]' : isNo ? 'bg-[#fee2e2] text-[#dc2626] border-[#dc2626]' : 'bg-[#f3f4f6] text-[#6b7280] border-[#d1d5db]';
+                            return (
+                              <div title={`Publicidad: ${val || 'Sin datos'}`} className={`px-2 py-0.5 rounded-[6px] border text-[11px] font-semibold flex items-center gap-1 ${colorClass}`}>
+                                Pub {isSi ? '✓' : '✗'}
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                       <p className="text-xs text-gray-500 truncate">{c.localidad}</p>
