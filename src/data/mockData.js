@@ -57,6 +57,8 @@ function crearPedido(diasOffset = 0, esHoy = false) {
     estado_pago: rand(ESTADOS_PAGO),
     remito_impreso: Math.random() > 0.5,
     horas_atras: horasAtras,
+    acepto_tyc: Math.random() > 0.1 ? 'SI' : 'NO',
+    acepto_publicidad: Math.random() > 0.5 ? 'SI' : 'NO',
   };
 }
 

@@ -1,6 +1,6 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { MessageCircle, ShoppingBag, DollarSign, Calendar, ShoppingCart, AlertTriangle } from 'lucide-react';
+import { MessageCircle, ShoppingBag, DollarSign, Calendar, ShoppingCart, AlertTriangle, Check, X } from 'lucide-react';
 
 const $$ = (n) => {
   const num = Number(n);
@@ -33,15 +33,19 @@ export default function Clientes() {
           codigo_referido: p.codigo_referido || '',
           referido_estado: p.referido_estado || '',
           referidos_count: parseInt(p.referidos_count) || 0,
-          credito_acumulado: parseInt(p.credito_acumulado) || 0
+          credito_acumulado: parseInt(p.credito_acumulado) || 0,
+          acepto_tyc: p.acepto_tyc || '',
+          acepto_publicidad: p.acepto_publicidad || ''
         };
       }
       mapa[p.email].pedidos += 1;
       mapa[p.email].totalGastado += p.total;
 
-      if (p.fecha > mapa[p.email].ultimoPedido) {
+      if (p.fecha >= mapa[p.email].ultimoPedido) {
         mapa[p.email].ultimoPedido = p.fecha;
         mapa[p.email].sheetRowIndex = p.sheetRowIndex;
+        if (p.acepto_tyc) mapa[p.email].acepto_tyc = p.acepto_tyc;
+        if (p.acepto_publicidad) mapa[p.email].acepto_publicidad = p.acepto_publicidad;
       }
       
       // Merge states: si alguna vez compró con el cupón o tiene un progreso guardado, rescatarlo
@@ -241,8 +245,18 @@ export default function Clientes() {
                   <div className="w-10 h-10 rounded-xl bg-green-500/10 border border-green-500/20 flex items-center justify-center text-green-400 font-bold text-sm shrink-0">
                     {(c.nombre || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
                   </div>
-                  <div className="min-w-0">
-                    <p className="font-semibold text-white text-sm truncate">{c.nombre}</p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-semibold text-white text-sm truncate">{c.nombre}</p>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <div title={`TyC: ${c.acepto_tyc || 'NO'}`} className={`w-5 h-5 rounded-full flex items-center justify-center ${c.acepto_tyc?.toUpperCase().startsWith('SI') ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                          {c.acepto_tyc?.toUpperCase().startsWith('SI') ? <Check size={10} strokeWidth={3} /> : <X size={10} strokeWidth={3} />}
+                        </div>
+                        <div title={`Publicidad: ${c.acepto_publicidad || 'NO'}`} className={`w-5 h-5 rounded-full flex items-center justify-center ${c.acepto_publicidad?.toUpperCase() === 'SI' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                          {c.acepto_publicidad?.toUpperCase() === 'SI' ? <Check size={10} strokeWidth={3} /> : <X size={10} strokeWidth={3} />}
+                        </div>
+                      </div>
+                    </div>
                     <p className="text-xs text-gray-500 truncate">{c.localidad}</p>
                   </div>
                 </div>
@@ -317,8 +331,18 @@ export default function Clientes() {
                     <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 font-bold text-sm shrink-0">
                       {(c.nombre || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
                     </div>
-                    <div className="min-w-0">
-                      <p className="font-semibold text-white text-sm truncate">{c.nombre}</p>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-semibold text-white text-sm truncate">{c.nombre}</p>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <div title={`TyC: ${c.acepto_tyc || 'NO'}`} className={`w-5 h-5 rounded-full flex items-center justify-center ${c.acepto_tyc?.toUpperCase().startsWith('SI') ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                            {c.acepto_tyc?.toUpperCase().startsWith('SI') ? <Check size={10} strokeWidth={3} /> : <X size={10} strokeWidth={3} />}
+                          </div>
+                          <div title={`Publicidad: ${c.acepto_publicidad || 'NO'}`} className={`w-5 h-5 rounded-full flex items-center justify-center ${c.acepto_publicidad?.toUpperCase() === 'SI' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                            {c.acepto_publicidad?.toUpperCase() === 'SI' ? <Check size={10} strokeWidth={3} /> : <X size={10} strokeWidth={3} />}
+                          </div>
+                        </div>
+                      </div>
                       <p className="text-xs text-gray-500 truncate">{c.localidad}</p>
                     </div>
                   </div>

@@ -76,6 +76,8 @@ export function GoogleSheetsProvider({ children }) {
           turno_entrega:   obj.turno_entrega || obj.turno || 'mañana',
           estado:          obj.estado || 'pendiente',
           email:           obj.email || '',
+          acepto_tyc:       obj.acepto_tyc || '',
+          acepto_publicidad: obj.acepto_publicidad || '',
         };
       });
 
