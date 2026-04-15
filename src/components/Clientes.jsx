@@ -253,7 +253,7 @@ export default function Clientes() {
                           const val = c.acepto_tyc || '';
                           const isSi = val.toUpperCase().startsWith('SI');
                           const isNo = val.toUpperCase() === 'NO';
-                          const colorClass = isSi ? 'bg-[#dcfce7] text-[#16a34a] border-[#16a34a]' : isNo ? 'bg-[#fee2e2] text-[#dc2626] border-[#dc2626]' : 'bg-[#f3f4f6] text-[#9ca3af] border-[#d1d5db]';
+                          const colorClass = isSi ? 'bg-[#dcfce7] text-[#16a34a] border-[#16a34a]' : isNo ? 'bg-[#fee2e2] text-[#dc2626] border-[#dc2626]' : 'bg-gray-800/50 text-gray-400 border-gray-700';
                           return (
                             <div title={`TyC: ${val || 'Sin datos'}`} className={`px-2 py-0.5 rounded-[6px] border text-[11px] font-semibold flex items-center gap-1 ${colorClass}`}>
                               T&C {isSi ? '✓' : isNo ? '✗' : '-'}
@@ -264,7 +264,7 @@ export default function Clientes() {
                           const val = c.acepto_publicidad || '';
                           const isSi = val.toUpperCase() === 'SI';
                           const isNo = val.toUpperCase() === 'NO';
-                          const colorClass = isSi ? 'bg-[#dcfce7] text-[#16a34a] border-[#16a34a]' : isNo ? 'bg-[#fee2e2] text-[#dc2626] border-[#dc2626]' : 'bg-[#f3f4f6] text-[#9ca3af] border-[#d1d5db]';
+                          const colorClass = isSi ? 'bg-[#dcfce7] text-[#16a34a] border-[#16a34a]' : isNo ? 'bg-[#fee2e2] text-[#dc2626] border-[#dc2626]' : 'bg-gray-800/50 text-gray-400 border-gray-700';
                           return (
                             <div title={`Publicidad: ${val || 'Sin datos'}`} className={`px-2 py-0.5 rounded-[6px] border text-[11px] font-semibold flex items-center gap-1 ${colorClass}`}>
                               Pub {isSi ? '✓' : isNo ? '✗' : '-'}
