@@ -78,8 +78,12 @@ export default function Clientes() {
 
   const abrirRecuperacion = (tel, nombre, producto) => {
     const primerNombre = (nombre || '').split(' ')[0] || 'ahí';
-    const texto = `Hola ${primerNombre}! %F0%9F%8C%BF Vimos que casi completaste tu pedido de *${producto || 'Huerta Urbana'}*. ¿Querés que te ayudemos a finalizarlo? Estamos a disposición %F0%9F%A5%A6`;
-    const url = `https://web.whatsapp.com/send?phone=${(tel || '').replace(/\D/g, '')}&text=${texto}`;
+    const telLimpio = (tel || '').replace(/\D/g, '');
+    const paramRec = btoa(telLimpio);
+    const linkCarrito = `https://huertaurbana.com.ar?rec=${paramRec}`;
+    const mensaje = `¡Hola ${primerNombre}! 👋 Te escribimos desde Huerta Urbana.\nVimos que te quedaste con las ganas... 🥦🍅\nPara que no te pierdas nada, te regalamos un 10% de descuento en tu pedido.\nUsá el cupón: COSECHA10\n¿Arrancamos? 👉 ${linkCarrito}`;
+    const texto = encodeURIComponent(mensaje);
+    const url = `https://web.whatsapp.com/send?phone=${telLimpio}&text=${texto}`;
     window.open(url, '_blank');
   };
 
