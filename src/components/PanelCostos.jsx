@@ -525,7 +525,7 @@ export default function PanelCostos() {
       productos: productosCalculados.filter(p => p.activo).map(p => ({
         nombre: p.nombre,
         precio: p.precioFinal,
-        unidad: p.unidad,
+        unidad: p.unidad === 'unidad' ? '' : p.unidad,
         activo: true
       })),
       combos: combosCalculados.filter(c => c.activo).map(c => ({
@@ -534,11 +534,26 @@ export default function PanelCostos() {
         descripcion: c.descripcion || '',
         items: c.productos.map(cp => {
           const p = productos.find(prod => prod.id === cp.id || prod.nombre === cp.nombre);
-          return {
-            nombre: p ? p.nombre : (cp.nombre || `ID:${cp.id}`),
-            cantidad: cp.cantidad,
-            unidad: p ? p.unidad : ''
-          };
+          const nombre = p ? p.nombre : (cp.nombre || `ID:${cp.id}`);
+          const cantidad = cp.cantidad;
+          const unidad = (p ? p.unidad : '').toLowerCase();
+
+          // Reglas de formato del usuario:
+          // 1. Maple: "1 maple Nº1 x30" (SIN la palabra "Huevos")
+          if (unidad.includes('maple')) {
+            const namePart = nombre.replace(/huevos/gi, '').trim();
+            return `${cantidad} maple ${namePart}${namePart.includes('x30') ? '' : ' x30'}`.replace(/\s+/g, ' ').trim();
+          }
+          // 2. Por kilo: "2kg Papa"
+          if (unidad.includes('kg')) {
+            return `${cantidad}kg ${nombre}`;
+          }
+          // 3. Por atado: "1 atado Rúcula"
+          if (unidad.includes('atado')) {
+            return `${cantidad} atado ${nombre}`;
+          }
+          // 4. Por unidad: "3 Palta" (SIN la palabra "unidad")
+          return `${cantidad} ${nombre}`.replace(/\bunidad\b/gi, '').replace(/\s+/g, ' ').trim();
         }),
         activo: true
       }))
