@@ -26,7 +26,7 @@ const COMBOS_INICIALES = [
     descripcion: 'Papa 4kg, Cebolla 3kg, Zanahoria 2kg, Zapallo 2kg, Tomate 2kg, Banana 2kg, Huevos 1 maple, Lechuga 0.5 unidad, Rúcula 0.5 atado, Naranja 1kg', 
     productos: [
       { nombre: 'Papa', cantidad: 4 },
-      { nombre: 'Cebolla común', cantidad: 3 },
+      { nombre: 'Cebolla', cantidad: 3 },
       { nombre: 'Zanahoria', cantidad: 2 },
       { nombre: 'Zapallo blanco', cantidad: 2 },
       { nombre: 'Tomate', cantidad: 2 },
@@ -46,7 +46,7 @@ const COMBOS_INICIALES = [
     descripcion: 'Papa 4kg, Cebolla 2kg, Zanahoria 2kg, Tomate 2kg, Zapallito 2kg, Banana 2kg, Naranja 2kg, Lechuga 0.5 unidad, Remolacha 2 unidades, Huevos 1 maple',
     productos: [
       { nombre: 'Papa', cantidad: 4 },
-      { nombre: 'Cebolla común', cantidad: 2 },
+      { nombre: 'Cebolla', cantidad: 2 },
       { nombre: 'Zanahoria', cantidad: 2 },
       { nombre: 'Tomate', cantidad: 2 },
       { nombre: 'Zapallito', cantidad: 2 },
@@ -66,7 +66,7 @@ const COMBOS_INICIALES = [
     descripcion: 'Papa 2kg, Cebolla 1kg, Zanahoria 1kg, Tomate 1kg, Lechuga 0.5 unidad, Rúcula 0.5 atado, Banana 1kg, Manzana roja 1kg, Limón 1kg, Huevos 1 maple, Remolacha 1 unidad, Choclo 4 unidades',
     productos: [
       { nombre: 'Papa', cantidad: 2 },
-      { nombre: 'Cebolla común', cantidad: 1 },
+      { nombre: 'Cebolla', cantidad: 1 },
       { nombre: 'Zanahoria', cantidad: 1 },
       { nombre: 'Tomate', cantidad: 1 },
       { nombre: 'Lechuga', cantidad: 0.5 },
@@ -133,7 +133,7 @@ const COMBOS_INICIALES = [
     descripcion: 'Papa 5kg, Cebolla 3kg, Zanahoria 2kg, Tomate 2kg, Zapallito 2kg, Banana 3kg, Naranja 2kg, Manzana roja 2kg, Lechuga 0.5 unidad, Remolacha 2 unidades, Choclo 6 unidades, Huevos 1 maple',
     productos: [
       { nombre: 'Papa', cantidad: 5 },
-      { nombre: 'Cebolla común', cantidad: 3 },
+      { nombre: 'Cebolla', cantidad: 3 },
       { nombre: 'Zanahoria', cantidad: 2 },
       { nombre: 'Tomate', cantidad: 2 },
       { nombre: 'Zapallito', cantidad: 2 },
@@ -156,7 +156,7 @@ const COMBOS_INICIALES = [
     productos: [
       { nombre: 'Papa', cantidad: 3 },
       { nombre: 'Tomate', cantidad: 2 },
-      { nombre: 'Morrón', cantidad: 1 },
+      { nombre: 'Morrón rojo', cantidad: 1 },
       { nombre: 'Banana', cantidad: 2 },
       { nombre: 'Manzana roja', cantidad: 2 },
       { nombre: 'Uva', cantidad: 1 },
@@ -227,7 +227,9 @@ export default function PanelCostos() {
       let mapped = rows.slice(1).map((row, index) => {
         let nombre = row[0] || 'Sin nombre';
         const fixAcentos = (str) => str
-            .replace(/\bmorron\b/gi, m => m[0] === m[0].toUpperCase() ? 'Morrón' : 'morrón')
+            .replace(/\bcebolla comun\b/gi, 'Cebolla')
+            .replace(/\bCebolla común\b/gi, 'Cebolla')
+            .replace(/\bmorr[óo]n\b/gi, 'Morrón rojo')
             .replace(/\brucula\b/gi, m => m[0] === m[0].toUpperCase() ? 'Rúcula' : 'rúcula')
             .replace(/\bbrocoli\b/gi, m => m[0] === m[0].toUpperCase() ? 'Brócoli' : 'brócoli')
             .replace(/\blimon\b/gi, m => m[0] === m[0].toUpperCase() ? 'Limón' : 'limón')
