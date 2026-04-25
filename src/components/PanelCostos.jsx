@@ -23,7 +23,7 @@ const COMBOS_INICIALES = [
     id: 101, 
     nombre: 'COMBO 1 — Básico', 
     precioManual: 39575, 
-    descripcion: 'Papa 4kg, Cebolla 3kg, Zanahoria 2kg, Zapallo 2kg, Tomate 2kg, Banana 2kg, Huevos 1 maple, Lechuga 0.5 unidad, Rúcula 0.5 atado, Naranja 1kg', 
+    descripcion: 'Papa 4kg, Cebolla 3kg, Zanahoria 2kg, Zapallo 2kg, Tomate 2kg, Banana 2kg, Huevos 1 maple, Lechuga 1/2, Rúcula 1/2 atado, Naranja 1kg', 
     productos: [
       { nombre: 'Papa', cantidad: 4 },
       { nombre: 'Cebolla', cantidad: 3 },
@@ -43,7 +43,7 @@ const COMBOS_INICIALES = [
     id: 102,
     nombre: 'COMBO 2 — Semanal',
     precioManual: 51525,
-    descripcion: 'Papa 4kg, Cebolla 2kg, Zanahoria 2kg, Tomate 2kg, Zapallito 2kg, Banana 2kg, Naranja 2kg, Lechuga 0.5 unidad, Remolacha 2 unidades, Huevos 1 maple',
+    descripcion: 'Papa 4kg, Cebolla 2kg, Zanahoria 2kg, Tomate 2kg, Zapallito 2kg, Banana 2kg, Naranja 2kg, Lechuga 1/2, Remolacha 2, Huevos 1 maple',
     productos: [
       { nombre: 'Papa', cantidad: 4 },
       { nombre: 'Cebolla', cantidad: 2 },
@@ -63,7 +63,7 @@ const COMBOS_INICIALES = [
     id: 103,
     nombre: 'COMBO 3 — Para Dos',
     precioManual: 38625,
-    descripcion: 'Papa 2kg, Cebolla 1kg, Zanahoria 1kg, Tomate 1kg, Lechuga 0.5 unidad, Rúcula 0.5 atado, Banana 1kg, Manzana roja 1kg, Limón 1kg, Huevos 1 maple, Remolacha 1 unidad, Choclo 4 unidades',
+    descripcion: 'Papa 2kg, Cebolla 1kg, Zanahoria 1kg, Tomate 1kg, Lechuga 1/2, Rúcula 1/2 atado, Banana 1kg, Manzana roja 1kg, Limón 1kg, Huevos 1 maple, Remolacha 1, Choclo 4',
     productos: [
       { nombre: 'Papa', cantidad: 2 },
       { nombre: 'Cebolla', cantidad: 1 },
@@ -85,7 +85,7 @@ const COMBOS_INICIALES = [
     id: 104,
     nombre: 'COMBO 4 — Fit',
     precioManual: 54975,
-    descripcion: 'Lechuga 0.5 unidad, Rúcula 0.5 atado, Espinaca 1kg, Tomate 2kg, Pepino 1kg, Palta 3 unidades, Manzana roja 2kg, Limón 1kg, Banana 2kg, Arándanos 1 bandeja, Remolacha 2 unidades',
+    descripcion: 'Lechuga 1/2, Rúcula 1/2 atado, Espinaca 1kg, Tomate 2kg, Pepino 1kg, Palta 3, Manzana roja 2kg, Limón 1kg, Banana 2kg, Arándanos 1 bandeja, Remolacha 2',
     productos: [
       { nombre: 'Lechuga', cantidad: 0.5 },
       { nombre: 'Rúcula', cantidad: 0.5 },
@@ -106,7 +106,7 @@ const COMBOS_INICIALES = [
     id: 105,
     nombre: 'COMBO 5 — Vegetariano',
     precioManual: 66875,
-    descripcion: 'Berenjena 2kg, Zapallito 2kg, Tomate 2kg, Zanahoria 2kg, Pepino 1kg, Brócoli 2 unidades, Espinaca 1kg, Lechuga 0.5 unidad, Rúcula 0.5 atado, Palta 3 unidades, Banana 2kg, Manzana roja 2kg, Limón 1kg, Remolacha 2 unidades',
+    descripcion: 'Berenjena 2kg, Zapallito 2kg, Tomate 2kg, Zanahoria 2kg, Pepino 1kg, Brócoli 2, Espinaca 1kg, Lechuga 1/2, Rúcula 1/2 atado, Palta 3, Banana 2kg, Manzana roja 2kg, Limón 1kg, Remolacha 2',
     productos: [
       { nombre: 'Berenjena', cantidad: 2 },
       { nombre: 'Zapallito', cantidad: 2 },
@@ -130,7 +130,7 @@ const COMBOS_INICIALES = [
     id: 106,
     nombre: 'COMBO 6 — Familiar',
     precioManual: 75725,
-    descripcion: 'Papa 5kg, Cebolla 3kg, Zanahoria 2kg, Tomate 2kg, Zapallito 2kg, Banana 3kg, Naranja 2kg, Manzana roja 2kg, Lechuga 0.5 unidad, Remolacha 2 unidades, Choclo 6 unidades, Huevos 1 maple',
+    descripcion: 'Papa 5kg, Cebolla 3kg, Zanahoria 2kg, Tomate 2kg, Zapallito 2kg, Banana 3kg, Naranja 2kg, Manzana roja 2kg, Lechuga 1/2, Remolacha 2, Choclo 6, Huevos 1 maple',
     productos: [
       { nombre: 'Papa', cantidad: 5 },
       { nombre: 'Cebolla', cantidad: 3 },
@@ -152,7 +152,7 @@ const COMBOS_INICIALES = [
     id: 107,
     nombre: 'COMBO 7 — Premium',
     precioManual: 78750,
-    descripcion: 'Papa 3kg, Tomate 2kg, Morrón rojo 1kg, Banana 2kg, Manzana roja 2kg, Uva 1kg, Palta 3 unidades, Arándanos 1 bandeja, Huevos 2 maples, Miel 1kg, Espinaca 1kg',
+    descripcion: 'Papa 3kg, Tomate 2kg, Morrón rojo 1kg, Banana 2kg, Manzana roja 2kg, Uva 1kg, Palta 3, Arándanos 1 bandeja, Huevos 2 maples, Miel 1kg, Espinaca 1kg',
     productos: [
       { nombre: 'Papa', cantidad: 3 },
       { nombre: 'Tomate', cantidad: 2 },
@@ -525,39 +525,40 @@ export default function PanelCostos() {
       productos: productosCalculados.filter(p => p.activo).map(p => ({
         nombre: p.nombre,
         precio: p.precioFinal,
-        unidad: p.unidad,
+        unidad: (p.unidad || '').toLowerCase().replace(/\bunidad\b/gi, '').trim(),
         activo: true
       })),
       combos: combosCalculados.filter(c => c.activo).map(c => ({
         nombre: c.nombre,
         precio: c.precioFinal || 0,
-        descripcion: c.descripcion || '',
+        descripcion: (c.descripcion || '').replace(/\b0\.5\b/g, '1/2').replace(/\bunidad\b/gi, '').replace(/\s+/g, ' ').trim(),
         items: c.productos.map(cp => {
           const p = productos.find(prod => prod.id === cp.id || prod.nombre === cp.nombre);
           const nombre = p ? p.nombre : (cp.nombre || `ID:${cp.id}`);
           const cantidad = cp.cantidad;
           const unidad = (p ? p.unidad : '').toLowerCase();
+          const displayCantidad = cantidad === 0.5 ? '1/2' : cantidad;
 
           // Reglas de formato del usuario con pluralización:
           // 1. Maple: "1 maple Nº1 x30" o "2 maples Nº1 x30"
           if (unidad.includes('maple')) {
             const namePart = nombre.replace(/huevos/gi, '').trim();
             const uPlural = pluralizar(cantidad, 'maple');
-            return `${cantidad} ${uPlural} ${namePart}${namePart.includes('x30') ? '' : ' x30'}`.replace(/\s+/g, ' ').trim();
+            return `${displayCantidad} ${uPlural} ${namePart}${namePart.includes('x30') ? '' : ' x30'}`.replace(/\s+/g, ' ').trim();
           }
           // 2. Por kilo: "1 kilo Papa" o "2 kilos Papa"
           if (unidad.includes('kg')) {
-            if (cantidad === 1) return `1 kilo ${nombre}`;
-            return `${cantidad} kilos ${nombre}`;
+            const uKilo = cantidad <= 1 ? 'kilo' : 'kilos';
+            return `${displayCantidad} ${uKilo} ${nombre}`;
           }
           // 3. Por atado: "1 atado Rúcula" o "2 atados Rúcula"
           if (unidad.includes('atado')) {
             const uPlural = pluralizar(cantidad, 'atado');
-            return `${cantidad} ${uPlural} ${nombre}`;
+            return `${displayCantidad} ${uPlural} ${nombre}`;
           }
           // 4. Por unidad: "1 Palta" o "3 Paltas" (SIN la palabra "unidad")
           const nombrePlural = pluralizar(cantidad, nombre);
-          return `${cantidad} ${nombrePlural}`.replace(/\bunidad\b/gi, '').replace(/\s+/g, ' ').trim();
+          return `${displayCantidad} ${nombrePlural}`.replace(/\bunidad\b/gi, '').replace(/\s+/g, ' ').trim();
         }),
         activo: true
       }))
