@@ -5,7 +5,7 @@ import {
   Settings, TrendingUp, AlertTriangle, Save, Globe, Lock, X, Loader2
 } from 'lucide-react';
 
-const STORAGE_KEY = 'huerta_data_costos_v1';
+const STORAGE_KEY = 'huerta_data_costos_v31';
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
 const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_KEY;
 const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
@@ -19,12 +19,156 @@ const PRODUCTOS_INICIALES = [
 ];
 
 const COMBOS_INICIALES = [
-  { id: 101, nombre: 'Combo Básico', precio: 45000, descripcion: '', productos: [], descuento: 0, activo: true },
-  { id: 102, nombre: 'Combo Fit', precio: 50000, descripcion: '', productos: [], descuento: 0, activo: true },
-  { id: 103, nombre: 'Combo Familiar', precio: 55000, descripcion: '', productos: [], descuento: 0, activo: true },
-  { id: 104, nombre: 'Combo Premium', precio: 65000, descripcion: '', productos: [], descuento: 0, activo: true },
-  { id: 105, nombre: 'Combo Vegetariano', precio: 65000, descripcion: '', productos: [], descuento: 0, activo: true },
-  { id: 106, nombre: 'Combo Mensual', precio: 125000, descripcion: '', productos: [], descuento: 0, activo: true }
+  { 
+    id: 101, 
+    nombre: 'COMBO 1 — Básico', 
+    precioManual: 39575, 
+    descripcion: 'Papa 4kg, Cebolla 3kg, Zanahoria 2kg, Zapallo 2kg, Tomate 2kg, Banana 2kg, Huevos 1 maple, Lechuga 0.5 unidad, Rúcula 0.5 atado, Naranja 1kg', 
+    productos: [
+      { nombre: 'Papa', cantidad: 4 },
+      { nombre: 'Cebolla', cantidad: 3 },
+      { nombre: 'Zanahoria', cantidad: 2 },
+      { nombre: 'Zapallo blanco', cantidad: 2 },
+      { nombre: 'Tomate', cantidad: 2 },
+      { nombre: 'Banana', cantidad: 2 },
+      { nombre: 'Huevos Nº1', cantidad: 1 },
+      { nombre: 'Lechuga', cantidad: 0.5 },
+      { nombre: 'Rúcula', cantidad: 0.5 },
+      { nombre: 'Naranja', cantidad: 1 }
+    ], 
+    descuento: 0, 
+    activo: true 
+  },
+  {
+    id: 102,
+    nombre: 'COMBO 2 — Semanal',
+    precioManual: 51525,
+    descripcion: 'Papa 4kg, Cebolla 2kg, Zanahoria 2kg, Tomate 2kg, Zapallito 2kg, Banana 2kg, Naranja 2kg, Lechuga 0.5 unidad, Remolacha 2 unidades, Huevos 1 maple',
+    productos: [
+      { nombre: 'Papa', cantidad: 4 },
+      { nombre: 'Cebolla', cantidad: 2 },
+      { nombre: 'Zanahoria', cantidad: 2 },
+      { nombre: 'Tomate', cantidad: 2 },
+      { nombre: 'Zapallito', cantidad: 2 },
+      { nombre: 'Banana', cantidad: 2 },
+      { nombre: 'Naranja', cantidad: 2 },
+      { nombre: 'Lechuga', cantidad: 0.5 },
+      { nombre: 'Remolacha', cantidad: 2 },
+      { nombre: 'Huevos Nº1', cantidad: 1 }
+    ],
+    descuento: 0,
+    activo: true
+  },
+  {
+    id: 103,
+    nombre: 'COMBO 3 — Para Dos',
+    precioManual: 38625,
+    descripcion: 'Papa 2kg, Cebolla 1kg, Zanahoria 1kg, Tomate 1kg, Lechuga 0.5 unidad, Rúcula 0.5 atado, Banana 1kg, Manzana roja 1kg, Limón 1kg, Huevos 1 maple, Remolacha 1 unidad, Choclo 4 unidades',
+    productos: [
+      { nombre: 'Papa', cantidad: 2 },
+      { nombre: 'Cebolla', cantidad: 1 },
+      { nombre: 'Zanahoria', cantidad: 1 },
+      { nombre: 'Tomate', cantidad: 1 },
+      { nombre: 'Lechuga', cantidad: 0.5 },
+      { nombre: 'Rúcula', cantidad: 0.5 },
+      { nombre: 'Banana', cantidad: 1 },
+      { nombre: 'Manzana roja', cantidad: 1 },
+      { nombre: 'Limón', cantidad: 1 },
+      { nombre: 'Huevos Nº1', cantidad: 1 },
+      { nombre: 'Remolacha', cantidad: 1 },
+      { nombre: 'Choclo', cantidad: 4 }
+    ],
+    descuento: 0,
+    activo: true
+  },
+  {
+    id: 104,
+    nombre: 'COMBO 4 — Fit',
+    precioManual: 54975,
+    descripcion: 'Lechuga 0.5 unidad, Rúcula 0.5 atado, Espinaca 1kg, Tomate 2kg, Pepino 1kg, Palta 3 unidades, Manzana roja 2kg, Limón 1kg, Banana 2kg, Arándanos 1 bandeja, Remolacha 2 unidades',
+    productos: [
+      { nombre: 'Lechuga', cantidad: 0.5 },
+      { nombre: 'Rúcula', cantidad: 0.5 },
+      { nombre: 'Espinaca', cantidad: 1 },
+      { nombre: 'Tomate', cantidad: 2 },
+      { nombre: 'Pepino', cantidad: 1 },
+      { nombre: 'Palta', cantidad: 3 },
+      { nombre: 'Manzana roja', cantidad: 2 },
+      { nombre: 'Limón', cantidad: 1 },
+      { nombre: 'Banana', cantidad: 2 },
+      { nombre: 'Arándano', cantidad: 1 },
+      { nombre: 'Remolacha', cantidad: 2 }
+    ],
+    descuento: 0,
+    activo: true
+  },
+  {
+    id: 105,
+    nombre: 'COMBO 5 — Vegetariano',
+    precioManual: 66875,
+    descripcion: 'Berenjena 2kg, Zapallito 2kg, Tomate 2kg, Zanahoria 2kg, Pepino 1kg, Brócoli 2 unidades, Espinaca 1kg, Lechuga 0.5 unidad, Rúcula 0.5 atado, Palta 3 unidades, Banana 2kg, Manzana roja 2kg, Limón 1kg, Remolacha 2 unidades',
+    productos: [
+      { nombre: 'Berenjena', cantidad: 2 },
+      { nombre: 'Zapallito', cantidad: 2 },
+      { nombre: 'Tomate', cantidad: 2 },
+      { nombre: 'Zanahoria', cantidad: 2 },
+      { nombre: 'Pepino', cantidad: 1 },
+      { nombre: 'Brócoli', cantidad: 2 },
+      { nombre: 'Espinaca', cantidad: 1 },
+      { nombre: 'Lechuga', cantidad: 0.5 },
+      { nombre: 'Rúcula', cantidad: 0.5 },
+      { nombre: 'Palta', cantidad: 3 },
+      { nombre: 'Banana', cantidad: 2 },
+      { nombre: 'Manzana roja', cantidad: 2 },
+      { nombre: 'Limón', cantidad: 1 },
+      { nombre: 'Remolacha', cantidad: 2 }
+    ],
+    descuento: 0,
+    activo: true
+  },
+  {
+    id: 106,
+    nombre: 'COMBO 6 — Familiar',
+    precioManual: 75725,
+    descripcion: 'Papa 5kg, Cebolla 3kg, Zanahoria 2kg, Tomate 2kg, Zapallito 2kg, Banana 3kg, Naranja 2kg, Manzana roja 2kg, Lechuga 0.5 unidad, Remolacha 2 unidades, Choclo 6 unidades, Huevos 1 maple',
+    productos: [
+      { nombre: 'Papa', cantidad: 5 },
+      { nombre: 'Cebolla', cantidad: 3 },
+      { nombre: 'Zanahoria', cantidad: 2 },
+      { nombre: 'Tomate', cantidad: 2 },
+      { nombre: 'Zapallito', cantidad: 2 },
+      { nombre: 'Banana', cantidad: 3 },
+      { nombre: 'Naranja', cantidad: 2 },
+      { nombre: 'Manzana roja', cantidad: 2 },
+      { nombre: 'Lechuga', cantidad: 0.5 },
+      { nombre: 'Remolacha', cantidad: 2 },
+      { nombre: 'Choclo', cantidad: 6 },
+      { nombre: 'Huevos Nº1', cantidad: 1 }
+    ],
+    descuento: 0,
+    activo: true
+  },
+  {
+    id: 107,
+    nombre: 'COMBO 7 — Premium',
+    precioManual: 78750,
+    descripcion: 'Papa 3kg, Tomate 2kg, Morrón rojo 1kg, Banana 2kg, Manzana roja 2kg, Uva 1kg, Palta 3 unidades, Arándanos 1 bandeja, Huevos 2 maples, Miel 1kg, Espinaca 1kg',
+    productos: [
+      { nombre: 'Papa', cantidad: 3 },
+      { nombre: 'Tomate', cantidad: 2 },
+      { nombre: 'Morrón rojo', cantidad: 1 },
+      { nombre: 'Banana', cantidad: 2 },
+      { nombre: 'Manzana roja', cantidad: 2 },
+      { nombre: 'Uva', cantidad: 1 },
+      { nombre: 'Palta', cantidad: 3 },
+      { nombre: 'Arándano', cantidad: 1 },
+      { nombre: 'Huevos Nº1', cantidad: 2 },
+      { nombre: 'Miel', cantidad: 1 },
+      { nombre: 'Espinaca', cantidad: 1 }
+    ],
+    descuento: 0,
+    activo: true
+  }
 ];
 
 export default function PanelCostos() {
@@ -176,7 +320,7 @@ export default function PanelCostos() {
   const [showModalCombo, setShowModalCombo] = useState(false);
   const [comboEditando, setComboEditando] = useState(null);
   const [tempCombo, setTempCombo] = useState({
-    nombre: '', descripcion: '', productos: [], descuento: 0, activo: true
+    nombre: '', descripcion: '', productos: [], descuento: 0, precioManual: '', activo: true
   });
 
   // Lógica de cálculo de precios
@@ -219,7 +363,7 @@ export default function PanelCostos() {
         }
       });
 
-      const precioFinal = subtotal * (1 - c.descuento / 100);
+      const precioFinal = c.precioManual ? Number(c.precioManual) : subtotal * (1 - c.descuento / 100);
       return { ...c, subtotal, precioFinal, alertaProdOff };
     });
   }, [combos, productosCalculados]);
@@ -325,7 +469,7 @@ export default function PanelCostos() {
 
   const abrirModalNuevo = () => {
     setComboEditando(null);
-    setTempCombo({ nombre: '', descripcion: '', productos: [], descuento: 0, activo: true });
+    setTempCombo({ nombre: '', descripcion: '', productos: [], descuento: 0, precioManual: '', activo: true });
     setShowModalCombo(true);
   };
 
@@ -439,7 +583,7 @@ export default function PanelCostos() {
     <div className="space-y-8 pb-20">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-white">Panel de Costos v3.0</h2>
+          <h2 className="text-2xl font-bold text-white">Panel de Costos v3.1</h2>
           <p className="text-gray-500 text-sm mt-1">{error || 'Sincronizado con Google Sheets'}</p>
         </div>
         <div className="flex gap-3">
@@ -760,6 +904,7 @@ export default function PanelCostos() {
             <div className="flex-1 overflow-y-auto p-8 space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Nombre</label><input type="text" value={tempCombo.nombre} onChange={(e) => setTempCombo({...tempCombo, nombre: e.target.value})} className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3" /></div>
+                <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Precio Manual ($)</label><input type="number" placeholder="Calculado si vacío" value={tempCombo.precioManual} onChange={(e) => setTempCombo({...tempCombo, precioManual: e.target.value})} className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3" /></div>
                 <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Descuento %</label><input type="number" value={tempCombo.descuento} onChange={(e) => setTempCombo({...tempCombo, descuento: Number(e.target.value)})} className="w-full bg-[#111827] border border-gray-800 text-white rounded-xl px-4 py-3" /></div>
               </div>
               <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Productos</label>
