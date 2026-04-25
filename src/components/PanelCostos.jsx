@@ -12,7 +12,7 @@ const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
-import { getTipoByNombre, getUnidadByNombre } from '../data/productUtils';
+import { getTipoByNombre, getUnidadByNombre, pluralizar } from '../data/productUtils';
 
 const PRODUCTOS_INICIALES = [
   { id: 1, nombre: 'Papa', categoria: 'duro', cantidadCajon: 20, unidad: 'kg', precioCajon: 12000, margen: 60, activo: true },
@@ -525,7 +525,7 @@ export default function PanelCostos() {
       productos: productosCalculados.filter(p => p.activo).map(p => ({
         nombre: p.nombre,
         precio: p.precioFinal,
-        unidad: p.unidad === 'unidad' ? '' : p.unidad,
+        unidad: p.unidad,
         activo: true
       })),
       combos: combosCalculados.filter(c => c.activo).map(c => ({
@@ -538,22 +538,26 @@ export default function PanelCostos() {
           const cantidad = cp.cantidad;
           const unidad = (p ? p.unidad : '').toLowerCase();
 
-          // Reglas de formato del usuario:
-          // 1. Maple: "1 maple Nº1 x30" (SIN la palabra "Huevos")
+          // Reglas de formato del usuario con pluralización:
+          // 1. Maple: "1 maple Nº1 x30" o "2 maples Nº1 x30"
           if (unidad.includes('maple')) {
             const namePart = nombre.replace(/huevos/gi, '').trim();
-            return `${cantidad} maple ${namePart}${namePart.includes('x30') ? '' : ' x30'}`.replace(/\s+/g, ' ').trim();
+            const uPlural = pluralizar(cantidad, 'maple');
+            return `${cantidad} ${uPlural} ${namePart}${namePart.includes('x30') ? '' : ' x30'}`.replace(/\s+/g, ' ').trim();
           }
-          // 2. Por kilo: "2kg Papa"
+          // 2. Por kilo: "1 kilo Papa" o "2 kilos Papa"
           if (unidad.includes('kg')) {
-            return `${cantidad}kg ${nombre}`;
+            if (cantidad === 1) return `1 kilo ${nombre}`;
+            return `${cantidad} kilos ${nombre}`;
           }
-          // 3. Por atado: "1 atado Rúcula"
+          // 3. Por atado: "1 atado Rúcula" o "2 atados Rúcula"
           if (unidad.includes('atado')) {
-            return `${cantidad} atado ${nombre}`;
+            const uPlural = pluralizar(cantidad, 'atado');
+            return `${cantidad} ${uPlural} ${nombre}`;
           }
-          // 4. Por unidad: "3 Palta" (SIN la palabra "unidad")
-          return `${cantidad} ${nombre}`.replace(/\bunidad\b/gi, '').replace(/\s+/g, ' ').trim();
+          // 4. Por unidad: "1 Palta" o "3 Paltas" (SIN la palabra "unidad")
+          const nombrePlural = pluralizar(cantidad, nombre);
+          return `${cantidad} ${nombrePlural}`.replace(/\bunidad\b/gi, '').replace(/\s+/g, ' ').trim();
         }),
         activo: true
       }))

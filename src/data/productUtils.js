@@ -36,3 +36,36 @@ export function getUnidadByNombre(nombre) {
   
   return 'kg'; // Default
 }
+
+/**
+ * Pluraliza una palabra o unidad en base a la cantidad.
+ * Basado en reglas generales del español y casos específicos del dashboard.
+ */
+export function pluralizar(cantidad, palabra) {
+  if (!palabra || cantidad <= 1) return palabra;
+  
+  const p = palabra.toLowerCase().trim();
+  
+  // Casos específicos de unidades
+  if (p === 'kg') return 'kilos';
+  if (p === 'kilo') return 'kilos';
+  if (p === 'unidad') return 'unidades';
+  if (p === 'atado') return 'atados';
+  if (p === 'maple') return 'maples';
+  if (p === 'cabeza') return 'cabezas';
+  if (p === 'bandeja') return 'bandejas';
+  
+  // Reglas para nombres de productos (ej: Limón -> Limones)
+  // Quitar acento si termina en 'ón' -> 'ones'
+  if (palabra.toLowerCase().endsWith('ón')) {
+    return palabra.slice(0, -2) + 'ones';
+  }
+  
+  // Si termina en vocal (a, e, i, o, u o con acento)
+  if (/[aeiouáéíóú]$/i.test(palabra)) {
+    return palabra + 's';
+  }
+  
+  // Si termina en consonante
+  return palabra + 'es';
+}
