@@ -1,6 +1,8 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { MessageCircle, ShoppingBag, DollarSign, Calendar, ShoppingCart, AlertTriangle, Check, X } from 'lucide-react';
+import { db } from '../config/firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
 const $$ = (n) => {
   const num = Number(n);
@@ -98,22 +100,50 @@ export default function Clientes() {
     window.open(url, '_blank');
   };
 
-  const enviarCodigoReferido = (c) => {
+  const enviarCodigoReferido = async (c) => {
     let codigo = c.codigo_referido;
+    let nombreFirestore = '';
+
+    // 1. Intentar obtener el código y nombre desde Firestore
+    if (c.email) {
+      try {
+        const q = query(collection(db, "clientes"), where("email", "==", c.email));
+        const querySnapshot = await getDocs(q);
+        if (!querySnapshot.empty) {
+          const docData = querySnapshot.docs[0].data();
+          if (docData.codigo_referido) codigo = docData.codigo_referido;
+          if (docData.nombre) nombreFirestore = docData.nombre;
+        }
+      } catch (err) {
+        console.error("Error al consultar Firestore:", err);
+      }
+    }
+
+    // 2. Fallback: Generar si no existe
     if (!codigo) {
       const iniciales = (c.nombre || 'USR').split(' ')[0].toUpperCase().replace(/[^A-Z]/g, '');
       const num = Math.floor(1000 + Math.random() * 9000);
       codigo = `${iniciales}${num}`;
     }
-    if (actualizarDatosCliente) actualizarDatosCliente(c.sheetRowIndex, { codigo_referido: codigo, referido_estado: 'Enviado' });
+
+    // 3. Actualizar estado local y Google Sheets
+    if (actualizarDatosCliente) {
+      actualizarDatosCliente(c.sheetRowIndex, { codigo_referido: codigo, referido_estado: 'Enviado' });
+    }
     
-    const primerNombre = (c.nombre || '').split(' ')[0] || 'Cliente';
-    const texto = encodeURIComponent(`Hola ${primerNombre}! `) + "%F0%9F%8E%89" + 
-                  encodeURIComponent(`\nTu código de referido personal:\n`) + "%F0%9F%91%A5" + 
-                  encodeURIComponent(` ${codigo}\n\nCompartilo con amigos y familia:\n`) + "%E2%9C%85" + 
-                  encodeURIComponent(` Ellos reciben 10% de descuento\n`) + "%E2%9C%85" + 
-                  encodeURIComponent(` Vos recibís $5.000 de crédito por cada uno\nSin límite de referidos — válido 30 días!\n\nQue tengas un excelente día!\n`) + 
-                  "%F0%9F%8C%BF" + encodeURIComponent(` Huerta Urbana — 11 6177-1376`);
+    // 4. Preparar mensaje
+    const nombreFinal = nombreFirestore || c.nombre || 'Cliente';
+    const primerNombre = nombreFinal.split(' ')[0];
+    
+    const mensaje = `Hola ${primerNombre}! 🌿
+Gracias por tu compra en Huerta Urbana. Es un placer tenerte como cliente.
+Te compartimos tu código de referido personal: ${codigo}
+Cada vez que un amigo o familiar haga su primera compra usando tu código, vos acumulás $5.000 de crédito en tu cuenta. Y ellos reciben un 10% de descuento en su pedido. Todos ganan 🎉
+Podés ver tu crédito acumulado iniciando sesión en huertaurbana.com.ar
+Que tengas un hermoso día! ☀️
+El equipo de Huerta Urbana`;
+
+    const texto = encodeURIComponent(mensaje);
     const url = `https://web.whatsapp.com/send?phone=${(c.telefono || '').replace(/\D/g, '')}&text=${texto}`;
     window.open(url, '_blank');
   };
