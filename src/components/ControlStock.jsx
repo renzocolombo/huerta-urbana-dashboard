@@ -93,9 +93,9 @@ export default function ControlStock() {
   const [scanLog, setScanLog] = useState([]);             // array de últimos escaneos (max 8)
   const [scanError, setScanError] = useState(null);
   const [gestionPending, setGestionPending] = useState(null); // popup modo gestión
-  // Modo CARGA: productos acumulados esperando confirmación
-  // { [matchedId]: { nombre, prod, slots: { '500g': { bolsas, pesoTotal }, '1kg': { bolsas, pesoTotal } } } }
-  const [cargaPendiente, setCargaPendiente] = useState({});
+  // Modo CARGA: lista de bolsas escaneadas (sin agrupar)
+  // [{ id, matchedId, nombre, prod, slot, peso }]
+  const [cargaPendiente, setCargaPendiente] = useState([]);
   const scanInputRef = useRef(null);
   // Refs para acceder a valores actualizados dentro de callbacks estables
   const stockDataRef = useRef(stockData);
@@ -200,27 +200,18 @@ export default function ControlStock() {
     const slot = determinarSlot(prod.tipo, peso);
     const feedbackSlotLabel = DEFAULTS_BY_TYPE[prod.tipo]?.labels[slot === '500g' ? 'small' : 'large'] || slot;
 
-    // Acumular en cargaPendiente
-    setCargaPendiente(prev => {
-      const existing = prev[matchedId] || {
+    // Acumular en cargaPendiente como línea individual
+    setCargaPendiente(prev => [
+      ...prev,
+      {
+        id: Date.now().toString() + Math.random().toString(),
+        matchedId,
         nombre: prod.nombre,
         prod,
-        slots: { '500g': { bolsas: 0, pesoTotal: 0 }, '1kg': { bolsas: 0, pesoTotal: 0 } }
-      };
-      return {
-        ...prev,
-        [matchedId]: {
-          ...existing,
-          slots: {
-            ...existing.slots,
-            [slot]: {
-              bolsas: existing.slots[slot].bolsas + 1,
-              pesoTotal: Math.round((existing.slots[slot].pesoTotal + peso) * 1000) / 1000
-            }
-          }
-        }
-      };
-    });
+        slot,
+        peso
+      }
+    ]);
 
     // Feedback visual breve del escaneo recibido
     setLastScan({ ok: true, productoNombre: prod.nombre, peso, slot: feedbackSlotLabel, ts: Date.now(), accion: 'Pendiente' });
@@ -230,14 +221,26 @@ export default function ControlStock() {
 
   // ── Confirmar toda la carga pendiente al stock ───────────────────────────
   const confirmarCarga = useCallback(() => {
-    const pendientes = Object.entries(cargaPendiente);
-    if (pendientes.length === 0) return;
+    if (cargaPendiente.length === 0) return;
     const current = stockDataRef.current;
     const newData = { ...current };
     const today = new Date().toISOString().split('T')[0];
     const logEntries = [];
 
-    pendientes.forEach(([id, item]) => {
+    // Agrupar los pendientes por matchedId para hacer un solo update por producto
+    const grouped = cargaPendiente.reduce((acc, item) => {
+      if (!acc[item.matchedId]) {
+        acc[item.matchedId] = {
+          nombre: item.nombre,
+          slots: { '500g': { bolsas: 0, pesoTotal: 0 }, '1kg': { bolsas: 0, pesoTotal: 0 } }
+        };
+      }
+      acc[item.matchedId].slots[item.slot].bolsas += 1;
+      acc[item.matchedId].slots[item.slot].pesoTotal += item.peso;
+      return acc;
+    }, {});
+
+    Object.entries(grouped).forEach(([id, item]) => {
       if (!newData[id]) return;
       const prod = newData[id];
       const newStock = {
@@ -258,13 +261,13 @@ export default function ControlStock() {
 
     setStockData(newData);
     setScanLog(prev => [...logEntries, ...prev].slice(0, 8));
-    setCargaPendiente({});
+    setCargaPendiente([]);
     setLastScan(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cargaPendiente, setStockData]);
 
   const cancelarCarga = () => {
-    setCargaPendiente({});
+    setCargaPendiente([]);
     setLastScan(null);
     setScanError(null);
   };
@@ -533,7 +536,7 @@ export default function ControlStock() {
               Carga
             </button>
             <button
-              onClick={() => { setScanMode('gestion'); setGestionPending(null); setCargaPendiente({}); }}
+              onClick={() => { setScanMode('gestion'); setGestionPending(null); setCargaPendiente([]); }}
               className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-widest transition-all duration-200 ${
                 scanMode === 'gestion'
                   ? 'bg-orange-500/80 text-white shadow-lg shadow-orange-900/40'
@@ -664,36 +667,49 @@ export default function ControlStock() {
         )}
 
         {/* Lista de carga pendiente (solo en modo CARGA) */}
-        {scanMode === 'carga' && Object.keys(cargaPendiente).length > 0 && (
+        {scanMode === 'carga' && cargaPendiente.length > 0 && (
           <div className="mt-4 border border-green-500/20 bg-green-500/5 rounded-2xl overflow-hidden animate-in slide-in-from-top-1 duration-200">
-            <div className="px-4 py-3 border-b border-green-500/10">
+            <div className="px-4 py-3 border-b border-green-500/10 flex items-center justify-between">
               <p className="text-green-400 text-[9px] font-black uppercase tracking-[0.25em]">Pendiente de confirmar</p>
+              <p className="text-green-400/80 text-[10px] font-mono font-bold">{cargaPendiente.length} {cargaPendiente.length === 1 ? 'bolsa' : 'bolsas'} en total</p>
             </div>
-            <div className="divide-y divide-white/5">
-              {Object.entries(cargaPendiente).map(([id, item]) => {
-                const tipo = item.prod?.tipo;
-                const labels = DEFAULTS_BY_TYPE[tipo]?.labels || { small: '500g', large: '1kg' };
-                const b500 = item.slots['500g'].bolsas;
-                const b1k  = item.slots['1kg'].bolsas;
-                const totalBolsas = b500 + b1k;
-                const pesoTotal = Math.round((item.slots['500g'].pesoTotal + item.slots['1kg'].pesoTotal) * 1000) / 1000;
-                const detalleSlots = [
-                  b500 > 0 && `${b500} × ${labels.small}`,
-                  b1k  > 0 && `${b1k} × ${labels.large}`,
-                ].filter(Boolean).join(' + ');
+            <div className="divide-y divide-white/5 max-h-[300px] overflow-y-auto custom-scrollbar">
+              {(() => {
+                const productCounts = {};
+                let totalPeso = 0;
+                
+                const elements = cargaPendiente.map(item => {
+                  productCounts[item.matchedId] = (productCounts[item.matchedId] || 0) + 1;
+                  totalPeso += item.peso;
+                  
+                  return (
+                    <div key={item.id} className="flex items-center justify-between px-4 py-2.5 gap-3">
+                      <div className="min-w-0 flex items-center gap-2">
+                        <p className="text-white text-xs font-bold uppercase tracking-tight truncate">{item.nombre}</p>
+                        <span className="text-gray-500 text-[10px]">&mdash;</span>
+                        <p className="text-gray-400 text-[10px] font-mono">bolsa {productCounts[item.matchedId]}</p>
+                      </div>
+                      <div className="text-right shrink-0 flex items-center gap-3">
+                        <span className="text-gray-500 text-[9px] font-mono">{item.slot}</span>
+                        <p className="text-green-400 font-mono text-xs">{item.peso.toFixed(3)} kg</p>
+                      </div>
+                    </div>
+                  );
+                });
+
                 return (
-                  <div key={id} className="flex items-center justify-between px-4 py-2.5 gap-3">
-                    <div className="min-w-0">
-                      <p className="text-white text-xs font-bold uppercase tracking-tight truncate">{item.nombre}</p>
-                      <p className="text-gray-600 text-[9px] font-mono mt-0.5">{detalleSlots}</p>
+                  <>
+                    {elements}
+                    <div className="bg-green-500/10 px-4 py-3 flex justify-between items-center border-t border-green-500/20">
+                      <p className="text-green-400 text-[10px] font-black uppercase tracking-widest">Totales</p>
+                      <div className="text-right">
+                        <p className="text-green-400 font-black text-sm">{cargaPendiente.length} bolsas</p>
+                        <p className="text-green-400/70 text-[10px] font-mono">{totalPeso.toFixed(3)} kg</p>
+                      </div>
                     </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-green-400 font-black text-base leading-none">{totalBolsas}</p>
-                      <p className="text-gray-500 text-[9px] font-mono">{pesoTotal} kg</p>
-                    </div>
-                  </div>
+                  </>
                 );
-              })}
+              })()}
             </div>
             <div className="flex gap-2 p-3 border-t border-green-500/10">
               <button
