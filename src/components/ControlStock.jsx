@@ -92,7 +92,10 @@ export default function ControlStock() {
   const [lastScan, setLastScan] = useState(null);        // { productoNombre, peso, slot, ok, accion? }
   const [scanLog, setScanLog] = useState([]);             // array de últimos escaneos (max 8)
   const [scanError, setScanError] = useState(null);
-  const [gestionPending, setGestionPending] = useState(null); // { matchedId, prod, slot, peso, feedbackSlotLabel }
+  const [gestionPending, setGestionPending] = useState(null); // popup modo gestión
+  // Modo CARGA: productos acumulados esperando confirmación
+  // { [matchedId]: { nombre, prod, slots: { '500g': { bolsas, pesoTotal }, '1kg': { bolsas, pesoTotal } } } }
+  const [cargaPendiente, setCargaPendiente] = useState({});
   const scanInputRef = useRef(null);
   // Refs para acceder a valores actualizados dentro de callbacks estables
   const stockDataRef = useRef(stockData);
@@ -152,77 +155,119 @@ export default function ControlStock() {
     // ── MODO GESTIÓN: siempre mostrar popup, con lo que haya ───────────────────
     if (scanMode === 'gestion') {
       if (!resultado) {
-        // Parse falló: mostrar popup con código crudo
         setGestionPending({ matchedId: null, prod: null, slot: null, peso: null, feedbackSlotLabel: null, rawCode, nombre: null });
         setLastScan(null);
         return;
       }
-
       const { nombre, peso } = resultado;
       const current = stockDataRef.current;
-
       const matchedId = Object.keys(current).find(id => {
         const pNorm = norm(current[id].nombre);
         const sNorm = norm(nombre);
         return pNorm === sNorm || pNorm.includes(sNorm) || sNorm.includes(pNorm);
       });
-
       const prod = matchedId ? current[matchedId] : null;
       const slot = prod ? determinarSlot(prod.tipo, peso) : null;
       const feedbackSlotLabel = slot && prod
         ? DEFAULTS_BY_TYPE[prod.tipo]?.labels[slot === '500g' ? 'small' : 'large'] || slot
         : null;
-
       setGestionPending({ matchedId: matchedId || null, prod, slot, peso, feedbackSlotLabel, rawCode, nombre: prod?.nombre || nombre });
       setLastScan(null);
       return;
     }
 
-    // ── MODO CARGA: errores visibles + +1 inmediato ───────────────────────
+    // ── MODO CARGA: acumular en pendiente ───────────────────────────────────────
     if (!resultado) {
       setScanError(`Formato inválido: "${rawCode}" — usar NOMBRE-PESO (ej: PAPA-1.120)`);
       setLastScan({ ok: false, raw: rawCode, ts: Date.now() });
       setTimeout(() => setLastScan(null), 4000);
       return;
     }
-
     const { nombre, peso } = resultado;
     const current = stockDataRef.current;
-
     const matchedId = Object.keys(current).find(id => {
       const pNorm = norm(current[id].nombre);
       const sNorm = norm(nombre);
       return pNorm === sNorm || pNorm.includes(sNorm) || sNorm.includes(pNorm);
     });
-
     if (!matchedId) {
       setScanError(`Producto no encontrado: "${nombre}" — verificá el nombre en la etiqueta`);
       setLastScan({ ok: false, raw: rawCode, nombre, ts: Date.now() });
       setTimeout(() => setLastScan(null), 4000);
       return;
     }
-
     const prod = current[matchedId];
     const slot = determinarSlot(prod.tipo, peso);
     const feedbackSlotLabel = DEFAULTS_BY_TYPE[prod.tipo]?.labels[slot === '500g' ? 'small' : 'large'] || slot;
 
-    const today = new Date().toISOString().split('T')[0];
-    const newStock = { ...prod.stock, [slot]: prod.stock[slot] + 1 };
-    const newOriginalLoad = {
-      ...prod.originalLoad,
-      [slot]: Math.max(prod.originalLoad[slot] || 0, newStock[slot])
-    };
-    const newData = { ...current };
-    newData[matchedId] = { ...prod, stock: newStock, originalLoad: newOriginalLoad, ultimoBandejeado: today };
-    setStockData(newData);
-    syncWithSheet(newData[matchedId]);
+    // Acumular en cargaPendiente
+    setCargaPendiente(prev => {
+      const existing = prev[matchedId] || {
+        nombre: prod.nombre,
+        prod,
+        slots: { '500g': { bolsas: 0, pesoTotal: 0 }, '1kg': { bolsas: 0, pesoTotal: 0 } }
+      };
+      return {
+        ...prev,
+        [matchedId]: {
+          ...existing,
+          slots: {
+            ...existing.slots,
+            [slot]: {
+              bolsas: existing.slots[slot].bolsas + 1,
+              pesoTotal: Math.round((existing.slots[slot].pesoTotal + peso) * 1000) / 1000
+            }
+          }
+        }
+      };
+    });
 
-    const entry = { ok: true, productoNombre: prod.nombre, peso, slot: feedbackSlotLabel, ts: Date.now(), accion: 'Carga' };
-    setLastScan(entry);
-    setScanLog(prev => [entry, ...prev].slice(0, 8));
-    setTimeout(() => setLastScan(null), 3000);
+    // Feedback visual breve del escaneo recibido
+    setLastScan({ ok: true, productoNombre: prod.nombre, peso, slot: feedbackSlotLabel, ts: Date.now(), accion: 'Pendiente' });
+    setTimeout(() => setLastScan(null), 1500);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setStockData, scanMode]);
+  }, [scanMode, setStockData]);
+
+  // ── Confirmar toda la carga pendiente al stock ───────────────────────────
+  const confirmarCarga = useCallback(() => {
+    const pendientes = Object.entries(cargaPendiente);
+    if (pendientes.length === 0) return;
+    const current = stockDataRef.current;
+    const newData = { ...current };
+    const today = new Date().toISOString().split('T')[0];
+    const logEntries = [];
+
+    pendientes.forEach(([id, item]) => {
+      if (!newData[id]) return;
+      const prod = newData[id];
+      const newStock = {
+        '500g': prod.stock['500g'] + item.slots['500g'].bolsas,
+        '1kg':  prod.stock['1kg']  + item.slots['1kg'].bolsas,
+      };
+      const newOriginalLoad = {
+        '500g': Math.max(prod.originalLoad['500g'] || 0, newStock['500g']),
+        '1kg':  Math.max(prod.originalLoad['1kg']  || 0, newStock['1kg']),
+      };
+      newData[id] = { ...prod, stock: newStock, originalLoad: newOriginalLoad, ultimoBandejeado: today };
+      syncWithSheet(newData[id]);
+
+      const totalBolsas = item.slots['500g'].bolsas + item.slots['1kg'].bolsas;
+      const pesoTotal = Math.round((item.slots['500g'].pesoTotal + item.slots['1kg'].pesoTotal) * 1000) / 1000;
+      logEntries.push({ ok: true, productoNombre: item.nombre, peso: pesoTotal, slot: `${totalBolsas} bolsa${totalBolsas !== 1 ? 's' : ''}`, ts: Date.now(), accion: 'Carga' });
+    });
+
+    setStockData(newData);
+    setScanLog(prev => [...logEntries, ...prev].slice(0, 8));
+    setCargaPendiente({});
+    setLastScan(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cargaPendiente, setStockData]);
+
+  const cancelarCarga = () => {
+    setCargaPendiente({});
+    setLastScan(null);
+    setScanError(null);
+  };
 
   // ── Aplicar acción de Gestión ─────────────────────────────────────────────
   const applyGestionAccion = useCallback((accion) => {
@@ -488,7 +533,7 @@ export default function ControlStock() {
               Carga
             </button>
             <button
-              onClick={() => { setScanMode('gestion'); setGestionPending(null); }}
+              onClick={() => { setScanMode('gestion'); setGestionPending(null); setCargaPendiente({}); }}
               className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-widest transition-all duration-200 ${
                 scanMode === 'gestion'
                   ? 'bg-orange-500/80 text-white shadow-lg shadow-orange-900/40'
@@ -511,11 +556,11 @@ export default function ControlStock() {
         </div>
 
         {/* Descripción del modo activo */}
-        <div className={`flex items-center gap-2.5 mb-4 px-1`}>
+        <div className="flex items-center gap-2.5 mb-4 px-1">
           <ScanBarcode size={14} className={scanMode === 'carga' ? 'text-green-400' : 'text-orange-400'} />
           <p className="text-gray-500 text-[10px] uppercase font-bold tracking-widest">
             {scanMode === 'carga'
-              ? 'Escaneo → suma +1 bolsa al stock automáticamente'
+              ? 'Escaneo → acumula en lista — confirmá para subir al stock'
               : 'Escaneo → aparece popup para elegir qué hacer con la bolsa'}
           </p>
         </div>
@@ -618,8 +663,57 @@ export default function ControlStock() {
           </div>
         )}
 
+        {/* Lista de carga pendiente (solo en modo CARGA) */}
+        {scanMode === 'carga' && Object.keys(cargaPendiente).length > 0 && (
+          <div className="mt-4 border border-green-500/20 bg-green-500/5 rounded-2xl overflow-hidden animate-in slide-in-from-top-1 duration-200">
+            <div className="px-4 py-3 border-b border-green-500/10">
+              <p className="text-green-400 text-[9px] font-black uppercase tracking-[0.25em]">Pendiente de confirmar</p>
+            </div>
+            <div className="divide-y divide-white/5">
+              {Object.entries(cargaPendiente).map(([id, item]) => {
+                const tipo = item.prod?.tipo;
+                const labels = DEFAULTS_BY_TYPE[tipo]?.labels || { small: '500g', large: '1kg' };
+                const b500 = item.slots['500g'].bolsas;
+                const b1k  = item.slots['1kg'].bolsas;
+                const totalBolsas = b500 + b1k;
+                const pesoTotal = Math.round((item.slots['500g'].pesoTotal + item.slots['1kg'].pesoTotal) * 1000) / 1000;
+                const detalleSlots = [
+                  b500 > 0 && `${b500} × ${labels.small}`,
+                  b1k  > 0 && `${b1k} × ${labels.large}`,
+                ].filter(Boolean).join(' + ');
+                return (
+                  <div key={id} className="flex items-center justify-between px-4 py-2.5 gap-3">
+                    <div className="min-w-0">
+                      <p className="text-white text-xs font-bold uppercase tracking-tight truncate">{item.nombre}</p>
+                      <p className="text-gray-600 text-[9px] font-mono mt-0.5">{detalleSlots}</p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-green-400 font-black text-base leading-none">{totalBolsas}</p>
+                      <p className="text-gray-500 text-[9px] font-mono">{pesoTotal} kg</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex gap-2 p-3 border-t border-green-500/10">
+              <button
+                onClick={cancelarCarga}
+                className="flex-1 py-2.5 rounded-xl bg-white/5 text-gray-400 hover:text-white hover:bg-white/10 text-[11px] font-black uppercase tracking-widest transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmarCarga}
+                className="flex-[2] py-2.5 rounded-xl bg-green-600 hover:bg-green-500 text-white text-[11px] font-black uppercase tracking-widest transition-all border-b-2 border-green-800 active:border-b-0 active:translate-y-px shadow-lg"
+              >
+                Confirmar todo al stock
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Feedback del último escaneo */}
-        {!gestionPending && lastScan && lastScan.ok && (
+        {!gestionPending && lastScan && lastScan.ok && lastScan.accion !== 'Pendiente' && (
           <div className="mt-3 flex items-center gap-2 px-1 animate-in slide-in-from-top-1 duration-200">
             <span className="text-green-400">✓</span>
             <p className="text-green-400 text-xs font-bold uppercase tracking-wide">
@@ -627,6 +721,16 @@ export default function ControlStock() {
               <span className="text-green-300/60 font-normal ml-2">
                 {lastScan.accion === 'Carga' ? '+1 bolsa' : `−1 bolsa · ${lastScan.accion}`} · {lastScan.slot} · {lastScan.peso} kg
               </span>
+            </p>
+          </div>
+        )}
+        {/* Flash breve al escanear en modo carga */}
+        {!gestionPending && lastScan && lastScan.ok && lastScan.accion === 'Pendiente' && (
+          <div className="mt-3 flex items-center gap-2 px-1 animate-in slide-in-from-top-1 duration-200">
+            <span className="text-green-400">✓</span>
+            <p className="text-green-400 text-xs font-bold uppercase tracking-wide">
+              {lastScan.productoNombre}
+              <span className="text-green-300/60 font-normal ml-2">agregado a la lista · {lastScan.slot} · {lastScan.peso} kg</span>
             </p>
           </div>
         )}
