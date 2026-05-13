@@ -96,9 +96,8 @@ export default function ControlStock() {
   const scanInputRef = useRef(null);
   // Refs para acceder a valores actualizados dentro de callbacks estables
   const stockDataRef = useRef(stockData);
-  const scanModeRef = useRef(scanMode);
   useEffect(() => { stockDataRef.current = stockData; }, [stockData]);
-  useEffect(() => { scanModeRef.current = scanMode; }, [scanMode]);
+  // Nota: scanMode NO usa ref — se captura directamente en el closure de procesarEscaneo
 
   useEffect(() => {
     // Si ya tenemos datos procesados en stockData (que es un Objeto), no inicializar de nuevo
@@ -151,7 +150,7 @@ export default function ControlStock() {
     const resultado = parsearCodigoBarras(rawCode);
 
     // ── MODO GESTIÓN: siempre mostrar popup, con lo que haya ───────────────────
-    if (scanModeRef.current === 'gestion') {
+    if (scanMode === 'gestion') {
       if (!resultado) {
         // Parse falló: mostrar popup con código crudo
         setGestionPending({ matchedId: null, prod: null, slot: null, peso: null, feedbackSlotLabel: null, rawCode, nombre: null });
@@ -223,7 +222,7 @@ export default function ControlStock() {
     setScanLog(prev => [entry, ...prev].slice(0, 8));
     setTimeout(() => setLastScan(null), 3000);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setStockData]);
+  }, [setStockData, scanMode]);
 
   // ── Aplicar acción de Gestión ─────────────────────────────────────────────
   const applyGestionAccion = useCallback((accion) => {
