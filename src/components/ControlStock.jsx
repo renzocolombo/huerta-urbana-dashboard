@@ -532,20 +532,43 @@ export default function ControlStock() {
                 <X size={14} />
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex flex-col gap-2">
               {[
-                { accion: 'Sacar del stock',   emoji: '📤', color: 'bg-red-500/15 border-red-500/30 text-red-300 hover:bg-red-500/25' },
-                { accion: 'Liquidación',        emoji: '🏷️', color: 'bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25' },
-                { accion: 'Consumo propio',     emoji: '🍴', color: 'bg-blue-500/15 border-blue-500/30 text-blue-300 hover:bg-blue-500/25' },
-                { accion: 'Asignar a pedido',   emoji: '📦', color: 'bg-purple-500/15 border-purple-500/30 text-purple-300 hover:bg-purple-500/25' },
-              ].map(({ accion, emoji, color }) => (
+                {
+                  accion: 'Sacar del stock',
+                  emoji: '📤',
+                  desc: 'Error de escaneo — elimina la bolsa sin registrar nada',
+                  color: 'bg-red-500/10 border-red-500/25 hover:bg-red-500/20',
+                  textColor: 'text-red-300',
+                  descColor: 'text-red-400/60',
+                },
+                {
+                  accion: 'Consumo propio',
+                  emoji: '🍴',
+                  desc: 'Sale del stock, registra el costo sin ganancia',
+                  color: 'bg-blue-500/10 border-blue-500/25 hover:bg-blue-500/20',
+                  textColor: 'text-blue-300',
+                  descColor: 'text-blue-400/60',
+                },
+                {
+                  accion: 'Liquidaci\u00f3n',
+                  emoji: '\ud83c\udff7\ufe0f',
+                  desc: 'Sale del stock y queda en lista de liquidaci\u00f3n',
+                  color: 'bg-amber-500/10 border-amber-500/25 hover:bg-amber-500/20',
+                  textColor: 'text-amber-300',
+                  descColor: 'text-amber-400/60',
+                },
+              ].map(({ accion, emoji, desc, color, textColor, descColor }) => (
                 <button
                   key={accion}
                   onClick={() => applyGestionAccion(accion)}
-                  className={`${color} border rounded-xl px-3 py-3 text-left transition-all active:scale-95`}
+                  className={`${color} border rounded-2xl px-4 py-3 text-left transition-all active:scale-[0.98] flex items-center gap-4`}
                 >
-                  <span className="text-base block mb-1">{emoji}</span>
-                  <span className="text-[11px] font-black uppercase tracking-tight block">{accion}</span>
+                  <span className="text-xl shrink-0">{emoji}</span>
+                  <div className="min-w-0">
+                    <span className={`text-[12px] font-black uppercase tracking-tight block ${textColor}`}>{accion}</span>
+                    <span className={`text-[10px] font-medium ${descColor} block mt-0.5 leading-tight`}>{desc}</span>
+                  </div>
                 </button>
               ))}
             </div>
