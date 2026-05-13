@@ -149,6 +149,37 @@ export default function ControlStock() {
     setGestionPending(null);
 
     const resultado = parsearCodigoBarras(rawCode);
+
+    // ── MODO GESTIÓN: siempre mostrar popup, con lo que haya ───────────────────
+    if (scanModeRef.current === 'gestion') {
+      if (!resultado) {
+        // Parse falló: mostrar popup con código crudo
+        setGestionPending({ matchedId: null, prod: null, slot: null, peso: null, feedbackSlotLabel: null, rawCode, nombre: null });
+        setLastScan(null);
+        return;
+      }
+
+      const { nombre, peso } = resultado;
+      const current = stockDataRef.current;
+
+      const matchedId = Object.keys(current).find(id => {
+        const pNorm = norm(current[id].nombre);
+        const sNorm = norm(nombre);
+        return pNorm === sNorm || pNorm.includes(sNorm) || sNorm.includes(pNorm);
+      });
+
+      const prod = matchedId ? current[matchedId] : null;
+      const slot = prod ? determinarSlot(prod.tipo, peso) : null;
+      const feedbackSlotLabel = slot && prod
+        ? DEFAULTS_BY_TYPE[prod.tipo]?.labels[slot === '500g' ? 'small' : 'large'] || slot
+        : null;
+
+      setGestionPending({ matchedId: matchedId || null, prod, slot, peso, feedbackSlotLabel, rawCode, nombre: prod?.nombre || nombre });
+      setLastScan(null);
+      return;
+    }
+
+    // ── MODO CARGA: errores visibles + +1 inmediato ───────────────────────
     if (!resultado) {
       setScanError(`Formato inválido: "${rawCode}" — usar NOMBRE-PESO (ej: PAPA-1.120)`);
       setLastScan({ ok: false, raw: rawCode, ts: Date.now() });
@@ -176,50 +207,47 @@ export default function ControlStock() {
     const slot = determinarSlot(prod.tipo, peso);
     const feedbackSlotLabel = DEFAULTS_BY_TYPE[prod.tipo]?.labels[slot === '500g' ? 'small' : 'large'] || slot;
 
-    // ── MODO CARGA: +1 inmediato ────────────────────────────────────────────
-    if (scanModeRef.current === 'carga') {
-      const today = new Date().toISOString().split('T')[0];
-      const newStock = { ...prod.stock, [slot]: prod.stock[slot] + 1 };
-      const newOriginalLoad = {
-        ...prod.originalLoad,
-        [slot]: Math.max(prod.originalLoad[slot] || 0, newStock[slot])
-      };
-      const newData = { ...current };
-      newData[matchedId] = { ...prod, stock: newStock, originalLoad: newOriginalLoad, ultimoBandejeado: today };
-      setStockData(newData);
-      syncWithSheet(newData[matchedId]);
+    const today = new Date().toISOString().split('T')[0];
+    const newStock = { ...prod.stock, [slot]: prod.stock[slot] + 1 };
+    const newOriginalLoad = {
+      ...prod.originalLoad,
+      [slot]: Math.max(prod.originalLoad[slot] || 0, newStock[slot])
+    };
+    const newData = { ...current };
+    newData[matchedId] = { ...prod, stock: newStock, originalLoad: newOriginalLoad, ultimoBandejeado: today };
+    setStockData(newData);
+    syncWithSheet(newData[matchedId]);
 
-      const entry = { ok: true, productoNombre: prod.nombre, peso, slot: feedbackSlotLabel, ts: Date.now(), accion: 'Carga' };
-      setLastScan(entry);
-      setScanLog(prev => [entry, ...prev].slice(0, 8));
-      setTimeout(() => setLastScan(null), 3000);
-      return;
-    }
-
-    // ── MODO GESTIÓN: mostrar popup ─────────────────────────────────────────
-    setGestionPending({ matchedId, prod, slot, peso, feedbackSlotLabel });
-    // Limpiar lastScan para que no interfiera
-    setLastScan(null);
+    const entry = { ok: true, productoNombre: prod.nombre, peso, slot: feedbackSlotLabel, ts: Date.now(), accion: 'Carga' };
+    setLastScan(entry);
+    setScanLog(prev => [entry, ...prev].slice(0, 8));
+    setTimeout(() => setLastScan(null), 3000);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setStockData]);
 
   // ── Aplicar acción de Gestión ─────────────────────────────────────────────
   const applyGestionAccion = useCallback((accion) => {
     if (!gestionPending) return;
-    const { matchedId, prod, slot, peso, feedbackSlotLabel } = gestionPending;
+    const { matchedId, prod, slot, peso, feedbackSlotLabel, rawCode, nombre } = gestionPending;
     const current = stockDataRef.current;
 
-    // Todas las acciones de gestión restan 1 bolsa del slot
-    const newStock = {
-      ...prod.stock,
-      [slot]: Math.max(0, prod.stock[slot] - 1)
-    };
-    const newData = { ...current };
-    newData[matchedId] = { ...prod, stock: newStock };
-    setStockData(newData);
-    syncWithSheet(newData[matchedId]);
+    // Solo modificar stock si el producto fue identificado correctamente
+    if (matchedId && prod && slot) {
+      const newStock = {
+        ...prod.stock,
+        [slot]: Math.max(0, prod.stock[slot] - 1)
+      };
+      const newData = { ...current };
+      newData[matchedId] = { ...prod, stock: newStock };
+      setStockData(newData);
+      syncWithSheet(newData[matchedId]);
+    }
 
-    const entry = { ok: true, productoNombre: prod.nombre, peso, slot: feedbackSlotLabel, ts: Date.now(), accion };
+    const displayNombre = prod?.nombre || nombre || rawCode || 'Producto desconocido';
+    const displayPeso = peso || 0;
+    const displaySlot = feedbackSlotLabel || '—';
+
+    const entry = { ok: true, productoNombre: displayNombre, peso: displayPeso, slot: displaySlot, ts: Date.now(), accion, sinStock: !matchedId };
     setLastScan(entry);
     setScanLog(prev => [entry, ...prev].slice(0, 8));
     setGestionPending(null);
@@ -522,8 +550,24 @@ export default function ControlStock() {
             <div className="flex items-start justify-between mb-3">
               <div>
                 <p className="text-orange-400 text-[9px] font-black uppercase tracking-widest mb-0.5">Bolsa escaneada — ¿qué hacemos?</p>
-                <p className="text-white font-black text-sm uppercase">{gestionPending.prod.nombre}</p>
-                <p className="text-gray-500 text-[10px] font-mono">{gestionPending.feedbackSlotLabel} · {gestionPending.peso} kg</p>
+                {gestionPending.prod ? (
+                  <>
+                    <p className="text-white font-black text-sm uppercase">{gestionPending.prod.nombre}</p>
+                    <p className="text-gray-500 text-[10px] font-mono">
+                      {gestionPending.feedbackSlotLabel} · {gestionPending.peso} kg
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-red-300 font-black text-sm uppercase">Producto no reconocido</p>
+                    <p className="text-gray-600 text-[10px] font-mono break-all">
+                      {gestionPending.nombre
+                        ? `Nombre detectado: ${gestionPending.nombre}`
+                        : `Código: ${gestionPending.rawCode}`}
+                    </p>
+                    <p className="text-red-400/60 text-[9px] mt-1">El stock no será modificado</p>
+                  </>
+                )}
               </div>
               <button
                 onClick={() => { setGestionPending(null); setTimeout(() => scanInputRef.current?.focus(), 100); }}
