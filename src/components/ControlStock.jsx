@@ -676,11 +676,18 @@ export default function ControlStock() {
             <div className="divide-y divide-white/5 max-h-[300px] overflow-y-auto custom-scrollbar">
               {(() => {
                 const productCounts = {};
+                const productTotals = {};
                 let totalPeso = 0;
                 
                 const elements = cargaPendiente.map(item => {
                   productCounts[item.matchedId] = (productCounts[item.matchedId] || 0) + 1;
                   totalPeso += item.peso;
+                  
+                  if (!productTotals[item.matchedId]) {
+                    productTotals[item.matchedId] = { nombre: item.nombre, bolsas: 0, peso: 0 };
+                  }
+                  productTotals[item.matchedId].bolsas += 1;
+                  productTotals[item.matchedId].peso += item.peso;
                   
                   return (
                     <div key={item.id} className="flex items-center justify-between px-4 py-2.5 gap-3">
@@ -700,11 +707,25 @@ export default function ControlStock() {
                 return (
                   <>
                     {elements}
-                    <div className="bg-green-500/10 px-4 py-3 flex justify-between items-center border-t border-green-500/20">
-                      <p className="text-green-400 text-[10px] font-black uppercase tracking-widest">Totales</p>
-                      <div className="text-right">
-                        <p className="text-green-400 font-black text-sm">{cargaPendiente.length} bolsas</p>
-                        <p className="text-green-400/70 text-[10px] font-mono">{totalPeso.toFixed(3)} kg</p>
+                    <div className="bg-green-500/10 px-4 py-3 border-t border-green-500/20">
+                      <p className="text-green-400 text-[9px] font-black uppercase tracking-widest mb-2">Resumen por producto</p>
+                      <div className="space-y-1 mb-3">
+                        {Object.values(productTotals).map(pt => (
+                          <div key={pt.nombre} className="flex justify-between items-center text-[10px]">
+                            <span className="text-green-400/80 font-bold uppercase">{pt.nombre}</span>
+                            <div className="flex gap-3 text-right">
+                              <span className="text-green-400 font-black">{pt.bolsas} bolsas</span>
+                              <span className="text-green-400/60 font-mono">{pt.peso.toFixed(3)} kg</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex justify-between items-center border-t border-green-500/10 pt-2">
+                        <p className="text-green-400 text-[10px] font-black uppercase tracking-widest">Total General</p>
+                        <div className="text-right flex gap-3 items-end">
+                          <p className="text-green-400 font-black text-sm leading-none">{cargaPendiente.length} bolsas</p>
+                          <p className="text-green-400/70 text-[10px] font-mono leading-none">{totalPeso.toFixed(3)} kg</p>
+                        </div>
                       </div>
                     </div>
                   </>
