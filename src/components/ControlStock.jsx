@@ -1,9 +1,10 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   AlertTriangle, TrendingUp, Package, Plus, History, 
   Check, Info, Box, Edit2, RotateCcw, X, Save,
-  AlertCircle, Loader2, Settings, ChevronDown, ChevronUp
+  AlertCircle, Loader2, Settings, ChevronDown, ChevronUp,
+  ScanBarcode, Trash2
 } from 'lucide-react';
 
 // Configuración de entorno
@@ -37,6 +38,40 @@ function getTipoByNombre(nombre) {
   return 'hoja verde'; // Default
 }
 
+// ─── Parseo de código de barras ────────────────────────────────────────────
+// Formatos soportados:
+//   1. "PRODUCTO PESO"  → ej: "espinaca 0.450"
+//   2. "PRODUCTO:PESO"  → ej: "tomate:1.2"
+//   3. "PRODUCTO-PESO"  → ej: "zanahoria-0.8"
+//   4. Código EAN-13 con peso embebido (tipo 2): primeros 7 dígitos = producto, últimos 5 = peso en gramos
+//   5. Código libre: sólo texto (sin peso) → suma +1 bolsa, peso=0
+function parsearCodigoBarras(raw) {
+  const code = raw.trim();
+  if (!code) return null;
+
+  // Intento 1: separadores explícitos " ", ":" o "-" seguidos de número decimal
+  const sepMatch = code.match(/^(.+?)[:\- ]+([0-9]+(?:[.,][0-9]+)?)\s*(?:kg|g)?$/i);
+  if (sepMatch) {
+    const nombre = sepMatch[1].trim().toLowerCase();
+    let pesoRaw = sepMatch[2].replace(',', '.');
+    let peso = parseFloat(pesoRaw);
+    // Si el número parece estar en gramos (>= 100), convertir a kg
+    if (peso >= 100) peso = peso / 1000;
+    return { nombre, peso: Math.round(peso * 1000) / 1000 };
+  }
+
+  // Intento 2: EAN-13 tipo 2 (empieza en 2, 13 dígitos)
+  if (/^2\d{12}$/.test(code)) {
+    const pesoDigits = code.substring(7, 12);
+    const peso = parseInt(pesoDigits, 10) / 1000;
+    // Sin nombre de producto en EAN puro → usar código como nombre
+    return { nombre: code.substring(1, 7), peso: Math.round(peso * 1000) / 1000 };
+  }
+
+  // Intento 3: sólo nombre (sin peso) → bolsa sin peso
+  return { nombre: code.toLowerCase(), peso: 0 };
+}
+
 export default function ControlStock() {
   const { stockData, setStockData, productosCostos: contextMaster, stockData: contextStock } = useGoogleSheets();
   const [productosMaster, setProductosMaster] = useState([]);
@@ -45,6 +80,13 @@ export default function ControlStock() {
   const [error, setError] = useState(null);
   const [expandedCategory, setExpandedCategory] = useState(null);
   const isCargando = useRef(false);
+
+  // ── Scanner state ──────────────────────────────────────────────────────────
+  const [scanBuffer, setScanBuffer] = useState('');
+  const [lastScan, setLastScan] = useState(null);          // { nombre, peso, ts }
+  const [scanData, setScanData] = useState({});            // { nombreNorm: { nombre, bolsas, pesoTotal } }
+  const [scanError, setScanError] = useState(null);
+  const scanInputRef = useRef(null);
 
   useEffect(() => {
     // Si ya tenemos datos procesados en stockData (que es un Objeto), no inicializar de nuevo
@@ -71,6 +113,71 @@ export default function ControlStock() {
       cargarStockDesdeSheet();
     }
   }, []); // Solo al montar
+
+  // ── Scanner: mantener foco ─────────────────────────────────────────────────
+  const refocusScanner = useCallback(() => {
+    // Sólo re-enfoca si no hay otro input/textarea activo
+    const active = document.activeElement;
+    const isOtherInput = active && active !== scanInputRef.current &&
+      (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT');
+    if (!isOtherInput && scanInputRef.current) {
+      scanInputRef.current.focus();
+    }
+  }, []);
+
+  useEffect(() => {
+    refocusScanner();
+    const interval = setInterval(refocusScanner, 2000);
+    return () => clearInterval(interval);
+  }, [refocusScanner]);
+
+  // ── Scanner: procesar código escaneado ────────────────────────────────────
+  const procesarEscaneo = useCallback((rawCode) => {
+    setScanError(null);
+    const resultado = parsearCodigoBarras(rawCode);
+    if (!resultado) {
+      setScanError('Código no reconocido: ' + rawCode);
+      return;
+    }
+    const { nombre, peso } = resultado;
+    const key = nombre.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
+
+    setScanData(prev => {
+      const existing = prev[key] || { nombre, bolsas: 0, pesoTotal: 0 };
+      return {
+        ...prev,
+        [key]: {
+          nombre: existing.nombre || nombre,
+          bolsas: existing.bolsas + 1,
+          pesoTotal: Math.round((existing.pesoTotal + peso) * 1000) / 1000
+        }
+      };
+    });
+
+    setLastScan({ nombre, peso, ts: Date.now() });
+    setTimeout(() => setLastScan(null), 3000);
+  }, []);
+
+  const handleScanInput = (e) => {
+    setScanBuffer(e.target.value);
+  };
+
+  const handleScanKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const code = scanBuffer.trim();
+      setScanBuffer('');
+      if (code) procesarEscaneo(code);
+    }
+  };
+
+  const resetScanData = () => {
+    if (confirm('¿Borrar todos los datos de escaneo acumulados?')) {
+      setScanData({});
+      setLastScan(null);
+      setScanError(null);
+    }
+  };
 
   const cargarStockDesdeSheet = async () => {
     if (isCargando.current) return;
@@ -267,6 +374,104 @@ export default function ControlStock() {
 
   return (
     <div className="space-y-6 pb-20">
+
+      {/* ═══════════════════════════════════════════════════════════════════
+           ZONA DE ESCANEO — siempre visible, siempre en foco
+      ════════════════════════════════════════════════════════════════════ */}
+      <div className="bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 border border-white/10 rounded-3xl p-5 shadow-2xl">
+        {/* Header scanner */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-green-500/15 flex items-center justify-center">
+              <ScanBarcode size={18} className="text-green-400" />
+            </div>
+            <div>
+              <p className="text-white font-black text-sm uppercase tracking-wider">Escaneo de Bolsas</p>
+              <p className="text-gray-600 text-[9px] uppercase font-bold tracking-widest">Campo siempre activo · Pistola USB lista</p>
+            </div>
+          </div>
+          {Object.keys(scanData).length > 0 && (
+            <button
+              onClick={resetScanData}
+              className="p-2 rounded-xl bg-white/5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-all"
+              title="Borrar datos de escaneo"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
+        </div>
+
+        {/* Campo de escaneo */}
+        <div className="relative">
+          <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
+            <div className={`w-2 h-2 rounded-full transition-all ${
+              document.activeElement === scanInputRef.current
+                ? 'bg-green-400 shadow-[0_0_8px_2px_rgba(74,222,128,0.6)] animate-pulse'
+                : 'bg-gray-600'
+            }`} />
+          </div>
+          <input
+            ref={scanInputRef}
+            type="text"
+            value={scanBuffer}
+            onChange={handleScanInput}
+            onKeyDown={handleScanKeyDown}
+            onBlur={() => setTimeout(refocusScanner, 100)}
+            placeholder="Apuntá la pistola aquí y escaneá..."
+            className="w-full bg-black/40 border border-white/10 focus:border-green-500/60 text-white text-sm font-mono rounded-2xl pl-10 pr-4 py-3.5 outline-none transition-all placeholder:text-gray-600 focus:bg-black/60 focus:shadow-[0_0_20px_rgba(74,222,128,0.08)]"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+
+        {/* Feedback de último escaneo */}
+        {lastScan && (
+          <div className="mt-3 flex items-center gap-2 px-1 animate-in slide-in-from-top-1 duration-200">
+            <span className="text-green-400 text-sm">✓</span>
+            <p className="text-green-400 text-xs font-bold uppercase tracking-wide">
+              {lastScan.nombre}
+              {lastScan.peso > 0 && <span className="text-green-300/60 ml-1 font-normal">· {lastScan.peso} kg</span>}
+            </p>
+          </div>
+        )}
+        {scanError && !lastScan && (
+          <div className="mt-3 flex items-center gap-2 px-1">
+            <span className="text-red-400 text-sm">⚠</span>
+            <p className="text-red-400 text-xs font-bold">{scanError}</p>
+          </div>
+        )}
+
+        {/* Tabla de productos escaneados */}
+        {Object.keys(scanData).length > 0 && (
+          <div className="mt-4 border-t border-white/5 pt-4">
+            <p className="text-[9px] font-black text-gray-600 uppercase tracking-[0.25em] mb-3">Resumen del turno</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {Object.values(scanData).map((item) => (
+                <div
+                  key={item.nombre}
+                  className="bg-black/30 border border-white/5 rounded-2xl px-4 py-3 flex items-center justify-between gap-3 hover:border-green-500/20 transition-all"
+                >
+                  <div className="min-w-0">
+                    <p className="text-white font-bold text-xs uppercase tracking-tight truncate">{item.nombre}</p>
+                    <p className="text-gray-600 text-[9px] font-mono mt-0.5">
+                      {item.bolsas} {item.bolsas === 1 ? 'bolsa' : 'bolsas'}
+                      {item.pesoTotal > 0 && <span className="ml-1 text-green-500/70">· {item.pesoTotal.toFixed(3)} kg</span>}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-green-400 font-black text-lg leading-none">{item.bolsas}</p>
+                    {item.pesoTotal > 0 && (
+                      <p className="text-gray-500 text-[9px] font-mono">{item.pesoTotal.toFixed(2)} kg</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      {/* ════════════════════════════════════════════════════════════════════ */}
+
       <div className="flex justify-between items-end">
         <div>
           <h2 className="text-xl font-bold text-white tracking-tight">Control de Stock</h2>
