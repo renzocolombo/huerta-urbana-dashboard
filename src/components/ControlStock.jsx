@@ -4,7 +4,7 @@ import {
   AlertTriangle, TrendingUp, Package, Plus, History, 
   Check, Info, Box, Edit2, RotateCcw, X, Save,
   AlertCircle, Loader2, Settings, ChevronDown, ChevronUp,
-  ScanBarcode, Trash2
+  ScanBarcode, Trash2, Zap, ClipboardList
 } from 'lucide-react';
 
 // Configuración de entorno
@@ -87,14 +87,18 @@ export default function ControlStock() {
   const isCargando = useRef(false);
 
   // ── Scanner state ──────────────────────────────────────────────────────────
+  const [scanMode, setScanMode] = useState('carga');    // 'carga' | 'gestion'
   const [scanBuffer, setScanBuffer] = useState('');
-  const [lastScan, setLastScan] = useState(null);   // { nombre, peso, slot, productoNombre, ok } - feedback visual
-  const [scanLog, setScanLog] = useState([]);        // array de últimos escaneos (max 8)
+  const [lastScan, setLastScan] = useState(null);        // { productoNombre, peso, slot, ok, accion? }
+  const [scanLog, setScanLog] = useState([]);             // array de últimos escaneos (max 8)
   const [scanError, setScanError] = useState(null);
+  const [gestionPending, setGestionPending] = useState(null); // { matchedId, prod, slot, peso, feedbackSlotLabel }
   const scanInputRef = useRef(null);
-  // Ref para acceder al stockData actualizado dentro del callback de procesarEscaneo
+  // Refs para acceder a valores actualizados dentro de callbacks estables
   const stockDataRef = useRef(stockData);
+  const scanModeRef = useRef(scanMode);
   useEffect(() => { stockDataRef.current = stockData; }, [stockData]);
+  useEffect(() => { scanModeRef.current = scanMode; }, [scanMode]);
 
   useEffect(() => {
     // Si ya tenemos datos procesados en stockData (que es un Objeto), no inicializar de nuevo
@@ -139,9 +143,10 @@ export default function ControlStock() {
     return () => clearInterval(interval);
   }, [refocusScanner]);
 
-  // ── Scanner: procesar código escaneado → actualiza stock real ────────────
+  // ── Scanner: procesar código escaneado ───────────────────────────────────
   const procesarEscaneo = useCallback((rawCode) => {
     setScanError(null);
+    setGestionPending(null);
 
     const resultado = parsearCodigoBarras(rawCode);
     if (!resultado) {
@@ -154,7 +159,6 @@ export default function ControlStock() {
     const { nombre, peso } = resultado;
     const current = stockDataRef.current;
 
-    // Buscar el producto en stockData por coincidencia de nombre (exacta → parcial)
     const matchedId = Object.keys(current).find(id => {
       const pNorm = norm(current[id].nombre);
       const sNorm = norm(nombre);
@@ -170,37 +174,60 @@ export default function ControlStock() {
 
     const prod = current[matchedId];
     const slot = determinarSlot(prod.tipo, peso);
-    const today = new Date().toISOString().split('T')[0];
+    const feedbackSlotLabel = DEFAULTS_BY_TYPE[prod.tipo]?.labels[slot === '500g' ? 'small' : 'large'] || slot;
 
-    // Construir el patch: +1 en el slot correcto, actualizar originalLoad y fecha
+    // ── MODO CARGA: +1 inmediato ────────────────────────────────────────────
+    if (scanModeRef.current === 'carga') {
+      const today = new Date().toISOString().split('T')[0];
+      const newStock = { ...prod.stock, [slot]: prod.stock[slot] + 1 };
+      const newOriginalLoad = {
+        ...prod.originalLoad,
+        [slot]: Math.max(prod.originalLoad[slot] || 0, newStock[slot])
+      };
+      const newData = { ...current };
+      newData[matchedId] = { ...prod, stock: newStock, originalLoad: newOriginalLoad, ultimoBandejeado: today };
+      setStockData(newData);
+      syncWithSheet(newData[matchedId]);
+
+      const entry = { ok: true, productoNombre: prod.nombre, peso, slot: feedbackSlotLabel, ts: Date.now(), accion: 'Carga' };
+      setLastScan(entry);
+      setScanLog(prev => [entry, ...prev].slice(0, 8));
+      setTimeout(() => setLastScan(null), 3000);
+      return;
+    }
+
+    // ── MODO GESTIÓN: mostrar popup ─────────────────────────────────────────
+    setGestionPending({ matchedId, prod, slot, peso, feedbackSlotLabel });
+    // Limpiar lastScan para que no interfiera
+    setLastScan(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setStockData]);
+
+  // ── Aplicar acción de Gestión ─────────────────────────────────────────────
+  const applyGestionAccion = useCallback((accion) => {
+    if (!gestionPending) return;
+    const { matchedId, prod, slot, peso, feedbackSlotLabel } = gestionPending;
+    const current = stockDataRef.current;
+
+    // Todas las acciones de gestión restan 1 bolsa del slot
     const newStock = {
       ...prod.stock,
-      [slot]: prod.stock[slot] + 1
+      [slot]: Math.max(0, prod.stock[slot] - 1)
     };
-    const newOriginalLoad = {
-      ...prod.originalLoad,
-      [slot]: Math.max(prod.originalLoad[slot] || 0, newStock[slot])
-    };
-    const patch = {
-      stock: newStock,
-      originalLoad: newOriginalLoad,
-      ultimoBandejeado: today
-    };
-
-    // Actualizar estado global y sincronizar con la Sheet
     const newData = { ...current };
-    newData[matchedId] = { ...prod, ...patch };
+    newData[matchedId] = { ...prod, stock: newStock };
     setStockData(newData);
     syncWithSheet(newData[matchedId]);
 
-    // Feedback visual
-    const feedbackSlotLabel = DEFAULTS_BY_TYPE[prod.tipo]?.labels[slot === '500g' ? 'small' : 'large'] || slot;
-    const entry = { ok: true, productoNombre: prod.nombre, peso, slot: feedbackSlotLabel, ts: Date.now() };
+    const entry = { ok: true, productoNombre: prod.nombre, peso, slot: feedbackSlotLabel, ts: Date.now(), accion };
     setLastScan(entry);
     setScanLog(prev => [entry, ...prev].slice(0, 8));
+    setGestionPending(null);
     setTimeout(() => setLastScan(null), 3000);
+    // Re-foco al campo
+    setTimeout(() => scanInputRef.current?.focus(), 150);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setStockData]);
+  }, [gestionPending, setStockData]);
 
   const handleScanInput = (e) => {
     setScanBuffer(e.target.value);
@@ -414,27 +441,56 @@ export default function ControlStock() {
       {/* ═══════════════════════════════════════════════════════════════════
            ZONA DE ESCANEO — siempre visible, siempre en foco
       ════════════════════════════════════════════════════════════════════ */}
-      <div className="bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 border border-white/10 rounded-3xl p-5 shadow-2xl">
-        {/* Header scanner */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-green-500/15 flex items-center justify-center">
-              <ScanBarcode size={18} className="text-green-400" />
-            </div>
-            <div>
-              <p className="text-white font-black text-sm uppercase tracking-wider">Carga por Escaneo</p>
-              <p className="text-gray-600 text-[9px] uppercase font-bold tracking-widest">Formato: NOMBRE-PESO · ej: PAPA-1.120 · Pistola USB lista</p>
-            </div>
+      <div className={`border rounded-3xl p-5 shadow-2xl transition-all duration-300 ${
+        scanMode === 'carga'
+          ? 'bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 border-white/10'
+          : 'bg-gradient-to-br from-gray-900 via-[#0d1a14] to-gray-900 border-orange-500/20'
+      }`}>
+        {/* Toggle CARGA / GESTIÓN */}
+        <div className="flex items-center gap-2 mb-4">
+          <div className="flex bg-black/40 border border-white/5 rounded-2xl p-1 gap-1 flex-1">
+            <button
+              onClick={() => { setScanMode('carga'); setGestionPending(null); }}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-widest transition-all duration-200 ${
+                scanMode === 'carga'
+                  ? 'bg-green-600 text-white shadow-lg shadow-green-900/40'
+                  : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              <Zap size={13} />
+              Carga
+            </button>
+            <button
+              onClick={() => { setScanMode('gestion'); setGestionPending(null); }}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-widest transition-all duration-200 ${
+                scanMode === 'gestion'
+                  ? 'bg-orange-500/80 text-white shadow-lg shadow-orange-900/40'
+                  : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              <ClipboardList size={13} />
+              Gestión
+            </button>
           </div>
           {scanLog.length > 0 && (
             <button
               onClick={() => setScanLog([])}
-              className="p-2 rounded-xl bg-white/5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-all"
-              title="Limpiar historial de escaneo"
+              className="p-2.5 rounded-xl bg-white/5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-all shrink-0"
+              title="Limpiar historial"
             >
               <Trash2 size={14} />
             </button>
           )}
+        </div>
+
+        {/* Descripción del modo activo */}
+        <div className={`flex items-center gap-2.5 mb-4 px-1`}>
+          <ScanBarcode size={14} className={scanMode === 'carga' ? 'text-green-400' : 'text-orange-400'} />
+          <p className="text-gray-500 text-[10px] uppercase font-bold tracking-widest">
+            {scanMode === 'carga'
+              ? 'Escaneo → suma +1 bolsa al stock automáticamente'
+              : 'Escaneo → aparece popup para elegir qué hacer con la bolsa'}
+          </p>
         </div>
 
         {/* Campo de escaneo */}
@@ -460,23 +516,61 @@ export default function ControlStock() {
           />
         </div>
 
+        {/* Popup de Gestión */}
+        {gestionPending && (
+          <div className="mt-4 bg-black/60 border border-orange-500/30 rounded-2xl p-4 animate-in slide-in-from-top-2 duration-200">
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <p className="text-orange-400 text-[9px] font-black uppercase tracking-widest mb-0.5">Bolsa escaneada — ¿qué hacemos?</p>
+                <p className="text-white font-black text-sm uppercase">{gestionPending.prod.nombre}</p>
+                <p className="text-gray-500 text-[10px] font-mono">{gestionPending.feedbackSlotLabel} · {gestionPending.peso} kg</p>
+              </div>
+              <button
+                onClick={() => { setGestionPending(null); setTimeout(() => scanInputRef.current?.focus(), 100); }}
+                className="p-1.5 text-gray-600 hover:text-white transition-colors"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { accion: 'Sacar del stock',   emoji: '📤', color: 'bg-red-500/15 border-red-500/30 text-red-300 hover:bg-red-500/25' },
+                { accion: 'Liquidación',        emoji: '🏷️', color: 'bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25' },
+                { accion: 'Consumo propio',     emoji: '🍴', color: 'bg-blue-500/15 border-blue-500/30 text-blue-300 hover:bg-blue-500/25' },
+                { accion: 'Asignar a pedido',   emoji: '📦', color: 'bg-purple-500/15 border-purple-500/30 text-purple-300 hover:bg-purple-500/25' },
+              ].map(({ accion, emoji, color }) => (
+                <button
+                  key={accion}
+                  onClick={() => applyGestionAccion(accion)}
+                  className={`${color} border rounded-xl px-3 py-3 text-left transition-all active:scale-95`}
+                >
+                  <span className="text-base block mb-1">{emoji}</span>
+                  <span className="text-[11px] font-black uppercase tracking-tight block">{accion}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Feedback del último escaneo */}
-        {lastScan && lastScan.ok && (
+        {!gestionPending && lastScan && lastScan.ok && (
           <div className="mt-3 flex items-center gap-2 px-1 animate-in slide-in-from-top-1 duration-200">
             <span className="text-green-400">✓</span>
             <p className="text-green-400 text-xs font-bold uppercase tracking-wide">
               {lastScan.productoNombre}
-              <span className="text-green-300/60 font-normal ml-2">+1 bolsa {lastScan.slot} · {lastScan.peso} kg → stock actualizado</span>
+              <span className="text-green-300/60 font-normal ml-2">
+                {lastScan.accion === 'Carga' ? '+1 bolsa' : `−1 bolsa · ${lastScan.accion}`} · {lastScan.slot} · {lastScan.peso} kg
+              </span>
             </p>
           </div>
         )}
-        {lastScan && !lastScan.ok && (
+        {!gestionPending && lastScan && !lastScan.ok && (
           <div className="mt-3 flex items-center gap-2 px-1">
             <span className="text-red-400">⚠</span>
             <p className="text-red-400 text-xs font-bold">{scanError}</p>
           </div>
         )}
-        {!lastScan && scanError && (
+        {!gestionPending && !lastScan && scanError && (
           <div className="mt-3 flex items-center gap-2 px-1">
             <span className="text-red-400">⚠</span>
             <p className="text-red-400 text-xs font-bold">{scanError}</p>
@@ -488,20 +582,28 @@ export default function ControlStock() {
           <div className="mt-4 border-t border-white/5 pt-4">
             <p className="text-[9px] font-black text-gray-600 uppercase tracking-[0.25em] mb-2">Últimos escaneos</p>
             <div className="space-y-1">
-              {scanLog.map((entry, i) => (
-                <div key={entry.ts} className={`flex items-center justify-between gap-2 px-3 py-2 rounded-xl transition-all ${
-                  i === 0 ? 'bg-green-500/10 border border-green-500/20' : 'bg-black/20 border border-white/5'
-                }`}>
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-green-400 text-[10px] shrink-0">+1</span>
-                    <p className="text-white text-xs font-bold uppercase truncate">{entry.productoNombre}</p>
+              {scanLog.map((entry, i) => {
+                const isAdd = entry.accion === 'Carga';
+                return (
+                  <div key={entry.ts} className={`flex items-center justify-between gap-2 px-3 py-2 rounded-xl transition-all ${
+                    i === 0
+                      ? isAdd ? 'bg-green-500/10 border border-green-500/20' : 'bg-orange-500/10 border border-orange-500/20'
+                      : 'bg-black/20 border border-white/5'
+                  }`}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`text-[10px] shrink-0 font-mono font-bold ${ isAdd ? 'text-green-400' : 'text-orange-400' }`}>
+                        {isAdd ? '+1' : '−1'}
+                      </span>
+                      <p className="text-white text-xs font-bold uppercase truncate">{entry.productoNombre}</p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {!isAdd && <span className="text-orange-400/70 text-[9px] font-bold">{entry.accion}</span>}
+                      <span className="text-gray-500 text-[9px] font-mono">{entry.slot}</span>
+                      <span className={`text-[9px] font-mono ${ isAdd ? 'text-green-500/70' : 'text-orange-500/70' }`}>{entry.peso} kg</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span className="text-gray-500 text-[9px] font-mono">{entry.slot}</span>
-                    <span className="text-green-500/70 text-[9px] font-mono">{entry.peso} kg</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
