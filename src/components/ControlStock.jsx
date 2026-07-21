@@ -4,7 +4,7 @@ import {
   AlertTriangle, TrendingUp, Package, Plus, History, 
   Check, Info, Box, Edit2, RotateCcw, X, Save,
   AlertCircle, Loader2, Settings, ChevronDown, ChevronUp,
-  ScanBarcode, Trash2, Zap, ClipboardList
+  ScanBarcode, Trash2, Zap, ClipboardList, Scale, Printer, CheckCircle2
 } from 'lucide-react';
 
 // Configuración de entorno
@@ -85,6 +85,9 @@ export default function ControlStock() {
   const [error, setError] = useState(null);
   const [expandedCategory, setExpandedCategory] = useState(null);
   const isCargando = useRef(false);
+
+  // ── Sub-pestaña interna del bloque de escaneo ────────────────────────────
+  const [stockSubTab, setStockSubTab] = useState('escanear'); // 'escanear' | 'pesar'
 
   // ── Scanner state ──────────────────────────────────────────────────────────
   const [scanMode, setScanMode] = useState('carga');    // 'carga' | 'gestion'
@@ -514,8 +517,41 @@ export default function ControlStock() {
     <div className="space-y-6 pb-20">
 
       {/* ═══════════════════════════════════════════════════════════════════
-           ZONA DE ESCANEO — siempre visible, siempre en foco
+           ZONA DE ESCANEO + PESAR Y ETIQUETAR — sub-pestañas internas
       ════════════════════════════════════════════════════════════════════ */}
+      {/* Sub-pestañas internas */}
+      <div className="flex bg-black/40 border border-white/5 rounded-2xl p-1 gap-1">
+        <button
+          onClick={() => setStockSubTab('escanear')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-widest transition-all duration-200 ${
+            stockSubTab === 'escanear'
+              ? 'bg-green-600 text-white shadow-lg shadow-green-900/40'
+              : 'text-gray-500 hover:text-gray-300'
+          }`}
+        >
+          <ScanBarcode size={13} />
+          Escanear
+        </button>
+        <button
+          onClick={() => setStockSubTab('pesar')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-widest transition-all duration-200 ${
+            stockSubTab === 'pesar'
+              ? 'bg-purple-600 text-white shadow-lg shadow-purple-900/40'
+              : 'text-gray-500 hover:text-gray-300'
+          }`}
+        >
+          <Scale size={13} />
+          Pesar y Etiquetar
+        </button>
+      </div>
+
+      {/* ── SUB-PESTAÑA: PESAR Y ETIQUETAR ──────────────────────────────── */}
+      {stockSubTab === 'pesar' && (
+        <PesarYEtiquetar stockData={stockData} setStockData={setStockData} syncWithSheet={syncWithSheet} />
+      )}
+
+      {/* ── SUB-PESTAÑA: ESCANEAR ────────────────────────────────────────── */}
+      {stockSubTab === 'escanear' && (
       <div className={`border rounded-3xl p-5 shadow-2xl transition-all duration-300 ${
         scanMode === 'carga'
           ? 'bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 border-white/10'
@@ -815,6 +851,7 @@ export default function ControlStock() {
           </div>
         )}
       </div>
+      )}{/* fin sub-pestaña escanear */}
       {/* ════════════════════════════════════════════════════════════════════ */}
 
       <div className="flex justify-between items-end">
@@ -1112,4 +1149,332 @@ function AddStockInline({ nombre, labels, currentStock, onCancel, onSave }) {
       </div>
     </div>
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPONENTE: Pesar y Etiquetar
+// ─────────────────────────────────────────────────────────────────────────────
+function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
+  const productList = useMemo(() => {
+    if (!stockData || typeof stockData !== 'object') return [];
+    return Object.entries(stockData)
+      .map(([id, p]) => ({ id, nombre: p.nombre }))
+      .filter(p => p.nombre)
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [stockData]);
+
+  const [selectedId, setSelectedId] = useState('');
+  const [peso, setPeso] = useState('');
+  const [sesion, setSesion] = useState([]); // [{ id, nombre, peso }]
+  const [confirmando, setConfirmando] = useState(false);
+  const [confirmado, setConfirmado] = useState(false);
+  const pesoRef = useRef(null);
+
+  // Foco automático al montar y después de cada bolsa
+  useEffect(() => {
+    if (pesoRef.current) pesoRef.current.focus();
+  }, []);
+
+  // Si no hay producto seleccionado y hay productos, seleccionar el primero
+  useEffect(() => {
+    if (!selectedId && productList.length > 0) {
+      setSelectedId(productList[0].id);
+    }
+  }, [productList, selectedId]);
+
+  const confirmarBolsa = useCallback(() => {
+    const pesoNum = parseFloat(peso.replace(',', '.'));
+    if (!selectedId || isNaN(pesoNum) || pesoNum <= 0) return;
+
+    const producto = productList.find(p => p.id === selectedId);
+    if (!producto) return;
+
+    const nuevaBolsa = {
+      id: Date.now().toString() + Math.random(),
+      productId: selectedId,
+      nombre: producto.nombre,
+      peso: Math.round(pesoNum * 1000) / 1000,
+    };
+
+    setSesion(prev => [...prev, nuevaBolsa]);
+    imprimirEtiqueta(producto.nombre, nuevaBolsa.peso);
+
+    // Limpiar peso y re-enfocar
+    setPeso('');
+    setTimeout(() => pesoRef.current?.focus(), 50);
+  }, [selectedId, peso, productList]);
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      confirmarBolsa();
+    }
+  };
+
+  const confirmarTodoAlStock = async () => {
+    if (sesion.length === 0) return;
+    setConfirmando(true);
+
+    const current = { ...stockData };
+    // Agrupar por productId
+    const grouped = sesion.reduce((acc, item) => {
+      if (!acc[item.productId]) acc[item.productId] = { nombre: item.nombre, bolsas: 0, pesoTotal: 0, items: [] };
+      acc[item.productId].bolsas += 1;
+      acc[item.productId].pesoTotal += item.peso;
+      // Determinar slot por peso
+      const prod = current[item.productId];
+      const tipo = prod?.tipo || 'duro';
+      const slot = determinarSlot(tipo, item.peso);
+      acc[item.productId].items.push({ slot, peso: item.peso });
+      return acc;
+    }, {});
+
+    const newData = { ...current };
+    const today = new Date().toISOString().split('T')[0];
+
+    for (const [id, group] of Object.entries(grouped)) {
+      if (!newData[id]) continue;
+      const prod = newData[id];
+      const slots500 = group.items.filter(i => i.slot === '500g').length;
+      const slots1kg = group.items.filter(i => i.slot === '1kg').length;
+      const newStock = {
+        '500g': prod.stock['500g'] + slots500,
+        '1kg': prod.stock['1kg'] + slots1kg,
+      };
+      const newOriginalLoad = {
+        '500g': Math.max(prod.originalLoad['500g'] || 0, newStock['500g']),
+        '1kg': Math.max(prod.originalLoad['1kg'] || 0, newStock['1kg']),
+      };
+      newData[id] = { ...prod, stock: newStock, originalLoad: newOriginalLoad, ultimoBandejeado: today };
+      syncWithSheet(newData[id]);
+    }
+
+    setStockData(newData);
+    setConfirmando(false);
+    setConfirmado(true);
+    setSesion([]);
+    setTimeout(() => setConfirmado(false), 3000);
+  };
+
+  const eliminarBolsa = (id) => {
+    setSesion(prev => prev.filter(b => b.id !== id));
+  };
+
+  return (
+    <div className="border border-purple-500/20 rounded-3xl p-5 shadow-2xl bg-gradient-to-br from-gray-900 via-[#100d1a] to-gray-900 space-y-4 animate-in slide-in-from-top-2 duration-300">
+      {/* Cabecera */}
+      <div className="flex items-center gap-2.5 mb-1">
+        <Scale size={14} className="text-purple-400" />
+        <p className="text-gray-500 text-[10px] uppercase font-bold tracking-widest">
+          Seleccioná el producto, ingresá el peso y presioná OK
+        </p>
+      </div>
+
+      {/* Selector de producto */}
+      <div className="space-y-1">
+        <label className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Producto</label>
+        <select
+          value={selectedId}
+          onChange={e => setSelectedId(e.target.value)}
+          className="w-full bg-black/40 border border-white/10 focus:border-purple-500/60 text-white text-sm font-bold rounded-2xl px-4 py-3 outline-none transition-all appearance-none cursor-pointer"
+        >
+          {productList.map(p => (
+            <option key={p.id} value={p.id} className="bg-gray-900">
+              {p.nombre.toUpperCase()}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Campo de peso + botón OK */}
+      <div className="space-y-1">
+        <label className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Peso (kg)</label>
+        <div className="flex gap-2">
+          <input
+            ref={pesoRef}
+            type="number"
+            step="0.001"
+            min="0"
+            value={peso}
+            onChange={e => setPeso(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="0.000"
+            className="flex-1 bg-black/40 border border-white/10 focus:border-purple-500/60 text-white text-xl font-black font-mono rounded-2xl px-4 py-3 outline-none transition-all placeholder:text-gray-700 focus:bg-black/60 focus:shadow-[0_0_20px_rgba(168,85,247,0.1)] text-center"
+          />
+          <button
+            onClick={confirmarBolsa}
+            disabled={!selectedId || !peso || parseFloat(peso) <= 0}
+            className="px-6 py-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-30 disabled:cursor-not-allowed text-white font-black text-sm rounded-2xl border-b-2 border-purple-800 active:border-b-0 active:translate-y-px shadow-lg transition-all uppercase tracking-widest flex items-center gap-2"
+          >
+            <Printer size={15} />
+            OK
+          </button>
+        </div>
+      </div>
+
+      {/* Lista de sesión */}
+      {sesion.length > 0 && (
+        <div className="border border-purple-500/20 bg-purple-500/5 rounded-2xl overflow-hidden animate-in slide-in-from-top-1 duration-200">
+          <div className="px-4 py-3 border-b border-purple-500/10 flex items-center justify-between">
+            <p className="text-purple-400 text-[9px] font-black uppercase tracking-[0.25em]">Bolsas en esta sesión</p>
+            <p className="text-purple-400/80 text-[10px] font-mono font-bold">{sesion.length} {sesion.length === 1 ? 'bolsa' : 'bolsas'}</p>
+          </div>
+          <div className="divide-y divide-white/5 max-h-[260px] overflow-y-auto custom-scrollbar">
+            {sesion.map((bolsa, i) => (
+              <div key={bolsa.id} className="flex items-center justify-between px-4 py-2.5 gap-3 group hover:bg-white/5 transition-colors">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="text-purple-400/50 text-[10px] font-mono w-5 text-right shrink-0">#{i + 1}</span>
+                  <p className="text-white text-xs font-bold uppercase tracking-tight truncate">{bolsa.nombre}</p>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <p className="text-purple-400 font-mono text-xs font-bold">{bolsa.peso.toFixed(3)} kg</p>
+                  <button
+                    onClick={() => eliminarBolsa(bolsa.id)}
+                    className="opacity-0 group-hover:opacity-100 p-1 text-gray-600 hover:text-red-400 transition-all"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {/* Resumen y confirmación */}
+          <div className="p-3 border-t border-purple-500/10">
+            <div className="flex items-center justify-between text-[10px] font-mono mb-3 px-1">
+              <span className="text-purple-400/70">Total sesión:</span>
+              <span className="text-purple-400 font-black">
+                {sesion.reduce((s, b) => s + b.peso, 0).toFixed(3)} kg
+              </span>
+            </div>
+            {confirmado ? (
+              <div className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-green-500/10 border border-green-500/20">
+                <CheckCircle2 size={14} className="text-green-400" />
+                <span className="text-green-400 text-[11px] font-black uppercase tracking-widest">¡Stock actualizado!</span>
+              </div>
+            ) : (
+              <button
+                onClick={confirmarTodoAlStock}
+                disabled={confirmando}
+                className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-[11px] font-black uppercase tracking-widest transition-all border-b-2 border-purple-800 active:border-b-0 active:translate-y-px shadow-lg flex items-center justify-center gap-2"
+              >
+                {confirmando ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                Confirmar todo al stock
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {sesion.length === 0 && (
+        <div className="text-center py-6 text-gray-700">
+          <Scale size={28} className="mx-auto mb-2 opacity-30" />
+          <p className="text-[10px] font-bold uppercase tracking-widest opacity-50">Aún no pesaste ninguna bolsa</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Función global de impresión de etiquetas ──────────────────────────────────
+function imprimirEtiqueta(nombreProducto, pesoKg) {
+  // Código de barras: NOMBRE-PESO (ej: PAPA-1.250)
+  const nombreCode = nombreProducto.toUpperCase().replace(/\s+/g, '-').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const pesoStr = pesoKg.toFixed(3);
+  const barcodeValue = `${nombreCode}-${pesoStr}`;
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Etiqueta</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"><\/script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  @page {
+    size: 80mm 50mm;
+    margin: 0;
+  }
+  body {
+    width: 80mm;
+    height: 50mm;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Arial', sans-serif;
+    background: white;
+    padding: 3mm;
+    gap: 1mm;
+  }
+  .brand {
+    font-size: 11pt;
+    font-weight: 900;
+    color: #1a5c2a;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    text-align: center;
+    line-height: 1.1;
+  }
+  .url {
+    font-size: 6pt;
+    color: #555;
+    letter-spacing: 0.02em;
+    text-align: center;
+  }
+  .divider {
+    width: 100%;
+    height: 0.3mm;
+    background: #1a5c2a;
+    opacity: 0.25;
+    margin: 0.5mm 0;
+  }
+  .product-name {
+    font-size: 14pt;
+    font-weight: 900;
+    color: #111;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    text-align: center;
+  }
+  .weight {
+    font-size: 11pt;
+    font-weight: 700;
+    color: #333;
+    text-align: center;
+  }
+  svg#barcode {
+    max-width: 74mm;
+    height: auto;
+  }
+</style>
+</head>
+<body>
+  <div class="brand">🌱 HUERTA URBANA</div>
+  <div class="url">huertaurbana.com.ar</div>
+  <div class="divider"></div>
+  <div class="product-name">${nombreProducto.toUpperCase()}</div>
+  <div class="weight">${pesoStr} kg</div>
+  <svg id="barcode"></svg>
+  <script>
+    window.onload = function() {
+      JsBarcode('#barcode', '${barcodeValue}', {
+        format: 'CODE128',
+        width: 1.5,
+        height: 28,
+        displayValue: true,
+        fontSize: 7,
+        margin: 0,
+        background: 'transparent',
+      });
+      setTimeout(function() { window.print(); window.close(); }, 400);
+    };
+  <\/script>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank', 'width=400,height=350');
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+  }
 }
