@@ -1477,77 +1477,121 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"><\/script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
+
   @page {
-    size: 80mm 50mm;
+    size: 80mm 50mm landscape;
     margin: 0;
   }
-  body {
+
+  html, body {
     width: 80mm;
     height: 50mm;
+    background: white;
+    overflow: hidden;
+  }
+
+  .etiqueta {
+    width: 80mm;
+    height: 50mm;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    font-family: 'Arial', sans-serif;
+    font-family: Arial, Helvetica, sans-serif;
     background: white;
-    padding: 3mm;
-    gap: 1mm;
+    padding: 2.5mm 3mm;
+    gap: 0.8mm;
   }
+
   .brand {
-    font-size: 11pt;
+    font-size: 10pt;
     font-weight: 900;
     color: #1a5c2a;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
     text-align: center;
-    line-height: 1.1;
+    line-height: 1;
+    white-space: nowrap;
   }
   .url {
-    font-size: 6pt;
+    font-size: 5.5pt;
     color: #555;
     letter-spacing: 0.02em;
     text-align: center;
+    white-space: nowrap;
   }
   .divider {
-    width: 100%;
+    width: 90%;
     height: 0.3mm;
     background: #1a5c2a;
-    opacity: 0.25;
-    margin: 0.5mm 0;
+    opacity: 0.3;
+    flex-shrink: 0;
   }
   .product-name {
-    font-size: 14pt;
+    font-size: 13pt;
     font-weight: 900;
     color: #111;
     text-transform: uppercase;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.02em;
     text-align: center;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 76mm;
   }
   .weight {
-    font-size: 11pt;
+    font-size: 10pt;
     font-weight: 700;
     color: #333;
     text-align: center;
+    line-height: 1;
   }
   svg#barcode {
+    width: 74mm;
     max-width: 74mm;
     height: auto;
+    flex-shrink: 0;
+    display: block;
+  }
+
+  @media print {
+    html, body {
+      width: 80mm;
+      height: 50mm;
+      overflow: hidden;
+    }
+    body > *:not(.etiqueta) {
+      display: none !important;
+    }
+    .etiqueta {
+      width: 80mm;
+      height: 50mm;
+      position: fixed;
+      top: 0;
+      left: 0;
+      page-break-after: avoid;
+      page-break-inside: avoid;
+    }
   }
 </style>
 </head>
 <body>
-  <div class="brand">🌱 HUERTA URBANA</div>
-  <div class="url">huertaurbana.com.ar</div>
-  <div class="divider"></div>
-  <div class="product-name">${nombreProducto.toUpperCase()}</div>
-  <div class="weight">${pesoStr} kg</div>
-  <svg id="barcode"></svg>
+  <div class="etiqueta">
+    <div class="brand">🌱 HUERTA URBANA</div>
+    <div class="url">huertaurbana.com.ar</div>
+    <div class="divider"></div>
+    <div class="product-name">${nombreProducto.toUpperCase()}</div>
+    <div class="weight">${pesoStr} kg</div>
+    <svg id="barcode"></svg>
+  </div>
   <script>
     window.onload = function() {
       JsBarcode('#barcode', '${barcodeValue}', {
         format: 'CODE128',
-        width: 1.5,
-        height: 28,
+        width: 1.4,
+        height: 26,
         displayValue: true,
         fontSize: 7,
         margin: 0,
@@ -1559,7 +1603,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 </body>
 </html>`;
 
-  const win = window.open('', '_blank', 'width=400,height=350');
+  const win = window.open('', '_blank', 'width=340,height=215');
   if (win) {
     win.document.write(html);
     win.document.close();
