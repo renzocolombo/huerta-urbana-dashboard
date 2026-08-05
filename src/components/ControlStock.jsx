@@ -1479,7 +1479,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     JsBarcode('#barcode', '${barcodeValue}', {
       format: 'CODE128',
       width: 1.5,
-      height: 28,
+      height: 26,
       displayValue: true,
       fontSize: 8,
       margin: 0,
@@ -1496,9 +1496,9 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     box-sizing: border-box !important;
   }
 
-  /* Suprimir fecha, URL y títulos de Chrome al imprimir */
+  /* Forzar orientación horizontal (80mm ancho x 50mm alto) sin márgenes */
   @page {
-    size: 80mm 50mm;
+    size: 80mm 50mm landscape;
     margin: 0 !important;
   }
 
@@ -1524,7 +1524,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     justify-content: space-between !important;
     font-family: Arial, Helvetica, sans-serif !important;
     background: #ffffff !important;
-    padding: 2.5mm 3mm 1.5mm 3mm !important;
+    padding: 2mm 3mm 1.5mm 3mm !important;
     text-align: center !important;
   }
 
@@ -1533,7 +1533,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     display: flex !important;
     flex-direction: column !important;
     align-items: center !important;
-    gap: 0.4mm !important;
+    gap: 0.3mm !important;
   }
 
   .brand {
@@ -1550,7 +1550,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 
   .url {
     width: 100% !important;
-    font-size: 7.5pt !important;
+    font-size: 7pt !important;
     font-weight: 700 !important;
     color: #000000 !important;
     letter-spacing: 0.03em !important;
@@ -1563,7 +1563,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     height: 0.5mm !important;
     background: #000000 !important;
     flex-shrink: 0 !important;
-    margin: 0.5mm auto !important;
+    margin: 0.4mm auto !important;
   }
 
   .product-name {
@@ -1593,7 +1593,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     display: block !important;
     width: 72mm !important;
     max-width: 72mm !important;
-    max-height: 19mm !important;
+    max-height: 18mm !important;
     height: auto !important;
     flex-shrink: 0 !important;
     margin: 0 auto !important;
@@ -1601,7 +1601,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 
   @media print {
     @page {
-      size: 80mm 50mm;
+      size: 80mm 50mm landscape;
       margin: 0 !important;
     }
     html, body {
