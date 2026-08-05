@@ -1164,26 +1164,43 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   }, [stockData]);
 
   const [selectedId, setSelectedId] = useState('');
-  // digitos: solo dígitos, sin punto. El display y el valor real se calculan on-the-fly.
-  const [digitos, setDigitos] = useState('');
-  const [sesion, setSesion] = useState([]); // [{ id, nombre, peso }]
+  // ── Estado de peso dual-mode ─────────────────────────────────────────────
+  // modoLiteral=false → modo calculadora: el usuario escribe solo dígitos,
+  //   el punto decimal se inserta automáticamente antes de los últimos 3.
+  // modoLiteral=true  → modo balanza: llegó un punto/coma programático;
+  //   se muestra el valor tal cual lo mandó la balanza (con decimal).
+  const [digitos, setDigitos] = useState('');       // modo calculadora
+  const [rawLiteral, setRawLiteral] = useState(''); // modo balanza
+  const [modoLiteral, setModoLiteral] = useState(false);
+  const [sesion, setSesion] = useState([]);
   const [confirmando, setConfirmando] = useState(false);
   const [confirmado, setConfirmado] = useState(false);
   const pesoRef = useRef(null);
 
-  // Convierte una cadena de dígitos en kg: '1250' → 1.250
-  const digitosAKg = (d) => {
-    if (!d) return 0;
-    const n = parseInt(d, 10);
-    return n / 1000;
-  };
-
-  // Display formateado para el input: '1250' → '1.250'
-  const pesoDisplay = (() => {
-    if (!digitos) return '';
-    const n = parseInt(digitos, 10);
-    return (n / 1000).toFixed(3);
+  // ── Helpers derivados ────────────────────────────────────────────────────
+  // Valor numérico en kg según el modo activo
+  const pesoKgActual = (() => {
+    if (modoLiteral) {
+      const v = parseFloat(rawLiteral.replace(',', '.'));
+      return isNaN(v) ? 0 : v;
+    }
+    if (!digitos) return 0;
+    return parseInt(digitos, 10) / 1000;
   })();
+
+  // Texto a mostrar en el campo
+  const pesoDisplay = (() => {
+    if (modoLiteral) return rawLiteral;
+    if (!digitos) return '';
+    return (parseInt(digitos, 10) / 1000).toFixed(3);
+  })();
+
+  // Resetea ambos modos
+  const resetPeso = () => {
+    setDigitos('');
+    setRawLiteral('');
+    setModoLiteral(false);
+  };
 
   // Foco automático al montar y después de cada bolsa
   useEffect(() => {
@@ -1198,8 +1215,7 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   }, [productList, selectedId]);
 
   const confirmarBolsa = useCallback(() => {
-    const pesoNum = digitosAKg(digitos);
-    if (!selectedId || pesoNum <= 0) return;
+    if (!selectedId || pesoKgActual <= 0) return;
 
     const producto = productList.find(p => p.id === selectedId);
     if (!producto) return;
@@ -1208,43 +1224,76 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
       id: Date.now().toString() + Math.random(),
       productId: selectedId,
       nombre: producto.nombre,
-      peso: Math.round(pesoNum * 1000) / 1000,
+      peso: Math.round(pesoKgActual * 1000) / 1000,
     };
 
     setSesion(prev => [...prev, nuevaBolsa]);
     imprimirEtiqueta(producto.nombre, nuevaBolsa.peso);
 
-    // Limpiar y re-enfocar
-    setDigitos('');
+    resetPeso();
     setTimeout(() => pesoRef.current?.focus(), 50);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, digitos, productList]);
+  }, [selectedId, pesoKgActual, productList]);
 
-  // Manejo del teclado: solo dígitos + Backspace + Enter
+  // ── Teclado: dual-mode ───────────────────────────────────────────────────
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       confirmarBolsa();
       return;
     }
+
     if (e.key === 'Backspace') {
       e.preventDefault();
-      setDigitos(prev => prev.slice(0, -1));
+      if (modoLiteral) {
+        setRawLiteral(prev => {
+          const next = prev.slice(0, -1);
+          // Si se borró el punto, volver a modo calculadora
+          if (!next.includes('.') && !next.includes(',')) {
+            setModoLiteral(false);
+            setDigitos(next.replace(/\D/g, ''));
+            return '';
+          }
+          return next;
+        });
+      } else {
+        setDigitos(prev => prev.slice(0, -1));
+      }
       return;
     }
+
     if (/^[0-9]$/.test(e.key)) {
       e.preventDefault();
-      setDigitos(prev => {
-        // Evitar que el número sea absurdamente grande (máx 7 dígitos → 9999.999 kg)
-        if (prev.length >= 7) return prev;
-        // Quitar ceros a la izquierda si el acumulado sería '0001' → '1'
-        const next = prev + e.key;
-        return next.replace(/^0+/, '') || '0';
-      });
+      if (modoLiteral) {
+        // Modo balanza: agregar dígito al literal (máx 2 decimales útiles, pero sin límite rígido)
+        setRawLiteral(prev => prev + e.key);
+      } else {
+        // Modo calculadora: acumular dígitos (máx 7 → 9999.999 kg)
+        setDigitos(prev => {
+          if (prev.length >= 7) return prev;
+          const next = prev + e.key;
+          return next.replace(/^0+/, '') || '0';
+        });
+      }
       return;
     }
-    // Bloquear punto, coma y cualquier otra tecla no numérica
-    if (['.', ',', '+', '-', 'e', 'E'].includes(e.key)) {
+
+    // Punto o coma → viene de la balanza: activar modo literal
+    if (e.key === '.' || e.key === ',') {
+      e.preventDefault();
+      if (!modoLiteral) {
+        // Semilla del literal = dígitos acumulados hasta ahora + '.'
+        // Ejemplo: balanza envió '1' luego '.' → rawLiteral = '1.'
+        setRawLiteral(digitos + '.');
+        setDigitos('');
+        setModoLiteral(true);
+      }
+      // Si ya estamos en modo literal, ignorar el segundo punto
+      return;
+    }
+
+    // Bloquear otros caracteres especiales del input numérico
+    if (['+', '-', 'e', 'E'].includes(e.key)) {
       e.preventDefault();
     }
   };
@@ -1341,7 +1390,7 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
           />
           <button
             onClick={confirmarBolsa}
-            disabled={!selectedId || digitosAKg(digitos) <= 0}
+            disabled={!selectedId || pesoKgActual <= 0}
             className="px-6 py-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-30 disabled:cursor-not-allowed text-white font-black text-sm rounded-2xl border-b-2 border-purple-800 active:border-b-0 active:translate-y-px shadow-lg transition-all uppercase tracking-widest flex items-center gap-2"
           >
             <Printer size={15} />
