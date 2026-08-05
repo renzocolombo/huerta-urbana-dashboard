@@ -1505,9 +1505,9 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
   }
 
   .brand {
-    font-size: 10pt;
+    font-size: 12pt;
     font-weight: 900;
-    color: #1a5c2a;
+    color: #000000;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     text-align: center;
@@ -1515,23 +1515,24 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     white-space: nowrap;
   }
   .url {
-    font-size: 5.5pt;
-    color: #555;
+    font-size: 6pt;
+    font-weight: 700;
+    color: #000000;
     letter-spacing: 0.02em;
     text-align: center;
     white-space: nowrap;
   }
   .divider {
     width: 90%;
-    height: 0.3mm;
-    background: #1a5c2a;
-    opacity: 0.3;
+    height: 0.4mm;
+    background: #000000;
+    opacity: 1;
     flex-shrink: 0;
   }
   .product-name {
     font-size: 13pt;
     font-weight: 900;
-    color: #111;
+    color: #000000;
     text-transform: uppercase;
     letter-spacing: 0.02em;
     text-align: center;
@@ -1542,9 +1543,9 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     max-width: 76mm;
   }
   .weight {
-    font-size: 10pt;
-    font-weight: 700;
-    color: #333;
+    font-size: 11pt;
+    font-weight: 900;
+    color: #000000;
     text-align: center;
     line-height: 1;
   }
