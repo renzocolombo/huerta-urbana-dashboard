@@ -1464,6 +1464,7 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
 
 // ── Función global de impresión de etiquetas ──────────────────────────────────
 function imprimirEtiqueta(nombreProducto, pesoKg) {
+  // Código de barras: NOMBRE-PESO (ej: PAPA-1.250)
   const nombreCode = nombreProducto.toUpperCase().replace(/\s+/g, '-').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const pesoStr = pesoKg.toFixed(3);
   const barcodeValue = `${nombreCode}-${pesoStr}`;
@@ -1474,193 +1475,91 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 <meta charset="UTF-8">
 <title>Etiqueta</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"><\/script>
-<script>
-  window.onload = function() {
-    JsBarcode('#barcode', '${barcodeValue}', {
-      format: 'CODE128',
-      width: 1.4,
-      height: 26,
-      displayValue: true,
-      fontSize: 7,
-      margin: 0,
-      background: 'transparent',
-    });
-    setTimeout(function() { window.print(); window.close(); }, 400);
-  };
-<\/script>
 <style>
-  /* Reset absoluto */
-  *, *::before, *::after {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-  }
-
-  /* Tamaño físico de la página en la impresora (50mm ancho x 80mm alto) */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
   @page {
-    size: 50mm 80mm;
+    size: 80mm 50mm;
     margin: 0;
   }
-
-  /* html y body con tamaño fijo de la etiqueta física */
-  html, body {
-    width: 50mm;
-    height: 80mm;
-    margin: 0;
-    padding: 0;
-    overflow: hidden;
-    background: white;
-    position: relative;
-    print-color-adjust: exact;
-    -webkit-print-color-adjust: exact;
-    page-break-after: avoid;
-    page-break-before: avoid;
-    page-break-inside: avoid;
-  }
-
-  /* Contenedor externo 50x80 */
-  .etiqueta-wrapper {
-    width: 50mm;
-    height: 80mm;
-    position: relative;
-    overflow: hidden;
-  }
-
-  /* Etiqueta 80x50 girada 90° en sentido horario (giro a la derecha) */
-  .etiqueta {
+  body {
     width: 80mm;
     height: 50mm;
-    position: absolute;
-    left: -15mm;
-    top: 15mm;
-    transform: rotate(90deg);
-    transform-origin: center;
-    box-sizing: border-box;
-    overflow: hidden;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: space-between;
-    font-family: Arial, Helvetica, sans-serif;
+    justify-content: center;
+    font-family: 'Arial', sans-serif;
     background: white;
-    padding: 2.5mm 3mm 1.5mm 3mm;
-    text-align: center;
+    padding: 3mm;
+    gap: 1mm;
   }
-
-  /* Zona superior: marca + url */
-  .top {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.3mm;
-  }
-
   .brand {
-    width: 100%;
     font-size: 11pt;
     font-weight: 900;
-    color: #000000;
-    letter-spacing: 0.04em;
+    color: #1a5c2a;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     text-align: center;
-    line-height: 1;
-    white-space: nowrap;
+    line-height: 1.1;
   }
   .url {
-    width: 100%;
-    font-size: 5.5pt;
-    font-weight: 700;
-    color: #000000;
+    font-size: 6pt;
+    color: #555;
     letter-spacing: 0.02em;
     text-align: center;
-    white-space: nowrap;
   }
   .divider {
-    width: 88%;
-    height: 0.4mm;
-    background: #000000;
-    flex-shrink: 0;
-    margin: 0.5mm auto;
-  }
-
-  /* Zona del producto */
-  .product-name {
     width: 100%;
-    font-size: 12pt;
+    height: 0.3mm;
+    background: #1a5c2a;
+    opacity: 0.25;
+    margin: 0.5mm 0;
+  }
+  .product-name {
+    font-size: 14pt;
     font-weight: 900;
-    color: #000000;
+    color: #111;
     text-transform: uppercase;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.03em;
     text-align: center;
-    line-height: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .weight {
-    width: 100%;
-    font-size: 10.5pt;
-    font-weight: 900;
-    color: #000000;
+    font-size: 11pt;
+    font-weight: 700;
+    color: #333;
     text-align: center;
-    line-height: 1;
   }
-
-  /* Código de barras */
   svg#barcode {
-    display: block;
-    width: 70mm;
-    max-width: 70mm;
-    max-height: 18mm;
+    max-width: 74mm;
     height: auto;
-    flex-shrink: 0;
-    margin: 0 auto;
-  }
-
-  /* Al imprimir: forzar una sola página y ocultar todo lo demás */
-  @media print {
-    html, body {
-      width: 50mm !important;
-      height: 80mm !important;
-      overflow: hidden !important;
-      margin: 0 !important;
-      padding: 0 !important;
-    }
-    body > * {
-      display: none !important;
-    }
-    body > .etiqueta-wrapper {
-      display: block !important;
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 50mm !important;
-      height: 80mm !important;
-      overflow: hidden !important;
-      page-break-after: avoid !important;
-      page-break-inside: avoid !important;
-    }
   }
 </style>
 </head>
 <body>
-  <div class="etiqueta-wrapper">
-    <div class="etiqueta">
-      <div class="top">
-        <div class="brand">&#127807; HUERTA URBANA</div>
-        <div class="url">huertaurbana.com.ar</div>
-      </div>
-      <div class="divider"></div>
-      <div class="product-name">${nombreProducto.toUpperCase()}</div>
-      <div class="weight">${pesoStr} kg</div>
-      <svg id="barcode"></svg>
-    </div>
-  </div>
+  <div class="brand">🌱 HUERTA URBANA</div>
+  <div class="url">huertaurbana.com.ar</div>
+  <div class="divider"></div>
+  <div class="product-name">${nombreProducto.toUpperCase()}</div>
+  <div class="weight">${pesoStr} kg</div>
+  <svg id="barcode"></svg>
+  <script>
+    window.onload = function() {
+      JsBarcode('#barcode', '${barcodeValue}', {
+        format: 'CODE128',
+        width: 1.5,
+        height: 28,
+        displayValue: true,
+        fontSize: 7,
+        margin: 0,
+        background: 'transparent',
+      });
+      setTimeout(function() { window.print(); window.close(); }, 400);
+    };
+  <\/script>
 </body>
 </html>`;
 
-  const win = window.open('', '_blank', 'width=250,height=380');
+  const win = window.open('', '_blank', 'width=400,height=350');
   if (win) {
     win.document.write(html);
     win.document.close();
