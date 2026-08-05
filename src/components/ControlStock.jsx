@@ -1498,29 +1498,30 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 
   /* Una sola página 80x50mm, sin márgenes */
   @page {
-    size: 80mm 50mm landscape;
+    size: 80mm 50mm;
     margin: 0;
   }
 
   /* html y body exactamente del tamaño de la etiqueta, nada más */
-  html {
+  html, body {
     width: 80mm;
     height: 50mm;
-    overflow: hidden;
-  }
-  body {
-    width: 80mm;
-    height: 50mm;
+    margin: 0;
+    padding: 0;
     overflow: hidden;
     background: white;
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
+    page-break-after: avoid;
+    page-break-before: avoid;
+    page-break-inside: avoid;
   }
 
   /* Contenedor principal de la etiqueta */
   .etiqueta {
     width: 80mm;
     height: 50mm;
+    box-sizing: border-box;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -1528,8 +1529,10 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     justify-content: space-between;
     font-family: Arial, Helvetica, sans-serif;
     background: white;
-    padding: 3mm 3mm 2mm 3mm;
+    padding: 2.5mm 3mm 1.5mm 3mm;
     text-align: center;
+    page-break-after: avoid;
+    page-break-inside: avoid;
   }
 
   /* Zona superior: marca + url */
@@ -1538,12 +1541,12 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.5mm;
+    gap: 0.3mm;
   }
 
   .brand {
     width: 100%;
-    font-size: 12pt;
+    font-size: 11pt;
     font-weight: 900;
     color: #000000;
     letter-spacing: 0.04em;
@@ -1554,7 +1557,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
   }
   .url {
     width: 100%;
-    font-size: 6pt;
+    font-size: 5.5pt;
     font-weight: 700;
     color: #000000;
     letter-spacing: 0.02em;
@@ -1566,13 +1569,13 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     height: 0.4mm;
     background: #000000;
     flex-shrink: 0;
-    margin: 0 auto;
+    margin: 0.5mm auto;
   }
 
   /* Zona del producto */
   .product-name {
     width: 100%;
-    font-size: 13pt;
+    font-size: 12pt;
     font-weight: 900;
     color: #000000;
     text-transform: uppercase;
@@ -1585,7 +1588,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
   }
   .weight {
     width: 100%;
-    font-size: 11pt;
+    font-size: 10.5pt;
     font-weight: 900;
     color: #000000;
     text-align: center;
@@ -1595,8 +1598,9 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
   /* Código de barras */
   svg#barcode {
     display: block;
-    width: 74mm;
-    max-width: 74mm;
+    width: 70mm;
+    max-width: 70mm;
+    max-height: 18mm;
     height: auto;
     flex-shrink: 0;
     margin: 0 auto;
@@ -1605,21 +1609,25 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
   /* Al imprimir: forzar una sola página, ocultar todo lo demás */
   @media print {
     html, body {
-      width: 80mm;
-      height: 50mm;
-      overflow: hidden;
+      width: 80mm !important;
+      height: 50mm !important;
+      overflow: hidden !important;
+      margin: 0 !important;
+      padding: 0 !important;
     }
     body > * {
       display: none !important;
     }
     body > .etiqueta {
       display: flex !important;
-      position: fixed;
+      position: absolute;
       top: 0;
       left: 0;
-      width: 80mm;
-      height: 50mm;
-      overflow: hidden;
+      width: 80mm !important;
+      height: 50mm !important;
+      overflow: hidden !important;
+      page-break-after: avoid !important;
+      page-break-inside: avoid !important;
     }
   }
 </style>
