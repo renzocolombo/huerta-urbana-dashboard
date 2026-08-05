@@ -1,4 +1,4 @@
-﻿import { useGoogleSheets } from '../context/GoogleSheetsContext';
+import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   AlertTriangle, TrendingUp, Package, Plus, History, 
@@ -1498,7 +1498,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 
   /* Una sola página 80x50mm, sin márgenes */
   @page {
-    size: 80mm 50mm;
+    size: 80mm 50mm landscape;
     margin: 0;
   }
 
@@ -1609,7 +1609,11 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
       height: 50mm;
       overflow: hidden;
     }
-    .etiqueta {
+    body > * {
+      display: none !important;
+    }
+    body > .etiqueta {
+      display: flex !important;
       position: fixed;
       top: 0;
       left: 0;
