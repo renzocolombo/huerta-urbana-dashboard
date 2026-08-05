@@ -1,4 +1,4 @@
-import { useGoogleSheets } from '../context/GoogleSheetsContext';
+﻿import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   AlertTriangle, TrendingUp, Package, Plus, History, 
@@ -1464,7 +1464,6 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
 
 // ── Función global de impresión de etiquetas ──────────────────────────────────
 function imprimirEtiqueta(nombreProducto, pesoKg) {
-  // Código de barras: NOMBRE-PESO (ej: PAPA-1.250)
   const nombreCode = nombreProducto.toUpperCase().replace(/\s+/g, '-').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const pesoStr = pesoKg.toFixed(3);
   const barcodeValue = `${nombreCode}-${pesoStr}`;
@@ -1475,21 +1474,50 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 <meta charset="UTF-8">
 <title>Etiqueta</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"><\/script>
+<script>
+  window.onload = function() {
+    JsBarcode('#barcode', '${barcodeValue}', {
+      format: 'CODE128',
+      width: 1.4,
+      height: 26,
+      displayValue: true,
+      fontSize: 7,
+      margin: 0,
+      background: 'transparent',
+    });
+    setTimeout(function() { window.print(); window.close(); }, 400);
+  };
+<\/script>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* Reset absoluto */
+  *, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
 
+  /* Una sola página 80x50mm, sin márgenes */
   @page {
-    size: 80mm 50mm landscape;
+    size: 80mm 50mm;
     margin: 0;
   }
 
-  html, body {
+  /* html y body exactamente del tamaño de la etiqueta, nada más */
+  html {
     width: 80mm;
     height: 50mm;
-    background: white;
     overflow: hidden;
   }
+  body {
+    width: 80mm;
+    height: 50mm;
+    overflow: hidden;
+    background: white;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
 
+  /* Contenedor principal de la etiqueta */
   .etiqueta {
     width: 80mm;
     height: 50mm;
@@ -1497,12 +1525,20 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: space-between;
     font-family: Arial, Helvetica, sans-serif;
     background: white;
-    padding: 1.5mm 3mm 2mm 3mm;
-    gap: 0.8mm;
+    padding: 3mm 3mm 2mm 3mm;
     text-align: center;
+  }
+
+  /* Zona superior: marca + url */
+  .top {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5mm;
   }
 
   .brand {
@@ -1526,13 +1562,14 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     white-space: nowrap;
   }
   .divider {
-    width: 90%;
+    width: 88%;
     height: 0.4mm;
     background: #000000;
-    opacity: 1;
     flex-shrink: 0;
     margin: 0 auto;
   }
+
+  /* Zona del producto */
   .product-name {
     width: 100%;
     font-size: 13pt;
@@ -1554,6 +1591,8 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     text-align: center;
     line-height: 1;
   }
+
+  /* Código de barras */
   svg#barcode {
     display: block;
     width: 74mm;
@@ -1563,50 +1602,35 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     margin: 0 auto;
   }
 
+  /* Al imprimir: forzar una sola página, ocultar todo lo demás */
   @media print {
     html, body {
       width: 80mm;
       height: 50mm;
       overflow: hidden;
     }
-    body > *:not(.etiqueta) {
-      display: none !important;
-    }
     .etiqueta {
-      width: 80mm;
-      height: 50mm;
       position: fixed;
       top: 0;
       left: 0;
-      page-break-after: avoid;
-      page-break-inside: avoid;
+      width: 80mm;
+      height: 50mm;
+      overflow: hidden;
     }
   }
 </style>
 </head>
 <body>
   <div class="etiqueta">
-    <div class="brand">🌱 HUERTA URBANA</div>
-    <div class="url">huertaurbana.com.ar</div>
+    <div class="top">
+      <div class="brand">&#127807; HUERTA URBANA</div>
+      <div class="url">huertaurbana.com.ar</div>
+    </div>
     <div class="divider"></div>
     <div class="product-name">${nombreProducto.toUpperCase()}</div>
     <div class="weight">${pesoStr} kg</div>
     <svg id="barcode"></svg>
   </div>
-  <script>
-    window.onload = function() {
-      JsBarcode('#barcode', '${barcodeValue}', {
-        format: 'CODE128',
-        width: 1.4,
-        height: 26,
-        displayValue: true,
-        fontSize: 7,
-        margin: 0,
-        background: 'transparent',
-      });
-      setTimeout(function() { window.print(); window.close(); }, 400);
-    };
-  <\/script>
 </body>
 </html>`;
 
