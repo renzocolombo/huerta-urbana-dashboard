@@ -1472,7 +1472,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Etiqueta</title>
+<title></title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"><\/script>
 <script>
   window.onload = function() {
@@ -1491,138 +1491,122 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 <style>
   /* Reset total */
   *, *::before, *::after {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
   }
 
-  /* Tamaño de hoja del rollo de la impresora (50mm ancho x 80mm alto) */
+  /* Suprimir fecha, URL y títulos de Chrome al imprimir */
   @page {
-    size: 50mm 80mm;
-    margin: 0;
+    size: 80mm 50mm;
+    margin: 0 !important;
   }
 
-  /* Contenedor html y body de la hoja física */
   html, body {
-    width: 50mm;
-    height: 80mm;
-    margin: 0;
-    padding: 0;
-    overflow: hidden;
-    background: white;
-    position: relative;
-    print-color-adjust: exact;
-    -webkit-print-color-adjust: exact;
-    page-break-after: avoid;
-    page-break-before: avoid;
-    page-break-inside: avoid;
+    width: 80mm !important;
+    height: 50mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    background: #ffffff !important;
+    print-color-adjust: exact !important;
+    -webkit-print-color-adjust: exact !important;
   }
 
-  /* Wrapper exacto de la página (50x80) */
-  .etiqueta-wrapper {
-    width: 50mm;
-    height: 80mm;
-    position: relative;
-    overflow: hidden;
-  }
-
-  /* Etiqueta (80x50) girada 90° en sentido horario para imprimir 'a lo largo' */
   .etiqueta {
-    width: 80mm;
-    height: 50mm;
-    position: absolute;
-    left: -15mm;
-    top: 15mm;
-    transform: rotate(90deg);
-    transform-origin: center;
-    box-sizing: border-box;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: space-between;
-    font-family: Arial, Helvetica, sans-serif;
-    background: white;
-    padding: 2.5mm 3mm 1.5mm 3mm;
-    text-align: center;
+    width: 80mm !important;
+    height: 50mm !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    font-family: Arial, Helvetica, sans-serif !important;
+    background: #ffffff !important;
+    padding: 2.5mm 3mm 1.5mm 3mm !important;
+    text-align: center !important;
   }
 
-  /* Zona superior: marca + url */
   .top {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.4mm;
+    width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    gap: 0.4mm !important;
   }
 
   .brand {
-    width: 100%;
-    font-size: 13pt;
-    font-weight: 900;
-    color: #000000;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    text-align: center;
-    line-height: 1;
-    white-space: nowrap;
+    width: 100% !important;
+    font-size: 13pt !important;
+    font-weight: 900 !important;
+    color: #000000 !important;
+    letter-spacing: 0.05em !important;
+    text-transform: uppercase !important;
+    text-align: center !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
   }
+
   .url {
-    width: 100%;
-    font-size: 7pt;
-    font-weight: 700;
-    color: #000000;
-    letter-spacing: 0.03em;
-    text-align: center;
-    white-space: nowrap;
+    width: 100% !important;
+    font-size: 7.5pt !important;
+    font-weight: 700 !important;
+    color: #000000 !important;
+    letter-spacing: 0.03em !important;
+    text-align: center !important;
+    white-space: nowrap !important;
   }
+
   .divider {
-    width: 90%;
-    height: 0.5mm;
-    background: #000000;
-    flex-shrink: 0;
-    margin: 0.5mm auto;
+    width: 90% !important;
+    height: 0.5mm !important;
+    background: #000000 !important;
+    flex-shrink: 0 !important;
+    margin: 0.5mm auto !important;
   }
 
-  /* Zona del producto */
   .product-name {
-    width: 100%;
-    font-size: 15pt;
-    font-weight: 900;
-    color: #000000;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    text-align: center;
-    line-height: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    width: 100% !important;
+    font-size: 15pt !important;
+    font-weight: 900 !important;
+    color: #000000 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.03em !important;
+    text-align: center !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
   }
+
   .weight {
-    width: 100%;
-    font-size: 12.5pt;
-    font-weight: 900;
-    color: #000000;
-    text-align: center;
-    line-height: 1;
+    width: 100% !important;
+    font-size: 12.5pt !important;
+    font-weight: 900 !important;
+    color: #000000 !important;
+    text-align: center !important;
+    line-height: 1 !important;
   }
 
-  /* Código de barras en 72mm */
   svg#barcode {
-    display: block;
-    width: 72mm;
-    max-width: 72mm;
-    max-height: 19mm;
-    height: auto;
-    flex-shrink: 0;
-    margin: 0 auto;
+    display: block !important;
+    width: 72mm !important;
+    max-width: 72mm !important;
+    max-height: 19mm !important;
+    height: auto !important;
+    flex-shrink: 0 !important;
+    margin: 0 auto !important;
   }
 
-  /* Al imprimir: forzar 1 sola página, ocultar todo lo demás */
   @media print {
+    @page {
+      size: 80mm 50mm;
+      margin: 0 !important;
+    }
     html, body {
-      width: 50mm !important;
-      height: 80mm !important;
+      width: 80mm !important;
+      height: 50mm !important;
       overflow: hidden !important;
       margin: 0 !important;
       padding: 0 !important;
@@ -1630,37 +1614,33 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     body > * {
       display: none !important;
     }
-    body > .etiqueta-wrapper {
-      display: block !important;
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 50mm !important;
-      height: 80mm !important;
+    body > .etiqueta {
+      display: flex !important;
+      position: absolute !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 80mm !important;
+      height: 50mm !important;
       overflow: hidden !important;
-      page-break-after: avoid !important;
-      page-break-inside: avoid !important;
     }
   }
 </style>
 </head>
 <body>
-  <div class="etiqueta-wrapper">
-    <div class="etiqueta">
-      <div class="top">
-        <div class="brand">HUERTA URBANA</div>
-        <div class="url">huertaurbana.com.ar</div>
-      </div>
-      <div class="divider"></div>
-      <div class="product-name">${nombreProducto.toUpperCase()}</div>
-      <div class="weight">${pesoStr} kg</div>
-      <svg id="barcode"></svg>
+  <div class="etiqueta">
+    <div class="top">
+      <div class="brand">HUERTA URBANA</div>
+      <div class="url">huertaurbana.com.ar</div>
     </div>
+    <div class="divider"></div>
+    <div class="product-name">${nombreProducto.toUpperCase()}</div>
+    <div class="weight">${pesoStr} kg</div>
+    <svg id="barcode"></svg>
   </div>
 </body>
 </html>`;
 
-  const win = window.open('', '_blank', 'width=260,height=390');
+  const win = window.open('', '_blank', 'width=340,height=220');
   if (win) {
     win.document.write(html);
     win.document.close();
