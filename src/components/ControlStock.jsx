@@ -1164,11 +1164,26 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   }, [stockData]);
 
   const [selectedId, setSelectedId] = useState('');
-  const [peso, setPeso] = useState('');
+  // digitos: solo dígitos, sin punto. El display y el valor real se calculan on-the-fly.
+  const [digitos, setDigitos] = useState('');
   const [sesion, setSesion] = useState([]); // [{ id, nombre, peso }]
   const [confirmando, setConfirmando] = useState(false);
   const [confirmado, setConfirmado] = useState(false);
   const pesoRef = useRef(null);
+
+  // Convierte una cadena de dígitos en kg: '1250' → 1.250
+  const digitosAKg = (d) => {
+    if (!d) return 0;
+    const n = parseInt(d, 10);
+    return n / 1000;
+  };
+
+  // Display formateado para el input: '1250' → '1.250'
+  const pesoDisplay = (() => {
+    if (!digitos) return '';
+    const n = parseInt(digitos, 10);
+    return (n / 1000).toFixed(3);
+  })();
 
   // Foco automático al montar y después de cada bolsa
   useEffect(() => {
@@ -1183,8 +1198,8 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   }, [productList, selectedId]);
 
   const confirmarBolsa = useCallback(() => {
-    const pesoNum = parseFloat(peso.replace(',', '.'));
-    if (!selectedId || isNaN(pesoNum) || pesoNum <= 0) return;
+    const pesoNum = digitosAKg(digitos);
+    if (!selectedId || pesoNum <= 0) return;
 
     const producto = productList.find(p => p.id === selectedId);
     if (!producto) return;
@@ -1199,15 +1214,38 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
     setSesion(prev => [...prev, nuevaBolsa]);
     imprimirEtiqueta(producto.nombre, nuevaBolsa.peso);
 
-    // Limpiar peso y re-enfocar
-    setPeso('');
+    // Limpiar y re-enfocar
+    setDigitos('');
     setTimeout(() => pesoRef.current?.focus(), 50);
-  }, [selectedId, peso, productList]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, digitos, productList]);
 
+  // Manejo del teclado: solo dígitos + Backspace + Enter
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       confirmarBolsa();
+      return;
+    }
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      setDigitos(prev => prev.slice(0, -1));
+      return;
+    }
+    if (/^[0-9]$/.test(e.key)) {
+      e.preventDefault();
+      setDigitos(prev => {
+        // Evitar que el número sea absurdamente grande (máx 7 dígitos → 9999.999 kg)
+        if (prev.length >= 7) return prev;
+        // Quitar ceros a la izquierda si el acumulado sería '0001' → '1'
+        const next = prev + e.key;
+        return next.replace(/^0+/, '') || '0';
+      });
+      return;
+    }
+    // Bloquear punto, coma y cualquier otra tecla no numérica
+    if (['.', ',', '+', '-', 'e', 'E'].includes(e.key)) {
+      e.preventDefault();
     }
   };
 
@@ -1292,18 +1330,18 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
         <div className="flex gap-2">
           <input
             ref={pesoRef}
-            type="number"
-            step="0.001"
-            min="0"
-            value={peso}
-            onChange={e => setPeso(e.target.value)}
+            type="text"
+            inputMode="numeric"
+            value={pesoDisplay}
+            onChange={() => {}} // controlado solo por onKeyDown
             onKeyDown={handleKeyDown}
             placeholder="0.000"
+            readOnly={false}
             className="flex-1 bg-black/40 border border-white/10 focus:border-purple-500/60 text-white text-xl font-black font-mono rounded-2xl px-4 py-3 outline-none transition-all placeholder:text-gray-700 focus:bg-black/60 focus:shadow-[0_0_20px_rgba(168,85,247,0.1)] text-center"
           />
           <button
             onClick={confirmarBolsa}
-            disabled={!selectedId || !peso || parseFloat(peso) <= 0}
+            disabled={!selectedId || digitosAKg(digitos) <= 0}
             className="px-6 py-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-30 disabled:cursor-not-allowed text-white font-black text-sm rounded-2xl border-b-2 border-purple-800 active:border-b-0 active:translate-y-px shadow-lg transition-all uppercase tracking-widest flex items-center gap-2"
           >
             <Printer size={15} />
