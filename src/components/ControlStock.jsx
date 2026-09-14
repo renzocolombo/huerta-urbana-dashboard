@@ -4,7 +4,7 @@ import {
   AlertTriangle, TrendingUp, Package, Plus, History, 
   Check, Info, Box, Edit2, RotateCcw, X, Save,
   AlertCircle, Loader2, Settings, ChevronDown, ChevronUp,
-  ScanBarcode, Trash2, Zap, ClipboardList, Scale, Printer, CheckCircle2
+  ScanBarcode, Trash2, Zap, ClipboardList, Scale, Printer, CheckCircle2, Radio
 } from 'lucide-react';
 
 // Configuración de entorno
@@ -1151,6 +1151,48 @@ function AddStockInline({ nombre, labels, currentStock, onCancel, onSave }) {
   );
 }
 
+// ── Web Serial API - Balanza Systel Clipse ──────────────────────────────────
+// Configuración: 9600 baudios, 8 bits de datos, sin paridad, 1 bit de parada (8N1)
+const SERIAL_SCALE_CONFIG = {
+  baudRate: 9600,
+  dataBits: 8,
+  stopBits: 1,
+  parity: 'none',
+};
+
+function extraerPesoSystel(trama) {
+  if (!trama) return null;
+  const str = trama.replace(',', '.');
+
+  // 1. Trama delimitada por STX (\x02) y ETX (\x03) típica de Systel
+  const stxIdx = str.indexOf('\x02');
+  const etxIdx = str.indexOf('\x03');
+  if (stxIdx !== -1 && etxIdx !== -1 && etxIdx > stxIdx) {
+    const payload = str.slice(stxIdx + 1, etxIdx);
+    const m = payload.match(/([-+]?\d{1,4}\.\d{2,3})/);
+    if (m) {
+      const val = parseFloat(m[1]);
+      if (!isNaN(val)) return val.toFixed(3);
+    }
+  }
+
+  // 2. Patrón decimal estándar con 2 o 3 decimales (ej: "0.444", " 0.444 kg", "+0.444")
+  const matchDecimal = str.match(/([-+]?\d{1,4}\.\d{2,3})/);
+  if (matchDecimal) {
+    const val = parseFloat(matchDecimal[1]);
+    if (!isNaN(val)) return val.toFixed(3);
+  }
+
+  // 3. Patrón de 4 a 6 dígitos en gramos (ej: "00444" -> 0.444 kg)
+  const matchEntero = str.match(/\b(\d{4,6})\b/);
+  if (matchEntero) {
+    const val = parseInt(matchEntero[1], 10) / 1000;
+    if (!isNaN(val) && val >= 0 && val < 100) return val.toFixed(3);
+  }
+
+  return null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENTE: Pesar y Etiquetar
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1176,6 +1218,173 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   const [confirmando, setConfirmando] = useState(false);
   const [confirmado, setConfirmado] = useState(false);
   const pesoRef = useRef(null);
+
+  // ── Conexión Web Serial (Balanza Systel Clipse) ──────────────────────────
+  const [scaleConnected, setScaleConnected] = useState(false);
+  const [scaleConnecting, setScaleConnecting] = useState(false);
+  const [scaleError, setScaleError] = useState(null);
+  const [lastWeightReceived, setLastWeightReceived] = useState(null);
+  const portRef = useRef(null);
+  const readerRef = useRef(null);
+  const isReadingRef = useRef(false);
+
+  const aplicarPesoBalanza = useCallback((pesoStr) => {
+    setLastWeightReceived(pesoStr);
+    setModoLiteral(true);
+    setRawLiteral(pesoStr);
+    setDigitos('');
+  }, []);
+
+  const leerDatosBalanza = async (port) => {
+    const decoder = new TextDecoder();
+    let buffer = '';
+    isReadingRef.current = true;
+
+    try {
+      const reader = port.readable.getReader();
+      readerRef.current = reader;
+
+      while (isReadingRef.current && port.readable) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) {
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
+
+          // 1. Procesar tramas delimitadas por STX (\x02) y ETX (\x03)
+          let stxIdx = buffer.indexOf('\x02');
+          let etxIdx = buffer.indexOf('\x03');
+
+          while (stxIdx !== -1 && etxIdx !== -1 && etxIdx > stxIdx) {
+            const tramaCompleta = buffer.slice(stxIdx, etxIdx + 1);
+            const peso = extraerPesoSystel(tramaCompleta);
+            if (peso !== null) {
+              aplicarPesoBalanza(peso);
+            }
+            buffer = buffer.slice(etxIdx + 1);
+            stxIdx = buffer.indexOf('\x02');
+            etxIdx = buffer.indexOf('\x03');
+          }
+
+          // 2. Procesar por saltos de línea (\r o \n)
+          const lineas = buffer.split(/[\r\n]+/);
+          if (lineas.length > 1) {
+            for (let i = 0; i < lineas.length - 1; i++) {
+              const linea = lineas[i].trim();
+              if (linea) {
+                const peso = extraerPesoSystel(linea);
+                if (peso !== null) {
+                  aplicarPesoBalanza(peso);
+                }
+              }
+            }
+            buffer = lineas[lineas.length - 1];
+          }
+
+          if (buffer.length > 300) {
+            buffer = buffer.slice(-60);
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.warn('Lectura serial de balanza detenida:', err);
+      }
+    } finally {
+      if (readerRef.current) {
+        try {
+          readerRef.current.releaseLock();
+        } catch (e) {}
+        readerRef.current = null;
+      }
+      setScaleConnected(false);
+      isReadingRef.current = false;
+    }
+  };
+
+  const conectarBalanza = async () => {
+    if (!('serial' in navigator)) {
+      setScaleError('La Web Serial API no está disponible en este navegador. Usá Google Chrome o Microsoft Edge.');
+      return;
+    }
+
+    try {
+      setScaleConnecting(true);
+      setScaleError(null);
+
+      let port;
+      const grantedPorts = await navigator.serial.getPorts();
+      if (grantedPorts.length === 1 && !portRef.current) {
+        port = grantedPorts[0];
+      } else {
+        // Diálogo nativo de Chrome para seleccionar el puerto COM (ej: COM4)
+        port = await navigator.serial.requestPort();
+      }
+
+      await port.open(SERIAL_SCALE_CONFIG);
+      portRef.current = port;
+      setScaleConnected(true);
+      setScaleConnecting(false);
+
+      leerDatosBalanza(port);
+    } catch (err) {
+      console.error('Error al conectar balanza serial:', err);
+      setScaleConnecting(false);
+      setScaleConnected(false);
+      if (err.name !== 'NotFoundError') {
+        setScaleError(err.message || 'No se pudo conectar al puerto COM de la balanza');
+      }
+    }
+  };
+
+  const desconectarBalanza = async () => {
+    isReadingRef.current = false;
+    try {
+      if (readerRef.current) {
+        await readerRef.current.cancel();
+      }
+      if (portRef.current) {
+        setTimeout(async () => {
+          try {
+            await portRef.current?.close();
+            portRef.current = null;
+          } catch (e) {}
+        }, 100);
+      }
+    } catch (err) {
+      console.error('Error al desconectar balanza:', err);
+    } finally {
+      setScaleConnected(false);
+      setScaleConnecting(false);
+    }
+  };
+
+  // Limpieza al desmontar
+  useEffect(() => {
+    return () => {
+      isReadingRef.current = false;
+      if (readerRef.current) {
+        readerRef.current.cancel().catch(() => {});
+      }
+      if (portRef.current) {
+        portRef.current.close().catch(() => {});
+      }
+    };
+  }, []);
+
+  // Escuchar desconexión física del cable
+  useEffect(() => {
+    if (!('serial' in navigator)) return;
+    const handleDisconnect = (e) => {
+      if (e.target === portRef.current) {
+        desconectarBalanza();
+      }
+    };
+    navigator.serial.addEventListener('disconnect', handleDisconnect);
+    return () => {
+      navigator.serial.removeEventListener('disconnect', handleDisconnect);
+    };
+  }, []);
 
   // ── Helpers derivados ────────────────────────────────────────────────────
   // Valor numérico en kg según el modo activo
@@ -1349,13 +1558,76 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
 
   return (
     <div className="border border-purple-500/20 rounded-3xl p-5 shadow-2xl bg-gradient-to-br from-gray-900 via-[#100d1a] to-gray-900 space-y-4 animate-in slide-in-from-top-2 duration-300">
-      {/* Cabecera */}
-      <div className="flex items-center gap-2.5 mb-1">
-        <Scale size={14} className="text-purple-400" />
-        <p className="text-gray-500 text-[10px] uppercase font-bold tracking-widest">
-          Seleccioná el producto, ingresá el peso y presioná OK
-        </p>
+      {/* Cabecera y Conexión de Balanza */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-purple-500/10">
+        <div className="flex items-center gap-2.5">
+          <Scale size={16} className="text-purple-400 shrink-0" />
+          <div>
+            <p className="text-white text-xs font-black uppercase tracking-wider">
+              Pesar y Etiquetar
+            </p>
+            <p className="text-gray-500 text-[10px] font-bold tracking-wider">
+              Seleccioná producto, pesá y presioná OK
+            </p>
+          </div>
+        </div>
+
+        {/* Botón Balanza e Indicador de Conexión */}
+        <div className="flex items-center gap-2">
+          {scaleConnected ? (
+            <div className="flex items-center gap-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl px-3 py-1.5 shadow-sm">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+              </span>
+              <div className="flex flex-col">
+                <span className="text-emerald-400 text-[10px] font-black uppercase tracking-widest leading-none">
+                  Balanza Conectada
+                </span>
+                <span className="text-emerald-300/80 font-mono text-[9px] leading-none mt-1">
+                  Systel Clipse · COM4 · 9600
+                  {lastWeightReceived ? ` · ${lastWeightReceived} kg` : ''}
+                </span>
+              </div>
+              <button
+                onClick={desconectarBalanza}
+                title="Desconectar balanza"
+                className="ml-1 text-gray-500 hover:text-red-400 transition-colors p-1"
+              >
+                <X size={13} />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={conectarBalanza}
+              disabled={scaleConnecting}
+              className="flex items-center gap-2 px-3.5 py-1.5 rounded-2xl text-xs font-black uppercase tracking-wider bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 hover:text-white transition-all shadow-sm active:scale-95 disabled:opacity-50"
+            >
+              {scaleConnecting ? (
+                <>
+                  <Loader2 size={13} className="animate-spin text-purple-400" />
+                  <span>Conectando...</span>
+                </>
+              ) : (
+                <>
+                  <Radio size={13} className="text-purple-400" />
+                  <span>Conectar balanza</span>
+                </>
+              )}
+            </button>
+          )}
+        </div>
       </div>
+
+      {scaleError && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs animate-in slide-in-from-top-1">
+          <AlertCircle size={14} className="shrink-0" />
+          <span className="font-mono text-[11px] flex-1">{scaleError}</span>
+          <button onClick={() => setScaleError(null)} className="text-red-400/60 hover:text-red-300">
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       {/* Selector de producto */}
       <div className="space-y-1">
@@ -1375,7 +1647,15 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
 
       {/* Campo de peso + botón OK */}
       <div className="space-y-1">
-        <label className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Peso (kg)</label>
+        <div className="flex items-center justify-between">
+          <label className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Peso (kg)</label>
+          {scaleConnected && (
+            <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-400 flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              Lectura en vivo (COM4)
+            </span>
+          )}
+        </div>
         <div className="flex gap-2">
           <input
             ref={pesoRef}
