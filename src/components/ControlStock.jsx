@@ -1479,7 +1479,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     JsBarcode('#barcode', '${barcodeValue}', {
       format: 'CODE128',
       width: 1.5,
-      height: 26,
+      height: 24,
       displayValue: true,
       fontSize: 8,
       margin: 0,
@@ -1496,15 +1496,17 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     box-sizing: border-box !important;
   }
 
-  /* Forzar orientación horizontal (80mm ancho x 50mm alto) sin márgenes */
+  /* Tamaño exacto estándar 80mm ancho x 50mm alto sin márgenes */
   @page {
-    size: 80mm 50mm landscape;
+    size: 80mm 50mm;
     margin: 0 !important;
   }
 
   html, body {
     width: 80mm !important;
     height: 50mm !important;
+    max-width: 80mm !important;
+    max-height: 50mm !important;
     margin: 0 !important;
     padding: 0 !important;
     overflow: hidden !important;
@@ -1513,9 +1515,11 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     -webkit-print-color-adjust: exact !important;
   }
 
+  /* Etiqueta con margen de seguridad (78x48mm) para evitar desbordes */
   .etiqueta {
-    width: 80mm !important;
-    height: 50mm !important;
+    width: 78mm !important;
+    height: 48mm !important;
+    margin: 1mm auto !important;
     box-sizing: border-box !important;
     overflow: hidden !important;
     display: flex !important;
@@ -1524,8 +1528,12 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     justify-content: space-between !important;
     font-family: Arial, Helvetica, sans-serif !important;
     background: #ffffff !important;
-    padding: 2mm 3mm 1.5mm 3mm !important;
+    padding: 1.5mm 2mm 1mm 2mm !important;
     text-align: center !important;
+    page-break-before: avoid !important;
+    page-break-after: avoid !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
 
   .top {
@@ -1538,19 +1546,19 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 
   .brand {
     width: 100% !important;
-    font-size: 13pt !important;
+    font-size: 12pt !important;
     font-weight: 900 !important;
     color: #000000 !important;
     letter-spacing: 0.05em !important;
     text-transform: uppercase !important;
     text-align: center !important;
-    line-height: 1 !important;
+    line-height: 1.1 !important;
     white-space: nowrap !important;
   }
 
   .url {
     width: 100% !important;
-    font-size: 7pt !important;
+    font-size: 6.5pt !important;
     font-weight: 700 !important;
     color: #000000 !important;
     letter-spacing: 0.03em !important;
@@ -1560,21 +1568,21 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 
   .divider {
     width: 90% !important;
-    height: 0.5mm !important;
+    height: 0.4mm !important;
     background: #000000 !important;
     flex-shrink: 0 !important;
-    margin: 0.4mm auto !important;
+    margin: 0.3mm auto !important;
   }
 
   .product-name {
     width: 100% !important;
-    font-size: 15pt !important;
+    font-size: 14pt !important;
     font-weight: 900 !important;
     color: #000000 !important;
     text-transform: uppercase !important;
     letter-spacing: 0.03em !important;
     text-align: center !important;
-    line-height: 1 !important;
+    line-height: 1.1 !important;
     white-space: nowrap !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
@@ -1582,18 +1590,18 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 
   .weight {
     width: 100% !important;
-    font-size: 12.5pt !important;
+    font-size: 12pt !important;
     font-weight: 900 !important;
     color: #000000 !important;
     text-align: center !important;
-    line-height: 1 !important;
+    line-height: 1.1 !important;
   }
 
   svg#barcode {
     display: block !important;
-    width: 72mm !important;
-    max-width: 72mm !important;
-    max-height: 18mm !important;
+    width: 70mm !important;
+    max-width: 70mm !important;
+    max-height: 15mm !important;
     height: auto !important;
     flex-shrink: 0 !important;
     margin: 0 auto !important;
@@ -1601,27 +1609,26 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
 
   @media print {
     @page {
-      size: 80mm 50mm landscape;
+      size: 80mm 50mm;
       margin: 0 !important;
     }
     html, body {
       width: 80mm !important;
       height: 50mm !important;
+      max-width: 80mm !important;
+      max-height: 50mm !important;
       overflow: hidden !important;
       margin: 0 !important;
       padding: 0 !important;
     }
-    body > * {
-      display: none !important;
-    }
-    body > .etiqueta {
-      display: flex !important;
-      position: absolute !important;
-      top: 0 !important;
-      left: 0 !important;
-      width: 80mm !important;
-      height: 50mm !important;
-      overflow: hidden !important;
+    .etiqueta {
+      width: 78mm !important;
+      height: 48mm !important;
+      margin: 1mm auto !important;
+      page-break-before: avoid !important;
+      page-break-after: avoid !important;
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
     }
   }
 </style>
