@@ -4,8 +4,7 @@ import {
   AlertTriangle, TrendingUp, Package, Plus, History, 
   Check, Info, Box, Edit2, RotateCcw, X, Save,
   AlertCircle, Loader2, Settings, ChevronDown, ChevronUp,
-  ScanBarcode, Trash2, Zap, ClipboardList, Scale, Printer, CheckCircle2, Radio,
-  Terminal, Play, Pause, RefreshCw, Send
+  ScanBarcode, Trash2, Zap, ClipboardList, Scale, Printer, CheckCircle2, Radio
 } from 'lucide-react';
 
 // Configuración de entorno
@@ -1194,35 +1193,6 @@ function extraerPesoSystel(trama) {
   return null;
 }
 
-// ── Helper para formatear bytes crudos para inspección ─────────────────────
-function formatByte(byte) {
-  let char = '';
-  let isControl = false;
-
-  if (byte === 2) { char = '[STX]'; isControl = true; }
-  else if (byte === 3) { char = '[ETX]'; isControl = true; }
-  else if (byte === 4) { char = '[EOT]'; isControl = true; }
-  else if (byte === 5) { char = '[ENQ]'; isControl = true; }
-  else if (byte === 6) { char = '[ACK]'; isControl = true; }
-  else if (byte === 10) { char = '[LF]'; isControl = true; }
-  else if (byte === 13) { char = '[CR]'; isControl = true; }
-  else if (byte === 32) { char = '[ESP]'; isControl = true; }
-  else if (byte >= 33 && byte <= 126) {
-    char = String.fromCharCode(byte);
-  } else {
-    char = `\\x${byte.toString(16).toUpperCase().padStart(2, '0')}`;
-    isControl = true;
-  }
-
-  return {
-    dec: byte,
-    hex: '0x' + byte.toString(16).toUpperCase().padStart(2, '0'),
-    hexRaw: byte.toString(16).toUpperCase().padStart(2, '0'),
-    char,
-    isControl,
-  };
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENTE: Pesar y Etiquetar
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1249,49 +1219,35 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   const [confirmado, setConfirmado] = useState(false);
   const pesoRef = useRef(null);
 
-  // ── Conexión Web Serial (Balanza Systel Clipse) ──────────────────────────
+  // ── Conexión Web Serial (Balanza Systel Clipse - 115200 baud) ────────────
   const [scaleConnected, setScaleConnected] = useState(false);
   const [scaleConnecting, setScaleConnecting] = useState(false);
   const [scaleError, setScaleError] = useState(null);
-  const [lastWeightReceived, setLastWeightReceived] = useState(null);
-  const [baudRate, setBaudRate] = useState(115200);
-  const [autoENQ, setAutoENQ] = useState(false);
   const portRef = useRef(null);
   const readerRef = useRef(null);
   const isReadingRef = useRef(false);
 
-  // ── Monitor de Bytes Crudos COM4 (Systel Clipse) ─────────────────────────
-  const [rawLogs, setRawLogs] = useState([]);
-  const [ultimoPaquete, setUltimoPaquete] = useState(null);
-  const [totalBytesRecibidos, setTotalBytesRecibidos] = useState(0);
-  const [pausarLog, setPausarLog] = useState(false);
-  const pausarLogRef = useRef(false);
-  pausarLogRef.current = pausarLog;
-
-  // Enviar comando ENQ (0x05) a la balanza para solicitar peso
-  const enviarComandoENQ = useCallback(async () => {
+  // Comando ENQ (0x05) silencioso en segundo plano por si la balanza opera por demanda
+  const enviarENQSilencioso = useCallback(async () => {
     if (!portRef.current || !portRef.current.writable) return;
     try {
       const writer = portRef.current.writable.getWriter();
-      await writer.write(new Uint8Array([0x05])); // 0x05 = ENQ
+      await writer.write(new Uint8Array([0x05]));
       writer.releaseLock();
-      console.log('[COM4] Solicitud ENQ (0x05) enviada a la balanza');
     } catch (err) {
-      console.warn('Error enviando comando ENQ a la balanza:', err);
+      // silencioso
     }
   }, []);
 
-  // Intervalo de auto-sondeo ENQ si está activado
   useEffect(() => {
-    if (!scaleConnected || !autoENQ) return;
+    if (!scaleConnected) return;
     const interval = setInterval(() => {
-      enviarComandoENQ();
+      enviarENQSilencioso();
     }, 400);
     return () => clearInterval(interval);
-  }, [scaleConnected, autoENQ, enviarComandoENQ]);
+  }, [scaleConnected, enviarENQSilencioso]);
 
   const aplicarPesoBalanza = useCallback((pesoStr) => {
-    setLastWeightReceived(pesoStr);
     setModoLiteral(true);
     setRawLiteral(pesoStr);
     setDigitos('');
@@ -1310,41 +1266,6 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
         const { value, done } = await reader.read();
         if (done) break;
         if (value && value.length > 0) {
-          // ── LOG EXACTO DE BYTES CRUDOS SIN PROCESAR ─────────────────────
-          const bytesArr = Array.from(value);
-          const formatted = bytesArr.map(formatByte);
-          const textPreview = formatted.map(b => b.char).join('');
-          const hexPreview = formatted.map(b => b.hexRaw).join(' ');
-          const decPreview = bytesArr.join(', ');
-
-          // Log detallado en la consola del navegador
-          console.log('%c[SYSTEL COM4 RAW BYTES]', 'color: #38bdf8; font-weight: bold;', {
-            longitud: value.length,
-            textoCrudo: textPreview,
-            hex: hexPreview,
-            decimales: decPreview,
-            bytes: formatted,
-          });
-
-          // Actualizar monitor en pantalla si no está pausado
-          if (!pausarLogRef.current) {
-            const now = new Date();
-            const timeStr = now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
-            const nuevoPaquete = {
-              id: Date.now() + Math.random(),
-              time: timeStr,
-              count: value.length,
-              formatted,
-              textPreview,
-              hexPreview,
-              decPreview,
-            };
-            setUltimoPaquete(nuevoPaquete);
-            setRawLogs(prev => [nuevoPaquete, ...prev].slice(0, 30));
-            setTotalBytesRecibidos(prev => prev + value.length);
-          }
-
-          // Procesamiento para decodificar texto y extraer peso
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk;
 
@@ -1385,7 +1306,7 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
       }
     } catch (err) {
       if (err.name !== 'AbortError') {
-        console.warn('Lectura serial de balanza detenida:', err);
+        console.warn('Lectura de balanza detenida:', err);
       }
     } finally {
       if (readerRef.current) {
@@ -1401,7 +1322,7 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
 
   const conectarBalanza = async () => {
     if (!('serial' in navigator)) {
-      setScaleError('La Web Serial API no está disponible en este navegador. Usá Google Chrome o Microsoft Edge.');
+      setScaleError('Web Serial API no soportada. Usá Google Chrome o Microsoft Edge.');
       return;
     }
 
@@ -1414,12 +1335,11 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
       if (grantedPorts.length === 1 && !portRef.current) {
         port = grantedPorts[0];
       } else {
-        // Diálogo nativo de Chrome para seleccionar el puerto COM (ej: COM4)
         port = await navigator.serial.requestPort();
       }
 
       await port.open({
-        baudRate: Number(baudRate) || 115200,
+        baudRate: 115200,
         dataBits: 8,
         stopBits: 1,
         parity: 'none',
@@ -1430,11 +1350,11 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
 
       leerDatosBalanza(port);
     } catch (err) {
-      console.error('Error al conectar balanza serial:', err);
+      console.error('Error al conectar balanza:', err);
       setScaleConnecting(false);
       setScaleConnected(false);
       if (err.name !== 'NotFoundError') {
-        setScaleError(err.message || 'No se pudo conectar al puerto COM de la balanza');
+        setScaleError(err.message || 'No se pudo conectar al puerto de la balanza');
       }
     }
   };
@@ -1489,7 +1409,6 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   }, []);
 
   // ── Helpers derivados ────────────────────────────────────────────────────
-  // Valor numérico en kg según el modo activo
   const pesoKgActual = (() => {
     if (modoLiteral) {
       const v = parseFloat(rawLiteral.replace(',', '.'));
@@ -1499,26 +1418,22 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
     return parseInt(digitos, 10) / 1000;
   })();
 
-  // Texto a mostrar en el campo
   const pesoDisplay = (() => {
     if (modoLiteral) return rawLiteral;
     if (!digitos) return '';
     return (parseInt(digitos, 10) / 1000).toFixed(3);
   })();
 
-  // Resetea ambos modos
   const resetPeso = () => {
     setDigitos('');
     setRawLiteral('');
     setModoLiteral(false);
   };
 
-  // Foco automático al montar y después de cada bolsa
   useEffect(() => {
     if (pesoRef.current) pesoRef.current.focus();
   }, []);
 
-  // Si no hay producto seleccionado y hay productos, seleccionar el primero
   useEffect(() => {
     if (!selectedId && productList.length > 0) {
       setSelectedId(productList[0].id);
@@ -1546,7 +1461,7 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, pesoKgActual, productList]);
 
-  // ── Teclado: dual-mode ───────────────────────────────────────────────────
+  // ── Teclado: dual-mode y Enter para confirmar ─────────────────────────────
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -1559,7 +1474,6 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
       if (modoLiteral) {
         setRawLiteral(prev => {
           const next = prev.slice(0, -1);
-          // Si se borró el punto, volver a modo calculadora
           if (!next.includes('.') && !next.includes(',')) {
             setModoLiteral(false);
             setDigitos(next.replace(/\D/g, ''));
@@ -1576,10 +1490,8 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
     if (/^[0-9]$/.test(e.key)) {
       e.preventDefault();
       if (modoLiteral) {
-        // Modo balanza: agregar dígito al literal (máx 2 decimales útiles, pero sin límite rígido)
         setRawLiteral(prev => prev + e.key);
       } else {
-        // Modo calculadora: acumular dígitos (máx 7 → 9999.999 kg)
         setDigitos(prev => {
           if (prev.length >= 7) return prev;
           const next = prev + e.key;
@@ -1589,21 +1501,16 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
       return;
     }
 
-    // Punto o coma → viene de la balanza: activar modo literal
     if (e.key === '.' || e.key === ',') {
       e.preventDefault();
       if (!modoLiteral) {
-        // Semilla del literal = dígitos acumulados hasta ahora + '.'
-        // Ejemplo: balanza envió '1' luego '.' → rawLiteral = '1.'
         setRawLiteral(digitos + '.');
         setDigitos('');
         setModoLiteral(true);
       }
-      // Si ya estamos en modo literal, ignorar el segundo punto
       return;
     }
 
-    // Bloquear otros caracteres especiales del input numérico
     if (['+', '-', 'e', 'E'].includes(e.key)) {
       e.preventDefault();
     }
@@ -1614,12 +1521,10 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
     setConfirmando(true);
 
     const current = { ...stockData };
-    // Agrupar por productId
     const grouped = sesion.reduce((acc, item) => {
       if (!acc[item.productId]) acc[item.productId] = { nombre: item.nombre, bolsas: 0, pesoTotal: 0, items: [] };
       acc[item.productId].bolsas += 1;
       acc[item.productId].pesoTotal += item.peso;
-      // Determinar slot por peso
       const prod = current[item.productId];
       const tipo = prod?.tipo || 'duro';
       const slot = determinarSlot(tipo, item.peso);
@@ -1659,102 +1564,58 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   };
 
   return (
-    <div className="border border-purple-500/20 rounded-3xl p-5 shadow-2xl bg-gradient-to-br from-gray-900 via-[#100d1a] to-gray-900 space-y-4 animate-in slide-in-from-top-2 duration-300">
-      {/* Cabecera y Conexión de Balanza */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-purple-500/10">
+    <div className="border border-purple-500/20 rounded-3xl p-5 sm:p-6 shadow-2xl bg-gradient-to-br from-gray-900 via-[#100d1a] to-gray-900 space-y-5 animate-in slide-in-from-top-2 duration-300">
+      {/* Cabecera con estado de balanza */}
+      <div className="flex items-center justify-between gap-3 pb-3 border-b border-purple-500/10">
         <div className="flex items-center gap-2.5">
-          <Scale size={16} className="text-purple-400 shrink-0" />
+          <Scale size={18} className="text-purple-400 shrink-0" />
           <div>
-            <p className="text-white text-xs font-black uppercase tracking-wider">
+            <h3 className="text-white text-xs font-black uppercase tracking-wider">
               Pesar y Etiquetar
-            </p>
+            </h3>
             <p className="text-gray-500 text-[10px] font-bold tracking-wider">
-              Seleccioná producto, pesá y presioná OK
+              Balanza Systel Clipse (115200 baud)
             </p>
           </div>
         </div>
 
-        {/* Botón Balanza e Indicador de Conexión */}
-        <div className="flex items-center gap-2 flex-wrap">
+        {/* Botón de conexión / Indicador de estado */}
+        <div>
           {scaleConnected ? (
-            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl px-3 py-1.5 shadow-sm flex-wrap">
-              <span className="relative flex h-2.5 w-2.5">
+            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl px-3 py-1.5 shadow-sm">
+              <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
               </span>
-              <div className="flex flex-col">
-                <span className="text-emerald-400 text-[10px] font-black uppercase tracking-widest leading-none">
-                  Balanza Conectada
-                </span>
-                <span className="text-emerald-300/80 font-mono text-[9px] leading-none mt-1">
-                  Systel Clipse · COM4 · {baudRate} baud
-                  {lastWeightReceived ? ` · ${lastWeightReceived} kg` : ''}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={enviarComandoENQ}
-                title="Pedir peso por comando ENQ (0x05)"
-                className="ml-1.5 flex items-center gap-1 bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 text-[9px] font-bold px-2.5 py-1 rounded-lg border border-emerald-500/30 transition-all active:scale-95"
-              >
-                <Send size={10} />
-                <span>Pedir peso</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setAutoENQ(prev => !prev)}
-                title={autoENQ ? 'Desactivar auto-sondeo continuo' : 'Activar auto-sondeo continuo cada 400ms'}
-                className={`flex items-center gap-1 text-[9px] font-bold px-2 py-1 rounded-lg border transition-all ${
-                  autoENQ 
-                    ? 'bg-emerald-500/30 border-emerald-400 text-white shadow-sm' 
-                    : 'bg-black/30 border-white/10 text-gray-400 hover:text-white'
-                }`}
-              >
-                <RefreshCw size={10} className={autoENQ ? 'animate-spin' : ''} />
-                <span>Auto ENQ</span>
-              </button>
+              <span className="text-emerald-400 text-[10px] font-black uppercase tracking-widest leading-none">
+                Balanza Conectada
+              </span>
               <button
                 onClick={desconectarBalanza}
                 title="Desconectar balanza"
-                className="ml-1 text-gray-500 hover:text-red-400 transition-colors p-1"
+                className="ml-1 text-gray-500 hover:text-red-400 transition-colors p-0.5"
               >
-                <X size={13} />
+                <X size={12} />
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-2">
-              <select
-                value={baudRate}
-                onChange={e => setBaudRate(Number(e.target.value))}
-                className="bg-black/60 border border-purple-500/30 text-purple-300 text-xs font-mono font-bold rounded-2xl px-3 py-1.5 outline-none cursor-pointer hover:border-purple-400 transition-colors"
-                title="Velocidad en baudios (Baud Rate)"
-              >
-                <option value={115200}>115200 (Balanza)</option>
-                <option value={9600}>9600</option>
-                <option value={57600}>57600</option>
-                <option value={38400}>38400</option>
-                <option value={19200}>19200</option>
-                <option value={4800}>4800</option>
-              </select>
-
-              <button
-                onClick={conectarBalanza}
-                disabled={scaleConnecting}
-                className="flex items-center gap-2 px-3.5 py-1.5 rounded-2xl text-xs font-black uppercase tracking-wider bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 hover:text-white transition-all shadow-sm active:scale-95 disabled:opacity-50"
-              >
-                {scaleConnecting ? (
-                  <>
-                    <Loader2 size={13} className="animate-spin text-purple-400" />
-                    <span>Conectando...</span>
-                  </>
-                ) : (
-                  <>
-                    <Radio size={13} className="text-purple-400" />
-                    <span>Conectar ({baudRate})</span>
-                  </>
-                )}
-              </button>
-            </div>
+            <button
+              onClick={conectarBalanza}
+              disabled={scaleConnecting}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-[10px] font-black uppercase tracking-wider bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 hover:text-white transition-all shadow-sm active:scale-95 disabled:opacity-50"
+            >
+              {scaleConnecting ? (
+                <>
+                  <Loader2 size={12} className="animate-spin text-purple-400" />
+                  <span>Conectando...</span>
+                </>
+              ) : (
+                <>
+                  <Radio size={12} className="text-purple-400" />
+                  <span>Conectar balanza</span>
+                </>
+              )}
+            </button>
           )}
         </div>
       </div>
@@ -1769,13 +1630,15 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
         </div>
       )}
 
-      {/* Selector de producto */}
-      <div className="space-y-1">
-        <label className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Producto</label>
+      {/* 1. Selector de producto arriba */}
+      <div className="space-y-1.5">
+        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+          Producto
+        </label>
         <select
           value={selectedId}
           onChange={e => setSelectedId(e.target.value)}
-          className="w-full bg-black/40 border border-white/10 focus:border-purple-500/60 text-white text-sm font-bold rounded-2xl px-4 py-3 outline-none transition-all appearance-none cursor-pointer"
+          className="w-full bg-black/50 border border-white/10 focus:border-purple-500/60 text-white text-sm font-bold rounded-2xl px-4 py-3 outline-none transition-all appearance-none cursor-pointer hover:border-purple-500/30"
         >
           {productList.map(p => (
             <option key={p.id} value={p.id} className="bg-gray-900">
@@ -1785,14 +1648,16 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
         </select>
       </div>
 
-      {/* Campo de peso + botón OK */}
-      <div className="space-y-1">
+      {/* 2. Campo de peso que recibe automáticamente el dato de la balanza + Botón OK */}
+      <div className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <label className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Peso (kg)</label>
+          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+            Peso (kg)
+          </label>
           {scaleConnected && (
             <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-400 flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              Lectura en vivo (COM4 · {baudRate} baud)
+              Lectura automática en vivo
             </span>
           )}
         </div>
@@ -1802,185 +1667,107 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
             type="text"
             inputMode="numeric"
             value={pesoDisplay}
-            onChange={() => {}} // controlado solo por onKeyDown
+            onChange={() => {}} // controlado por balanza o teclado
             onKeyDown={handleKeyDown}
             placeholder="0.000"
-            readOnly={false}
-            className="flex-1 bg-black/40 border border-white/10 focus:border-purple-500/60 text-white text-xl font-black font-mono rounded-2xl px-4 py-3 outline-none transition-all placeholder:text-gray-700 focus:bg-black/60 focus:shadow-[0_0_20px_rgba(168,85,247,0.1)] text-center"
+            className="flex-1 bg-black/50 border border-white/10 focus:border-purple-500/60 text-white text-2xl font-black font-mono rounded-2xl px-4 py-3 outline-none transition-all placeholder:text-gray-700 focus:bg-black/70 focus:shadow-[0_0_20px_rgba(168,85,247,0.15)] text-center"
           />
           <button
             onClick={confirmarBolsa}
             disabled={!selectedId || pesoKgActual <= 0}
             className="px-6 py-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-30 disabled:cursor-not-allowed text-white font-black text-sm rounded-2xl border-b-2 border-purple-800 active:border-b-0 active:translate-y-px shadow-lg transition-all uppercase tracking-widest flex items-center gap-2"
           >
-            <Printer size={15} />
-            OK
+            <Printer size={16} />
+            <span>OK</span>
           </button>
         </div>
       </div>
 
-      {/* ── Monitor de Bytes Crudos (Web Serial COM4) ────────────────────── */}
-      {(scaleConnected || rawLogs.length > 0) && (
-        <div className="border border-purple-500/20 bg-black/40 rounded-2xl p-4 space-y-3 font-mono animate-in slide-in-from-top-1">
-          {/* Header del Monitor */}
-          <div className="flex items-center justify-between gap-2 border-b border-white/5 pb-2.5">
-            <div className="flex items-center gap-2">
-              <Terminal size={14} className="text-purple-400" />
-              <span className="text-purple-300 text-[11px] font-black uppercase tracking-wider">
-                Monitor de Bytes Crudos COM4 ({baudRate} baud)
-              </span>
-              <span className="bg-purple-500/10 text-purple-400 border border-purple-500/20 text-[9px] px-2 py-0.5 rounded-full font-bold">
-                {totalBytesRecibidos} bytes recibidos
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setPausarLog(p => !p)}
-                className={`flex items-center gap-1 text-[9px] font-bold px-2 py-1 rounded-lg border transition-colors ${
-                  pausarLog
-                    ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                    : 'bg-white/5 border-white/10 text-gray-400 hover:text-white'
-                }`}
-                title={pausarLog ? 'Reanudar actualización en pantalla' : 'Pausar pantalla'}
-              >
-                {pausarLog ? <Play size={10} /> : <Pause size={10} />}
-                <span>{pausarLog ? 'Reanudar' : 'Pausar'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => { setRawLogs([]); setUltimoPaquete(null); setTotalBytesRecibidos(0); }}
-                className="flex items-center gap-1 text-[9px] font-bold px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-gray-400 hover:text-red-400 transition-colors"
-                title="Limpiar monitor"
-              >
-                <Trash2 size={10} />
-                <span>Limpiar</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Desglose byte por byte del último paquete */}
-          {ultimoPaquete ? (
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between text-[10px] text-gray-400">
-                <span className="font-bold text-gray-300">
-                  ÚLTIMO PAQUETE ({ultimoPaquete.count} bytes) · {ultimoPaquete.time}:
-                </span>
-                <span className="text-gray-500 text-[9px]">[Texto / Decimal / Hex]</span>
-              </div>
-              
-              <div className="flex flex-wrap gap-1.5 p-2.5 bg-black/60 rounded-xl border border-white/5 max-h-[140px] overflow-y-auto custom-scrollbar">
-                {ultimoPaquete.formatted.map((b, idx) => (
-                  <div
-                    key={idx}
-                    className={`flex flex-col items-center justify-center rounded-lg px-2 py-1.5 border text-center min-w-[46px] transition-all shadow-sm ${
-                      b.isControl
-                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-                        : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                    }`}
-                  >
-                    <span className="text-xs font-black leading-tight">
-                      {b.char}
-                    </span>
-                    <span className="text-[10px] font-bold text-white leading-tight mt-0.5">
-                      {b.dec}
-                    </span>
-                    <span className="text-[8px] opacity-60 leading-tight">
-                      {b.hex}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="text-center py-3 text-gray-600 text-[10px]">
-              Esperando paquetes desde el puerto COM4...
-            </div>
-          )}
-
-          {/* Historial de últimos paquetes recibidos */}
-          {rawLogs.length > 0 && (
-            <div className="space-y-1 pt-1 border-t border-white/5">
-              <span className="text-[9px] font-bold uppercase tracking-wider text-gray-500">
-                Historial reciente ({rawLogs.length} paquetes)
-              </span>
-              <div className="max-h-[110px] overflow-y-auto space-y-1 custom-scrollbar text-[9px] divide-y divide-white/5 pr-1">
-                {rawLogs.map(log => (
-                  <div key={log.id} className="pt-1 flex flex-col gap-0.5">
-                    <div className="flex items-center justify-between text-gray-500">
-                      <span className="text-purple-400/90 font-bold">{log.time}</span>
-                      <span>{log.count} bytes</span>
-                    </div>
-                    <div className="flex flex-col gap-0.5 text-[9px]">
-                      <span className="text-emerald-400 font-bold truncate">TXT: {log.textPreview}</span>
-                      <span className="text-gray-400 truncate">DEC: [{log.decPreview}]</span>
-                      <span className="text-purple-300/70 truncate">HEX: {log.hexPreview}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Lista de sesión */}
-      {sesion.length > 0 && (
+      {/* 3. Lista de bolsas confirmadas */}
+      {sesion.length > 0 ? (
         <div className="border border-purple-500/20 bg-purple-500/5 rounded-2xl overflow-hidden animate-in slide-in-from-top-1 duration-200">
           <div className="px-4 py-3 border-b border-purple-500/10 flex items-center justify-between">
-            <p className="text-purple-400 text-[9px] font-black uppercase tracking-[0.25em]">Bolsas en esta sesión</p>
-            <p className="text-purple-400/80 text-[10px] font-mono font-bold">{sesion.length} {sesion.length === 1 ? 'bolsa' : 'bolsas'}</p>
+            <p className="text-purple-400 text-[10px] font-black uppercase tracking-[0.2em]">
+              Bolsas confirmadas
+            </p>
+            <p className="text-purple-400/80 text-[10px] font-mono font-bold">
+              {sesion.length} {sesion.length === 1 ? 'bolsa' : 'bolsas'}
+            </p>
           </div>
           <div className="divide-y divide-white/5 max-h-[260px] overflow-y-auto custom-scrollbar">
             {sesion.map((bolsa, i) => (
-              <div key={bolsa.id} className="flex items-center justify-between px-4 py-2.5 gap-3 group hover:bg-white/5 transition-colors">
+              <div
+                key={bolsa.id}
+                className="flex items-center justify-between px-4 py-2.5 gap-3 group hover:bg-white/5 transition-colors"
+              >
                 <div className="flex items-center gap-3 min-w-0">
-                  <span className="text-purple-400/50 text-[10px] font-mono w-5 text-right shrink-0">#{i + 1}</span>
-                  <p className="text-white text-xs font-bold uppercase tracking-tight truncate">{bolsa.nombre}</p>
+                  <span className="text-purple-400/60 text-[11px] font-mono font-bold w-6 text-right shrink-0">
+                    #{i + 1}
+                  </span>
+                  <p className="text-white text-xs font-bold uppercase tracking-tight truncate">
+                    {bolsa.nombre}
+                  </p>
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
-                  <p className="text-purple-400 font-mono text-xs font-bold">{bolsa.peso.toFixed(3)} kg</p>
+                  <p className="text-purple-400 font-mono text-xs font-black">
+                    {bolsa.peso.toFixed(3)} kg
+                  </p>
                   <button
                     onClick={() => eliminarBolsa(bolsa.id)}
-                    className="opacity-0 group-hover:opacity-100 p-1 text-gray-600 hover:text-red-400 transition-all"
+                    title="Eliminar bolsa de la sesión"
+                    className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition-all"
                   >
-                    <X size={12} />
+                    <X size={13} />
                   </button>
                 </div>
               </div>
             ))}
           </div>
-          {/* Resumen y confirmación */}
-          <div className="p-3 border-t border-purple-500/10">
-            <div className="flex items-center justify-between text-[10px] font-mono mb-3 px-1">
-              <span className="text-purple-400/70">Total sesión:</span>
-              <span className="text-purple-400 font-black">
+
+          {/* 4. Resumen y botón Confirmar todo al stock */}
+          <div className="p-3.5 border-t border-purple-500/10 bg-black/20">
+            <div className="flex items-center justify-between text-xs font-mono mb-3 px-1">
+              <span className="text-purple-400/70 font-bold uppercase tracking-wider text-[10px]">
+                Total sesión:
+              </span>
+              <span className="text-purple-300 font-black text-sm">
                 {sesion.reduce((s, b) => s + b.peso, 0).toFixed(3)} kg
               </span>
             </div>
             {confirmado ? (
-              <div className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-green-500/10 border border-green-500/20">
-                <CheckCircle2 size={14} className="text-green-400" />
-                <span className="text-green-400 text-[11px] font-black uppercase tracking-widest">¡Stock actualizado!</span>
+              <div className="flex items-center justify-center gap-2 py-3 rounded-xl bg-green-500/10 border border-green-500/30">
+                <CheckCircle2 size={16} className="text-green-400" />
+                <span className="text-green-400 text-xs font-black uppercase tracking-widest">
+                  ¡Stock actualizado con éxito!
+                </span>
               </div>
             ) : (
               <button
                 onClick={confirmarTodoAlStock}
                 disabled={confirmando}
-                className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-[11px] font-black uppercase tracking-widest transition-all border-b-2 border-purple-800 active:border-b-0 active:translate-y-px shadow-lg flex items-center justify-center gap-2"
+                className="w-full py-3 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-black uppercase tracking-widest transition-all border-b-2 border-purple-800 active:border-b-0 active:translate-y-px shadow-lg flex items-center justify-center gap-2"
               >
-                {confirmando ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                Confirmar todo al stock
+                {confirmando ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    <span>Guardando en el Sheet...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={14} />
+                    <span>Confirmar todo al stock</span>
+                  </>
+                )}
               </button>
             )}
           </div>
         </div>
-      )}
-
-      {sesion.length === 0 && (
-        <div className="text-center py-6 text-gray-700">
-          <Scale size={28} className="mx-auto mb-2 opacity-30" />
-          <p className="text-[10px] font-bold uppercase tracking-widest opacity-50">Aún no pesaste ninguna bolsa</p>
+      ) : (
+        <div className="text-center py-8 text-gray-700">
+          <Scale size={32} className="mx-auto mb-2 opacity-25 text-purple-400" />
+          <p className="text-[10px] font-bold uppercase tracking-widest opacity-50">
+            Aún no confirmaste ninguna bolsa
+          </p>
         </div>
       )}
     </div>
