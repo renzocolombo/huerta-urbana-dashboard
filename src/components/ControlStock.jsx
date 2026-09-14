@@ -4,7 +4,8 @@ import {
   AlertTriangle, TrendingUp, Package, Plus, History, 
   Check, Info, Box, Edit2, RotateCcw, X, Save,
   AlertCircle, Loader2, Settings, ChevronDown, ChevronUp,
-  ScanBarcode, Trash2, Zap, ClipboardList, Scale, Printer, CheckCircle2, Radio
+  ScanBarcode, Trash2, Zap, ClipboardList, Scale, Printer, CheckCircle2, Radio,
+  Terminal, Play, Pause
 } from 'lucide-react';
 
 // Configuración de entorno
@@ -1193,6 +1194,35 @@ function extraerPesoSystel(trama) {
   return null;
 }
 
+// ── Helper para formatear bytes crudos para inspección ─────────────────────
+function formatByte(byte) {
+  let char = '';
+  let isControl = false;
+
+  if (byte === 2) { char = '[STX]'; isControl = true; }
+  else if (byte === 3) { char = '[ETX]'; isControl = true; }
+  else if (byte === 4) { char = '[EOT]'; isControl = true; }
+  else if (byte === 5) { char = '[ENQ]'; isControl = true; }
+  else if (byte === 6) { char = '[ACK]'; isControl = true; }
+  else if (byte === 10) { char = '[LF]'; isControl = true; }
+  else if (byte === 13) { char = '[CR]'; isControl = true; }
+  else if (byte === 32) { char = '[ESP]'; isControl = true; }
+  else if (byte >= 33 && byte <= 126) {
+    char = String.fromCharCode(byte);
+  } else {
+    char = `\\x${byte.toString(16).toUpperCase().padStart(2, '0')}`;
+    isControl = true;
+  }
+
+  return {
+    dec: byte,
+    hex: '0x' + byte.toString(16).toUpperCase().padStart(2, '0'),
+    hexRaw: byte.toString(16).toUpperCase().padStart(2, '0'),
+    char,
+    isControl,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENTE: Pesar y Etiquetar
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1228,6 +1258,14 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   const readerRef = useRef(null);
   const isReadingRef = useRef(false);
 
+  // ── Monitor de Bytes Crudos COM4 (Systel Clipse) ─────────────────────────
+  const [rawLogs, setRawLogs] = useState([]);
+  const [ultimoPaquete, setUltimoPaquete] = useState(null);
+  const [totalBytesRecibidos, setTotalBytesRecibidos] = useState(0);
+  const [pausarLog, setPausarLog] = useState(false);
+  const pausarLogRef = useRef(false);
+  pausarLogRef.current = pausarLog;
+
   const aplicarPesoBalanza = useCallback((pesoStr) => {
     setLastWeightReceived(pesoStr);
     setModoLiteral(true);
@@ -1247,7 +1285,42 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
       while (isReadingRef.current && port.readable) {
         const { value, done } = await reader.read();
         if (done) break;
-        if (value) {
+        if (value && value.length > 0) {
+          // ── LOG EXACTO DE BYTES CRUDOS SIN PROCESAR ─────────────────────
+          const bytesArr = Array.from(value);
+          const formatted = bytesArr.map(formatByte);
+          const textPreview = formatted.map(b => b.char).join('');
+          const hexPreview = formatted.map(b => b.hexRaw).join(' ');
+          const decPreview = bytesArr.join(', ');
+
+          // Log detallado en la consola del navegador
+          console.log('%c[SYSTEL COM4 RAW BYTES]', 'color: #38bdf8; font-weight: bold;', {
+            longitud: value.length,
+            textoCrudo: textPreview,
+            hex: hexPreview,
+            decimales: decPreview,
+            bytes: formatted,
+          });
+
+          // Actualizar monitor en pantalla si no está pausado
+          if (!pausarLogRef.current) {
+            const now = new Date();
+            const timeStr = now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
+            const nuevoPaquete = {
+              id: Date.now() + Math.random(),
+              time: timeStr,
+              count: value.length,
+              formatted,
+              textPreview,
+              hexPreview,
+              decPreview,
+            };
+            setUltimoPaquete(nuevoPaquete);
+            setRawLogs(prev => [nuevoPaquete, ...prev].slice(0, 30));
+            setTotalBytesRecibidos(prev => prev + value.length);
+          }
+
+          // Procesamiento para decodificar texto y extraer peso
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk;
 
@@ -1678,6 +1751,111 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
           </button>
         </div>
       </div>
+
+      {/* ── Monitor de Bytes Crudos (Web Serial COM4) ────────────────────── */}
+      {(scaleConnected || rawLogs.length > 0) && (
+        <div className="border border-purple-500/20 bg-black/40 rounded-2xl p-4 space-y-3 font-mono animate-in slide-in-from-top-1">
+          {/* Header del Monitor */}
+          <div className="flex items-center justify-between gap-2 border-b border-white/5 pb-2.5">
+            <div className="flex items-center gap-2">
+              <Terminal size={14} className="text-purple-400" />
+              <span className="text-purple-300 text-[11px] font-black uppercase tracking-wider">
+                Monitor de Bytes Crudos COM4
+              </span>
+              <span className="bg-purple-500/10 text-purple-400 border border-purple-500/20 text-[9px] px-2 py-0.5 rounded-full font-bold">
+                {totalBytesRecibidos} bytes recibidos
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setPausarLog(p => !p)}
+                className={`flex items-center gap-1 text-[9px] font-bold px-2 py-1 rounded-lg border transition-colors ${
+                  pausarLog
+                    ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                    : 'bg-white/5 border-white/10 text-gray-400 hover:text-white'
+                }`}
+                title={pausarLog ? 'Reanudar actualización en pantalla' : 'Pausar pantalla'}
+              >
+                {pausarLog ? <Play size={10} /> : <Pause size={10} />}
+                <span>{pausarLog ? 'Reanudar' : 'Pausar'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setRawLogs([]); setUltimoPaquete(null); setTotalBytesRecibidos(0); }}
+                className="flex items-center gap-1 text-[9px] font-bold px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-gray-400 hover:text-red-400 transition-colors"
+                title="Limpiar monitor"
+              >
+                <Trash2 size={10} />
+                <span>Limpiar</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Desglose byte por byte del último paquete */}
+          {ultimoPaquete ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[10px] text-gray-400">
+                <span className="font-bold text-gray-300">
+                  ÚLTIMO PAQUETE ({ultimoPaquete.count} bytes) · {ultimoPaquete.time}:
+                </span>
+                <span className="text-gray-500 text-[9px]">[Texto / Decimal / Hex]</span>
+              </div>
+              
+              <div className="flex flex-wrap gap-1.5 p-2.5 bg-black/60 rounded-xl border border-white/5 max-h-[140px] overflow-y-auto custom-scrollbar">
+                {ultimoPaquete.formatted.map((b, idx) => (
+                  <div
+                    key={idx}
+                    className={`flex flex-col items-center justify-center rounded-lg px-2 py-1.5 border text-center min-w-[46px] transition-all shadow-sm ${
+                      b.isControl
+                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                        : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                    }`}
+                  >
+                    <span className="text-xs font-black leading-tight">
+                      {b.char}
+                    </span>
+                    <span className="text-[10px] font-bold text-white leading-tight mt-0.5">
+                      {b.dec}
+                    </span>
+                    <span className="text-[8px] opacity-60 leading-tight">
+                      {b.hex}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-3 text-gray-600 text-[10px]">
+              Esperando paquetes desde el puerto COM4...
+            </div>
+          )}
+
+          {/* Historial de últimos paquetes recibidos */}
+          {rawLogs.length > 0 && (
+            <div className="space-y-1 pt-1 border-t border-white/5">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-gray-500">
+                Historial reciente ({rawLogs.length} paquetes)
+              </span>
+              <div className="max-h-[110px] overflow-y-auto space-y-1 custom-scrollbar text-[9px] divide-y divide-white/5 pr-1">
+                {rawLogs.map(log => (
+                  <div key={log.id} className="pt-1 flex flex-col gap-0.5">
+                    <div className="flex items-center justify-between text-gray-500">
+                      <span className="text-purple-400/90 font-bold">{log.time}</span>
+                      <span>{log.count} bytes</span>
+                    </div>
+                    <div className="flex flex-col gap-0.5 text-[9px]">
+                      <span className="text-emerald-400 font-bold truncate">TXT: {log.textPreview}</span>
+                      <span className="text-gray-400 truncate">DEC: [{log.decPreview}]</span>
+                      <span className="text-purple-300/70 truncate">HEX: {log.hexPreview}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Lista de sesión */}
       {sesion.length > 0 && (
