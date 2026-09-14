@@ -5,7 +5,7 @@ import {
   Check, Info, Box, Edit2, RotateCcw, X, Save,
   AlertCircle, Loader2, Settings, ChevronDown, ChevronUp,
   ScanBarcode, Trash2, Zap, ClipboardList, Scale, Printer, CheckCircle2, Radio,
-  Terminal, Play, Pause
+  Terminal, Play, Pause, RefreshCw, Send
 } from 'lucide-react';
 
 // Configuración de entorno
@@ -1153,9 +1153,9 @@ function AddStockInline({ nombre, labels, currentStock, onCancel, onSave }) {
 }
 
 // ── Web Serial API - Balanza Systel Clipse ──────────────────────────────────
-// Configuración: 9600 baudios, 8 bits de datos, sin paridad, 1 bit de parada (8N1)
+// Configuración: 115200 baudios por defecto (según balanza), 8 bits, sin paridad, 1 stop bit (8N1)
 const SERIAL_SCALE_CONFIG = {
-  baudRate: 9600,
+  baudRate: 115200,
   dataBits: 8,
   stopBits: 1,
   parity: 'none',
@@ -1254,6 +1254,8 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   const [scaleConnecting, setScaleConnecting] = useState(false);
   const [scaleError, setScaleError] = useState(null);
   const [lastWeightReceived, setLastWeightReceived] = useState(null);
+  const [baudRate, setBaudRate] = useState(115200);
+  const [autoENQ, setAutoENQ] = useState(false);
   const portRef = useRef(null);
   const readerRef = useRef(null);
   const isReadingRef = useRef(false);
@@ -1265,6 +1267,28 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   const [pausarLog, setPausarLog] = useState(false);
   const pausarLogRef = useRef(false);
   pausarLogRef.current = pausarLog;
+
+  // Enviar comando ENQ (0x05) a la balanza para solicitar peso
+  const enviarComandoENQ = useCallback(async () => {
+    if (!portRef.current || !portRef.current.writable) return;
+    try {
+      const writer = portRef.current.writable.getWriter();
+      await writer.write(new Uint8Array([0x05])); // 0x05 = ENQ
+      writer.releaseLock();
+      console.log('[COM4] Solicitud ENQ (0x05) enviada a la balanza');
+    } catch (err) {
+      console.warn('Error enviando comando ENQ a la balanza:', err);
+    }
+  }, []);
+
+  // Intervalo de auto-sondeo ENQ si está activado
+  useEffect(() => {
+    if (!scaleConnected || !autoENQ) return;
+    const interval = setInterval(() => {
+      enviarComandoENQ();
+    }, 400);
+    return () => clearInterval(interval);
+  }, [scaleConnected, autoENQ, enviarComandoENQ]);
 
   const aplicarPesoBalanza = useCallback((pesoStr) => {
     setLastWeightReceived(pesoStr);
@@ -1394,7 +1418,12 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
         port = await navigator.serial.requestPort();
       }
 
-      await port.open(SERIAL_SCALE_CONFIG);
+      await port.open({
+        baudRate: Number(baudRate) || 115200,
+        dataBits: 8,
+        stopBits: 1,
+        parity: 'none',
+      });
       portRef.current = port;
       setScaleConnected(true);
       setScaleConnecting(false);
@@ -1646,9 +1675,9 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
         </div>
 
         {/* Botón Balanza e Indicador de Conexión */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {scaleConnected ? (
-            <div className="flex items-center gap-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl px-3 py-1.5 shadow-sm">
+            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl px-3 py-1.5 shadow-sm flex-wrap">
               <span className="relative flex h-2.5 w-2.5">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
@@ -1658,10 +1687,32 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
                   Balanza Conectada
                 </span>
                 <span className="text-emerald-300/80 font-mono text-[9px] leading-none mt-1">
-                  Systel Clipse · COM4 · 9600
+                  Systel Clipse · COM4 · {baudRate} baud
                   {lastWeightReceived ? ` · ${lastWeightReceived} kg` : ''}
                 </span>
               </div>
+              <button
+                type="button"
+                onClick={enviarComandoENQ}
+                title="Pedir peso por comando ENQ (0x05)"
+                className="ml-1.5 flex items-center gap-1 bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 text-[9px] font-bold px-2.5 py-1 rounded-lg border border-emerald-500/30 transition-all active:scale-95"
+              >
+                <Send size={10} />
+                <span>Pedir peso</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAutoENQ(prev => !prev)}
+                title={autoENQ ? 'Desactivar auto-sondeo continuo' : 'Activar auto-sondeo continuo cada 400ms'}
+                className={`flex items-center gap-1 text-[9px] font-bold px-2 py-1 rounded-lg border transition-all ${
+                  autoENQ 
+                    ? 'bg-emerald-500/30 border-emerald-400 text-white shadow-sm' 
+                    : 'bg-black/30 border-white/10 text-gray-400 hover:text-white'
+                }`}
+              >
+                <RefreshCw size={10} className={autoENQ ? 'animate-spin' : ''} />
+                <span>Auto ENQ</span>
+              </button>
               <button
                 onClick={desconectarBalanza}
                 title="Desconectar balanza"
@@ -1671,23 +1722,39 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
               </button>
             </div>
           ) : (
-            <button
-              onClick={conectarBalanza}
-              disabled={scaleConnecting}
-              className="flex items-center gap-2 px-3.5 py-1.5 rounded-2xl text-xs font-black uppercase tracking-wider bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 hover:text-white transition-all shadow-sm active:scale-95 disabled:opacity-50"
-            >
-              {scaleConnecting ? (
-                <>
-                  <Loader2 size={13} className="animate-spin text-purple-400" />
-                  <span>Conectando...</span>
-                </>
-              ) : (
-                <>
-                  <Radio size={13} className="text-purple-400" />
-                  <span>Conectar balanza</span>
-                </>
-              )}
-            </button>
+            <div className="flex items-center gap-2">
+              <select
+                value={baudRate}
+                onChange={e => setBaudRate(Number(e.target.value))}
+                className="bg-black/60 border border-purple-500/30 text-purple-300 text-xs font-mono font-bold rounded-2xl px-3 py-1.5 outline-none cursor-pointer hover:border-purple-400 transition-colors"
+                title="Velocidad en baudios (Baud Rate)"
+              >
+                <option value={115200}>115200 (Balanza)</option>
+                <option value={9600}>9600</option>
+                <option value={57600}>57600</option>
+                <option value={38400}>38400</option>
+                <option value={19200}>19200</option>
+                <option value={4800}>4800</option>
+              </select>
+
+              <button
+                onClick={conectarBalanza}
+                disabled={scaleConnecting}
+                className="flex items-center gap-2 px-3.5 py-1.5 rounded-2xl text-xs font-black uppercase tracking-wider bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 hover:text-white transition-all shadow-sm active:scale-95 disabled:opacity-50"
+              >
+                {scaleConnecting ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin text-purple-400" />
+                    <span>Conectando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Radio size={13} className="text-purple-400" />
+                    <span>Conectar ({baudRate})</span>
+                  </>
+                )}
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -1725,7 +1792,7 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
           {scaleConnected && (
             <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-400 flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              Lectura en vivo (COM4)
+              Lectura en vivo (COM4 · {baudRate} baud)
             </span>
           )}
         </div>
@@ -1760,7 +1827,7 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
             <div className="flex items-center gap-2">
               <Terminal size={14} className="text-purple-400" />
               <span className="text-purple-300 text-[11px] font-black uppercase tracking-wider">
-                Monitor de Bytes Crudos COM4
+                Monitor de Bytes Crudos COM4 ({baudRate} baud)
               </span>
               <span className="bg-purple-500/10 text-purple-400 border border-purple-500/20 text-[9px] px-2 py-0.5 rounded-full font-bold">
                 {totalBytesRecibidos} bytes recibidos
