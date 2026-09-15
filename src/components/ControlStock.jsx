@@ -14,6 +14,7 @@ const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 
 const COSTOS_KEY = 'huerta_data_costos_v1_productos';
 const LIQUIDACION_KEY = 'huerta_data_stock_liquidacion_v1';
+const PROCESSED_CODES_KEY = 'huerta_codigos_procesados_v1';
 
 const DEFAULTS_BY_TYPE = {
   'hoja verde': { totalDays: 4, alertDays: 2, icon: '🌿', labels: { small: '250g', large: '500g' } },
@@ -50,7 +51,26 @@ function parsearCodigoBarras(raw) {
   const code = String(raw).replace(/[\r\n\x00-\x1F]/g, '').trim().replace(/^\][a-zA-Z0-9]{2}/, '').trim();
   if (!code) return null;
 
-  // 1. Formato Brother estándar: NOMBRE-PESO (ej: PAPA-1.120, TOMATE-CHERRY-0.500)
+  // 1. Formato con ID único por bolsa: NOMBRE-PESO-TAGID (ej: BANANA-1.000-E49A, PAPA-1.120-7K9F)
+  const parts = code.split('-');
+  if (parts.length >= 3) {
+    const lastPart = parts[parts.length - 1].trim();
+    const secondLastPart = parts[parts.length - 2].trim().replace(',', '.');
+    const pesoNum = parseFloat(secondLastPart);
+    if (!isNaN(pesoNum) && /^[0-9]+([.,][0-9]+)?$/.test(parts[parts.length - 2].trim()) && /^[A-Za-z0-9]{3,8}$/.test(lastPart)) {
+      const nombre = parts.slice(0, parts.length - 2).join(' ').toLowerCase().trim();
+      const pesoKg = pesoNum >= 100 && !/[.,]/.test(parts[parts.length - 2]) ? pesoNum / 1000 : pesoNum;
+      return {
+        nombre,
+        peso: Math.round(pesoKg * 1000) / 1000,
+        tagId: lastPart.toUpperCase(),
+        uniqueCode: code.toUpperCase(),
+        rawCode: code
+      };
+    }
+  }
+
+  // 2. Formato Brother clásico: NOMBRE-PESO (ej: PAPA-1.120, TOMATE-CHERRY-0.500)
   const lastDashIdx = code.lastIndexOf('-');
   if (lastDashIdx > 0) {
     const rawPeso = code.slice(lastDashIdx + 1).replace(',', '.');
@@ -60,11 +80,17 @@ function parsearCodigoBarras(raw) {
       const pesoKg = pesoNum >= 100 && !/[.,]/.test(code.slice(lastDashIdx + 1))
         ? pesoNum / 1000
         : pesoNum;
-      return { nombre, peso: Math.round(pesoKg * 1000) / 1000, rawCode: code };
+      return {
+        nombre,
+        peso: Math.round(pesoKg * 1000) / 1000,
+        tagId: null,
+        uniqueCode: code.toUpperCase(),
+        rawCode: code
+      };
     }
   }
 
-  // 2. Formato alternativo con espacio o guión bajo (ej: PAPA 1.120, PAPA_0.500)
+  // 3. Formato alternativo con espacio o guión bajo (ej: PAPA 1.120, PAPA_0.500)
   const altMatch = code.match(/^(.+?)[_\s]+([0-9]+(?:[.,][0-9]+)?)$/);
   if (altMatch) {
     const nombre = altMatch[1].toLowerCase().replace(/[-_]/g, ' ').trim();
@@ -72,13 +98,19 @@ function parsearCodigoBarras(raw) {
     const pesoNum = parseFloat(rawPeso);
     if (!isNaN(pesoNum)) {
       const pesoKg = pesoNum >= 100 && !/[.,]/.test(altMatch[2]) ? pesoNum / 1000 : pesoNum;
-      return { nombre, peso: Math.round(pesoKg * 1000) / 1000, rawCode: code };
+      return {
+        nombre,
+        peso: Math.round(pesoKg * 1000) / 1000,
+        tagId: null,
+        uniqueCode: code.toUpperCase(),
+        rawCode: code
+      };
     }
   }
 
-  // 3. Si viene solo el nombre del producto o un código directo (ej: PAPA, TOMATE-CHERRY)
+  // 4. Si viene solo el nombre del producto o un código directo (ej: PAPA, TOMATE-CHERRY)
   const nombreSimple = code.toLowerCase().replace(/[-_]/g, ' ').trim();
-  return { nombre: nombreSimple, peso: null, rawCode: code };
+  return { nombre: nombreSimple, peso: null, tagId: null, uniqueCode: code.toUpperCase(), rawCode: code };
 }
 
 // Normaliza un string para comparación fuzzy
@@ -120,7 +152,22 @@ export default function ControlStock() {
   useEffect(() => { stockDataRef.current = stockData; }, [stockData]);
   const lastProcessedTimeRef = useRef(0);
 
-  // ── Liquidación de stock (persistente) ───────────────────────────────────
+  // ── Códigos únicos procesados (persistente en localStorage) ──────────────
+  const [codigosProcesados, setCodigosProcesados] = useState(() => {
+    try {
+      const saved = localStorage.getItem(PROCESSED_CODES_KEY);
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      return {};
+    }
+  });
+  const codigosProcesadosRef = useRef(codigosProcesados);
+  useEffect(() => {
+    codigosProcesadosRef.current = codigosProcesados;
+    try {
+      localStorage.setItem(PROCESSED_CODES_KEY, JSON.stringify(codigosProcesados));
+    } catch (e) {}
+  }, [codigosProcesados]);
   const [liquidacionItems, setLiquidacionItems] = useState(() => {
     try {
       const saved = localStorage.getItem(LIQUIDACION_KEY);
@@ -200,6 +247,7 @@ export default function ControlStock() {
     const rawCodeClean = resultado?.rawCode || String(rawCode).trim();
     const nombreBuscado = resultado?.nombre || rawCodeClean.toLowerCase();
     const pesoBuscado = resultado?.peso;
+    const uniqueCode = (resultado?.uniqueCode || rawCodeClean).toUpperCase();
 
     // Buscar producto en el inventario por coincidencia fuzzy exacta o parcial
     const matchedId = Object.keys(current).find(id => {
@@ -213,10 +261,27 @@ export default function ControlStock() {
     // ── MODO GESTIÓN: siempre desplegar el popup ──────────────────────────────
     if (activeScanMode === 'gestion') {
       const pesoFinal = pesoBuscado !== null && pesoBuscado !== undefined ? pesoBuscado : 0;
-      const slot = prod ? determinarSlot(prod.tipo, pesoFinal || 0.5) : null;
+      let slot = prod ? determinarSlot(prod.tipo, pesoFinal || 0.5) : null;
+
+      // Si no vino peso especificado, preferir el slot que tenga stock disponible
+      if (prod && pesoFinal <= 0) {
+        if ((prod.stock['500g'] || 0) > 0 && (prod.stock['1kg'] || 0) <= 0) {
+          slot = '500g';
+        } else if ((prod.stock['1kg'] || 0) > 0 && (prod.stock['500g'] || 0) <= 0) {
+          slot = '1kg';
+        }
+      }
+
       const feedbackSlotLabel = slot && prod
         ? DEFAULTS_BY_TYPE[prod.tipo]?.labels[slot === '500g' ? 'small' : 'large'] || slot
         : (pesoFinal > 0 ? `${pesoFinal} kg` : '1 bolsa');
+
+      // 1. Verificar si este código único ya fue procesado / accionado anteriormente
+      const yaProcesadoInfo = codigosProcesadosRef.current ? codigosProcesadosRef.current[uniqueCode] : null;
+
+      // 2. Verificar stock disponible en el slot
+      const stockDisponible = (prod && slot) ? (prod.stock[slot] || 0) : 0;
+      const sinStock = !prod || stockDisponible <= 0;
 
       setGestionPending({
         matchedId: matchedId || null,
@@ -225,7 +290,12 @@ export default function ControlStock() {
         peso: pesoFinal,
         feedbackSlotLabel,
         rawCode: rawCodeClean,
+        uniqueCode,
         nombre: prod?.nombre || nombreBuscado,
+        stockDisponible,
+        sinStock,
+        yaProcesado: !!yaProcesadoInfo,
+        yaProcesadoInfo,
       });
       setLastScan(null);
       return;
@@ -381,51 +451,102 @@ export default function ControlStock() {
   // ── Aplicar acción de Gestión ─────────────────────────────────────────────
   const applyGestionAccion = useCallback((accion) => {
     if (!gestionPending) return;
-    const { matchedId, prod, slot, peso, feedbackSlotLabel, rawCode, nombre } = gestionPending;
+    const { matchedId, prod, slot, peso, feedbackSlotLabel, rawCode, uniqueCode, nombre, yaProcesado } = gestionPending;
     const current = stockDataRef.current;
 
-    // Solo modificar stock si el producto fue identificado correctamente
-    if (matchedId && prod && slot) {
-      const newStock = {
-        ...prod.stock,
-        [slot]: Math.max(0, prod.stock[slot] - 1)
-      };
-      const newData = { ...current };
-      newData[matchedId] = { ...prod, stock: newStock };
-      setStockData(newData);
-      syncWithSheet(newData[matchedId]);
+    // Validación 1: Si ya fue procesado este código único, bloquear
+    if (yaProcesado) {
+      setScanError(`Código duplicado: La bolsa "${uniqueCode}" ya fue procesada anteriormente.`);
+      setGestionPending(null);
+      setTimeout(refocusScanner, 50);
+      return;
     }
 
-    const displayNombre = prod?.nombre || nombre || rawCode || 'Producto desconocido';
+    // Validación 2: Verificar producto y slot
+    if (!matchedId || !prod || !slot) {
+      setScanError(`No se puede descontar: Producto "${nombre}" no identificado en el inventario.`);
+      setGestionPending(null);
+      setTimeout(refocusScanner, 50);
+      return;
+    }
+
+    // Validación 3: Verificar stock en tiempo real
+    const prodActual = current[matchedId];
+    const stockActual = prodActual?.stock?.[slot] || 0;
+
+    if (stockActual <= 0) {
+      setScanError(`¡Sin stock! No podés sacar "${prod.nombre}" (${feedbackSlotLabel}) porque el stock disponible es 0.`);
+      setGestionPending(null);
+      setTimeout(refocusScanner, 50);
+      return;
+    }
+
+    // Descontar exactamente 1 unidad
+    const nuevoStockSlot = Math.max(0, stockActual - 1);
+    const newStock = {
+      ...prodActual.stock,
+      [slot]: nuevoStockSlot
+    };
+    const newData = { ...current };
+    newData[matchedId] = { ...prodActual, stock: newStock };
+    setStockData(newData);
+    syncWithSheet(newData[matchedId]);
+
+    // Registrar código único para que no se pueda procesar dos veces
+    const now = new Date();
+    const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    const regCode = uniqueCode || rawCode?.toUpperCase() || `${prod.nombre}-${Date.now()}`;
+
+    setCodigosProcesados(prev => ({
+      ...prev,
+      [regCode]: {
+        uniqueCode: regCode,
+        accion,
+        nombre: prod.nombre,
+        slot: feedbackSlotLabel,
+        peso: peso || 0,
+        fecha: horaStr,
+        ts: Date.now()
+      }
+    }));
+
+    const displayNombre = prod.nombre;
     const displayPeso = peso || 0;
     const displaySlot = feedbackSlotLabel || '—';
 
-    const entry = { ok: true, productoNombre: displayNombre, peso: displayPeso, slot: displaySlot, ts: Date.now(), accion, sinStock: !matchedId };
+    const entry = {
+      ok: true,
+      productoNombre: displayNombre,
+      peso: displayPeso,
+      slot: displaySlot,
+      ts: Date.now(),
+      accion,
+      stockRestante: nuevoStockSlot
+    };
     setLastScan(entry);
     setScanLog(prev => [entry, ...prev].slice(0, 8));
 
     // Si la acción fue Liquidación, agregar la bolsa a la lista de Liquidación
     if (accion === 'Liquidación') {
-      const now = new Date();
-      const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
       const itemLiq = {
         id: Date.now().toString() + Math.random().toString(),
-        matchedId: matchedId || null,
+        matchedId,
         nombre: displayNombre,
         slot: displaySlot,
         peso: displayPeso,
         ts: Date.now(),
         fecha: horaStr,
+        uniqueCode: regCode,
       };
       setLiquidacionItems(prev => [itemLiq, ...prev]);
     }
 
     setGestionPending(null);
-    setTimeout(() => setLastScan(null), 3000);
+    setTimeout(() => setLastScan(null), 4000);
     // Re-foco al campo
     setTimeout(() => scanInputRef.current?.focus(), 150);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gestionPending, setStockData]);
+  }, [gestionPending, setStockData, refocusScanner]);
 
   const handleScanInput = (e) => {
     setScanBuffer(e.target.value);
@@ -813,20 +934,51 @@ export default function ControlStock() {
               </div>
 
               {/* Información del Producto */}
-              <div className="bg-black/50 border border-white/5 rounded-2xl p-4 space-y-1 text-center">
+              <div className="bg-black/50 border border-white/5 rounded-2xl p-4 space-y-2 text-center">
                 {gestionPending.prod ? (
                   <>
                     <h3 className="text-white font-black text-lg uppercase tracking-tight">
                       {gestionPending.prod.nombre}
                     </h3>
-                    <div className="flex items-center justify-center gap-2 text-xs font-mono">
-                      <span className="bg-orange-500/20 text-orange-300 px-2.5 py-0.5 rounded-full font-bold">
-                        {gestionPending.feedbackSlotLabel}
-                      </span>
+                    
+                    {/* Selector interactivo de slots y stock disponible en tiempo real */}
+                    <div className="flex items-center justify-center gap-2 pt-1">
+                      {['500g', '1kg'].map(s => {
+                        const sLabel = DEFAULTS_BY_TYPE[gestionPending.prod?.tipo || 'hoja verde']?.labels[s === '500g' ? 'small' : 'large'] || s;
+                        const sStock = gestionPending.prod?.stock?.[s] || 0;
+                        const isCurrent = gestionPending.slot === s;
+                        return (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => {
+                              const newStockDisp = gestionPending.prod?.stock?.[s] || 0;
+                              setGestionPending(prev => ({
+                                ...prev,
+                                slot: s,
+                                feedbackSlotLabel: sLabel,
+                                stockDisponible: newStockDisp,
+                                sinStock: newStockDisp <= 0
+                              }));
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
+                              isCurrent
+                                ? 'bg-orange-500/20 border-orange-500 text-orange-300 shadow-sm'
+                                : 'bg-white/5 border-white/10 text-gray-400 hover:text-white hover:bg-white/10'
+                            }`}
+                          >
+                            {sLabel}: <span className={sStock > 0 ? 'text-green-400 font-bold' : 'text-red-400 font-bold'}>{sStock} disp.</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex items-center justify-center gap-2 text-xs font-mono text-gray-400 pt-1">
                       {gestionPending.peso > 0 && (
-                        <span className="text-gray-400 font-bold">
-                          {gestionPending.peso.toFixed(3)} kg
-                        </span>
+                        <span>Peso: <strong className="text-white font-bold">{gestionPending.peso.toFixed(3)} kg</strong></span>
+                      )}
+                      {gestionPending.uniqueCode && (
+                        <span className="text-[10px] text-gray-500 font-mono">[{gestionPending.uniqueCode}]</span>
                       )}
                     </div>
                   </>
@@ -839,11 +991,75 @@ export default function ControlStock() {
                       Código leído: {gestionPending.rawCode}
                     </p>
                     <p className="text-amber-500/70 text-[10px] mt-1">
-                      No se encontró coincidencia en stock. La acción no modificará cantidades.
+                      No se encontró coincidencia en el inventario.
                     </p>
                   </>
                 )}
               </div>
+
+              {/* 1. Alerta de CÓDIGO YA PROCESADO / DUPLICADO */}
+              {gestionPending.yaProcesado && (
+                <div className="bg-amber-500/15 border-2 border-amber-500/60 rounded-2xl p-4 text-center space-y-2 animate-in zoom-in-95 duration-200 shadow-[0_0_20px_rgba(245,158,11,0.15)]">
+                  <div className="flex items-center justify-center gap-2 text-amber-400 font-black text-sm uppercase tracking-wider">
+                    <AlertTriangle size={20} className="shrink-0 animate-bounce" />
+                    <span>¡CÓDIGO YA PROCESADO!</span>
+                  </div>
+                  <p className="text-amber-200/90 text-xs font-medium">
+                    Esta bolsa ya fue procesada anteriormente. Cada código es único y ninguna bolsa puede sacarse dos veces.
+                  </p>
+                  {gestionPending.yaProcesadoInfo && (
+                    <div className="bg-black/50 rounded-xl p-2.5 text-[11px] font-mono text-gray-300 text-left space-y-1 border border-white/10">
+                      <div><span className="text-amber-400 font-bold">Acción previa:</span> {gestionPending.yaProcesadoInfo.accion}</div>
+                      <div><span className="text-amber-400 font-bold">Fecha / Hora:</span> {gestionPending.yaProcesadoInfo.fecha}</div>
+                      <div><span className="text-amber-400 font-bold">Código:</span> {gestionPending.uniqueCode}</div>
+                    </div>
+                  )}
+                  <p className="text-amber-400 text-[10px] font-black uppercase tracking-wider">
+                    🚫 Acción bloqueada para evitar duplicados
+                  </p>
+                </div>
+              )}
+
+              {/* 2. Alerta de SIN STOCK DISPONIBLE */}
+              {!gestionPending.yaProcesado && gestionPending.sinStock && (
+                <div className="bg-red-500/15 border-2 border-red-500/60 rounded-2xl p-4 text-center space-y-2 animate-in zoom-in-95 duration-200 shadow-[0_0_20px_rgba(239,68,68,0.15)]">
+                  <div className="flex items-center justify-center gap-2 text-red-400 font-black text-sm uppercase tracking-wider">
+                    <AlertCircle size={20} className="shrink-0" />
+                    <span>¡SIN STOCK DISPONIBLE!</span>
+                  </div>
+                  <p className="text-red-200/90 text-xs font-medium leading-relaxed">
+                    Actualmente hay <strong className="text-white underline font-bold">0 bandejas</strong> en stock para {gestionPending.feedbackSlotLabel}.
+                  </p>
+                  <p className="text-red-400 text-[10px] font-black uppercase tracking-wider">
+                    🚫 No podés sacar un producto sin stock
+                  </p>
+                </div>
+              )}
+
+              {/* 3. Indicador de STOCK DISPONIBLE (cuando hay stock y es código nuevo) */}
+              {!gestionPending.yaProcesado && !gestionPending.sinStock && (
+                <div className="bg-green-500/10 border border-green-500/30 rounded-2xl p-3 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-xl bg-green-500/20 text-green-400">
+                      <Package size={20} />
+                    </div>
+                    <div>
+                      <span className="text-green-400 font-bold block">Stock disponible:</span>
+                      <span className="text-gray-300 text-[11px]">
+                        Si sacás 1 te quedarán <strong className="text-white font-bold">{Math.max(0, gestionPending.stockDisponible - 1)}</strong>
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-2xl font-black text-green-300 font-mono leading-none block">
+                      {gestionPending.stockDisponible}
+                    </span>
+                    <span className="text-[10px] text-gray-400 font-bold uppercase">
+                      {gestionPending.stockDisponible === 1 ? 'bandeja' : 'bandejas'}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Botones de Acción */}
               <div className="space-y-2 pt-1">
@@ -872,27 +1088,42 @@ export default function ControlStock() {
                     textColor: 'text-amber-300',
                     descColor: 'text-amber-400/70',
                   },
-                ].map(({ accion, emoji, desc, color, textColor, descColor }) => (
-                  <button
-                    key={accion}
-                    type="button"
-                    onClick={() => applyGestionAccion(accion)}
-                    className={`${color} border rounded-2xl px-4 py-3 text-left transition-all active:scale-[0.98] flex items-center gap-3.5 w-full cursor-pointer group`}
-                  >
-                    <span className="text-2xl shrink-0 group-hover:scale-110 transition-transform">
-                      {emoji}
-                    </span>
-                    <div className="min-w-0">
-                      <span className={`text-xs font-black uppercase tracking-wider block ${textColor}`}>
-                        {accion}
+                ].map(({ accion, emoji, desc, color, textColor, descColor }) => {
+                  const isDisabled = gestionPending.yaProcesado || gestionPending.sinStock || !gestionPending.prod;
+                  return (
+                    <button
+                      key={accion}
+                      type="button"
+                      disabled={isDisabled}
+                      onClick={() => !isDisabled && applyGestionAccion(accion)}
+                      className={`${color} border rounded-2xl px-4 py-3 text-left transition-all ${
+                        isDisabled
+                          ? 'opacity-35 cursor-not-allowed grayscale'
+                          : 'active:scale-[0.98] cursor-pointer group'
+                      } flex items-center gap-3.5 w-full`}
+                    >
+                      <span className={`text-2xl shrink-0 ${!isDisabled ? 'group-hover:scale-110 transition-transform' : ''}`}>
+                        {emoji}
                       </span>
-                      <span className={`text-[10px] font-medium ${descColor} block mt-0.5 leading-tight`}>
-                        {desc}
-                      </span>
-                    </div>
-                  </button>
-                ))}
+                      <div className="min-w-0">
+                        <span className={`text-xs font-black uppercase tracking-wider block ${textColor}`}>
+                          {accion}
+                        </span>
+                        <span className={`text-[10px] font-medium ${descColor} block mt-0.5 leading-tight`}>
+                          {desc}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
+
+              {/* Mensaje de bloqueo si corresponde */}
+              {(gestionPending.yaProcesado || gestionPending.sinStock) && (
+                <p className="text-[10px] text-center font-bold text-gray-500 uppercase tracking-wider pt-1">
+                  Acciones deshabilitadas para proteger la exactitud del stock.
+                </p>
+              )}
 
               <div className="pt-2 text-center">
                 <button
@@ -993,12 +1224,17 @@ export default function ControlStock() {
         {/* Feedback del último escaneo */}
         {!gestionPending && lastScan && lastScan.ok && lastScan.accion !== 'Pendiente' && (
           <div className="mt-3 flex items-center gap-2 px-1 animate-in slide-in-from-top-1 duration-200">
-            <span className="text-green-400">✓</span>
+            <span className="text-green-400 font-bold text-base">✓</span>
             <p className="text-green-400 text-xs font-bold uppercase tracking-wide">
               {lastScan.productoNombre}
-              <span className="text-green-300/60 font-normal ml-2">
+              <span className="text-green-300/70 font-normal ml-2">
                 {lastScan.accion === 'Carga' ? '+1 bolsa' : `−1 bolsa · ${lastScan.accion}`} · {lastScan.slot} · {lastScan.peso} kg
               </span>
+              {lastScan.stockRestante !== undefined && (
+                <span className="ml-2.5 bg-green-500/20 text-green-300 px-2 py-0.5 rounded-md font-mono text-[11px] font-bold border border-green-500/30">
+                  Stock actual: {lastScan.stockRestante} {lastScan.stockRestante === 1 ? 'bandeja' : 'bandejas'}
+                </span>
+              )}
             </p>
           </div>
         )}
@@ -1036,6 +1272,21 @@ export default function ControlStock() {
                 <span className="bg-white/10 text-gray-300 text-[9px] font-mono px-2 py-0.5 rounded-full font-bold">
                   {scanLog.length}
                 </span>
+                {Object.keys(codigosProcesados).length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm('¿Deseás reiniciar el registro de códigos únicos procesados?')) {
+                        setCodigosProcesados({});
+                        try { localStorage.removeItem(PROCESSED_CODES_KEY); } catch(e){}
+                      }
+                    }}
+                    className="text-[9px] font-mono text-gray-500 hover:text-amber-400 transition-colors ml-1 cursor-pointer underline"
+                    title="Reiniciar historial de códigos procesados para permitir volver a escanearlos"
+                  >
+                    ({Object.keys(codigosProcesados).length} códigos únicos)
+                  </button>
+                )}
               </div>
               <button
                 type="button"
@@ -1067,6 +1318,11 @@ export default function ControlStock() {
                       {!isAdd && <span className="text-orange-400/80 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-orange-500/10 border border-orange-500/20">{entry.accion}</span>}
                       <span className="text-gray-500 text-[9px] font-mono">{entry.slot}</span>
                       <span className={`text-[9px] font-mono font-bold ${ isAdd ? 'text-green-400' : 'text-orange-400' }`}>{entry.peso} kg</span>
+                      {entry.stockRestante !== undefined && (
+                        <span className="text-gray-300 bg-white/10 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">
+                          Stock: {entry.stockRestante}
+                        </span>
+                      )}
                       <button
                         type="button"
                         onClick={() => setScanLog(prev => prev.filter((_, idx) => idx !== i))}
@@ -1789,15 +2045,19 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
     const producto = productList.find(p => p.id === selectedId);
     if (!producto) return;
 
+    // Generar identificador único alfanumérico por bolsa física (ej: E49A)
+    const tagId = Math.random().toString(36).substring(2, 6).toUpperCase();
+
     const nuevaBolsa = {
       id: Date.now().toString() + Math.random(),
       productId: selectedId,
       nombre: producto.nombre,
       peso: Math.round(pesoKgActual * 1000) / 1000,
+      tagId,
     };
 
     setSesion(prev => [...prev, nuevaBolsa]);
-    imprimirEtiqueta(producto.nombre, nuevaBolsa.peso);
+    imprimirEtiqueta(producto.nombre, nuevaBolsa.peso, tagId);
 
     resetPeso();
     setTimeout(() => pesoRef.current?.focus(), 50);
@@ -2050,6 +2310,11 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
                   <p className="text-white text-xs font-bold uppercase tracking-tight truncate">
                     {bolsa.nombre}
                   </p>
+                  {bolsa.tagId && (
+                    <span className="text-[9px] font-mono bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded font-bold border border-purple-500/30 shrink-0">
+                      #{bolsa.tagId}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
                   <p className="text-purple-400 font-mono text-xs font-black">
@@ -2118,10 +2383,11 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
 }
 
 // ── Función global de impresión de etiquetas ──────────────────────────────────
-function imprimirEtiqueta(nombreProducto, pesoKg) {
+function imprimirEtiqueta(nombreProducto, pesoKg, tagId = null) {
   const nombreCode = nombreProducto.toUpperCase().replace(/\s+/g, '-').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const pesoStr = pesoKg.toFixed(3);
-  const barcodeValue = `${nombreCode}-${pesoStr}`;
+  const finalTag = tagId ? String(tagId).toUpperCase() : Math.random().toString(36).substring(2, 6).toUpperCase();
+  const barcodeValue = `${nombreCode}-${pesoStr}-${finalTag}`;
 
   const html = `<!DOCTYPE html>
 <html>
@@ -2296,7 +2562,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg) {
     </div>
     <div class="divider"></div>
     <div class="product-name">${nombreProducto.toUpperCase()}</div>
-    <div class="weight">${pesoStr} kg</div>
+    <div class="weight">${pesoStr} kg &nbsp;<span style="font-size: 8pt; font-family: monospace; font-weight: 700; color: #444;">[#${finalTag}]</span></div>
     <svg id="barcode"></svg>
   </div>
 </body>
