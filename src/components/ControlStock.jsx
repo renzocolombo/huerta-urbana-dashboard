@@ -488,6 +488,20 @@ export default function ControlStock() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown, true);
   }, [stockSubTab, procesarEscaneo, refocusScanner]);
 
+  // ── Sincronizar con Google Sheet ──────────────────────────────────────────
+  const syncWithSheet = async (updatedProduct) => {
+    if (!APPS_SCRIPT_URL || !updatedProduct.fila) return;
+    const payload = {
+      accion: 'updateStock', fila: updatedProduct.fila, nombre: updatedProduct.nombre,
+      stock_500g: updatedProduct.stock['500g'], stock_1kg: updatedProduct.stock['1kg'],
+      original_load_500g: updatedProduct.originalLoad['500g'], original_load_1kg: updatedProduct.originalLoad['1kg'],
+      tipo: updatedProduct.tipo, total_days: updatedProduct.totalDays, urgent_days: updatedProduct.urgentDays, ultimo_bandejeado: updatedProduct.ultimo_bandejeado
+    };
+    try {
+      await fetch(APPS_SCRIPT_URL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(payload) });
+    } catch (e) { console.error(e); }
+  };
+
   // ── Confirmar toda la carga pendiente al stock ───────────────────────────
   const confirmarCarga = useCallback(() => {
     if (cargaPendiente.length === 0) return;
@@ -939,18 +953,6 @@ export default function ControlStock() {
     return res;
   }, [stockData]);
 
-  const syncWithSheet = async (updatedProduct) => {
-    if (!APPS_SCRIPT_URL || !updatedProduct.fila) return;
-    const payload = {
-      accion: 'updateStock', fila: updatedProduct.fila, nombre: updatedProduct.nombre,
-      stock_500g: updatedProduct.stock['500g'], stock_1kg: updatedProduct.stock['1kg'],
-      original_load_500g: updatedProduct.originalLoad['500g'], original_load_1kg: updatedProduct.originalLoad['1kg'],
-      tipo: updatedProduct.tipo, total_days: updatedProduct.totalDays, urgent_days: updatedProduct.urgentDays, ultimo_bandejeado: updatedProduct.ultimo_bandejeado
-    };
-    try {
-      await fetch(APPS_SCRIPT_URL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(payload) });
-    } catch (e) { console.error(e); }
-  };
 
   const updateProductData = (pid, patch) => {
     const newData = { ...stockData };
