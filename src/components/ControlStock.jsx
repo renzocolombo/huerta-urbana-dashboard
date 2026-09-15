@@ -13,6 +13,7 @@ const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_KEY || import.meta.env.VITE_
 const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 
 const COSTOS_KEY = 'huerta_data_costos_v1_productos';
+const LIQUIDACION_KEY = 'huerta_data_stock_liquidacion_v1';
 
 const DEFAULTS_BY_TYPE = {
   'hoja verde': { totalDays: 4, alertDays: 2, icon: '🌿', labels: { small: '250g', large: '500g' } },
@@ -118,6 +119,30 @@ export default function ControlStock() {
   const stockDataRef = useRef(stockData);
   useEffect(() => { stockDataRef.current = stockData; }, [stockData]);
   const lastProcessedTimeRef = useRef(0);
+
+  // ── Liquidación de stock (persistente) ───────────────────────────────────
+  const [liquidacionItems, setLiquidacionItems] = useState(() => {
+    try {
+      const saved = localStorage.getItem(LIQUIDACION_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LIQUIDACION_KEY, JSON.stringify(liquidacionItems));
+    } catch (e) {}
+  }, [liquidacionItems]);
+
+  const eliminarItemLiquidacion = useCallback((id) => {
+    setLiquidacionItems(prev => prev.filter(item => item.id !== id));
+  }, []);
+
+  const vaciarLiquidacion = useCallback(() => {
+    setLiquidacionItems([]);
+  }, []);
 
   useEffect(() => {
     // Si ya tenemos datos procesados en stockData (que es un Objeto), no inicializar de nuevo
@@ -378,6 +403,23 @@ export default function ControlStock() {
     const entry = { ok: true, productoNombre: displayNombre, peso: displayPeso, slot: displaySlot, ts: Date.now(), accion, sinStock: !matchedId };
     setLastScan(entry);
     setScanLog(prev => [entry, ...prev].slice(0, 8));
+
+    // Si la acción fue Liquidación, agregar la bolsa a la lista de Liquidación
+    if (accion === 'Liquidación') {
+      const now = new Date();
+      const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      const itemLiq = {
+        id: Date.now().toString() + Math.random().toString(),
+        matchedId: matchedId || null,
+        nombre: displayNombre,
+        slot: displaySlot,
+        peso: displayPeso,
+        ts: Date.now(),
+        fecha: horaStr,
+      };
+      setLiquidacionItems(prev => [itemLiq, ...prev]);
+    }
+
     setGestionPending(null);
     setTimeout(() => setLastScan(null), 3000);
     // Re-foco al campo
@@ -985,16 +1027,35 @@ export default function ControlStock() {
 
         {/* Log de escaneos recientes */}
         {scanLog.length > 0 && (
-          <div className="mt-4 border-t border-white/5 pt-4">
-            <p className="text-[9px] font-black text-gray-600 uppercase tracking-[0.25em] mb-2">Últimos escaneos</p>
-            <div className="space-y-1">
+          <div className="mt-4 border-t border-white/5 pt-4 animate-in fade-in duration-200">
+            <div className="flex items-center justify-between mb-2.5">
+              <div className="flex items-center gap-2">
+                <p className="text-[9px] font-black text-gray-400 uppercase tracking-[0.25em]">
+                  Últimos escaneos
+                </p>
+                <span className="bg-white/10 text-gray-300 text-[9px] font-mono px-2 py-0.5 rounded-full font-bold">
+                  {scanLog.length}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setScanLog([])}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white/5 hover:bg-red-500/20 text-gray-400 hover:text-red-300 border border-white/5 hover:border-red-500/30 text-[10px] font-bold transition-all cursor-pointer"
+                title="Eliminar toda la lista de escaneos"
+              >
+                <Trash2 size={12} />
+                <span>Limpiar lista</span>
+              </button>
+            </div>
+
+            <div className="space-y-1 max-h-[220px] overflow-y-auto custom-scrollbar pr-1">
               {scanLog.map((entry, i) => {
                 const isAdd = entry.accion === 'Carga';
                 return (
-                  <div key={entry.ts} className={`flex items-center justify-between gap-2 px-3 py-2 rounded-xl transition-all ${
+                  <div key={entry.ts || i} className={`group flex items-center justify-between gap-2 px-3 py-2 rounded-xl transition-all ${
                     i === 0
                       ? isAdd ? 'bg-green-500/10 border border-green-500/20' : 'bg-orange-500/10 border border-orange-500/20'
-                      : 'bg-black/20 border border-white/5'
+                      : 'bg-black/20 border border-white/5 hover:bg-white/5'
                   }`}>
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`text-[10px] shrink-0 font-mono font-bold ${ isAdd ? 'text-green-400' : 'text-orange-400' }`}>
@@ -1002,10 +1063,18 @@ export default function ControlStock() {
                       </span>
                       <p className="text-white text-xs font-bold uppercase truncate">{entry.productoNombre}</p>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {!isAdd && <span className="text-orange-400/70 text-[9px] font-bold">{entry.accion}</span>}
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      {!isAdd && <span className="text-orange-400/80 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-orange-500/10 border border-orange-500/20">{entry.accion}</span>}
                       <span className="text-gray-500 text-[9px] font-mono">{entry.slot}</span>
-                      <span className={`text-[9px] font-mono ${ isAdd ? 'text-green-500/70' : 'text-orange-500/70' }`}>{entry.peso} kg</span>
+                      <span className={`text-[9px] font-mono font-bold ${ isAdd ? 'text-green-400' : 'text-orange-400' }`}>{entry.peso} kg</span>
+                      <button
+                        type="button"
+                        onClick={() => setScanLog(prev => prev.filter((_, idx) => idx !== i))}
+                        className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 rounded transition-all cursor-pointer"
+                        title="Eliminar este escaneo"
+                      >
+                        <X size={12} />
+                      </button>
                     </div>
                   </div>
                 );
@@ -1022,13 +1091,20 @@ export default function ControlStock() {
           <h2 className="text-xl font-bold text-white tracking-tight">Control de Stock</h2>
           <p className="text-gray-500 text-[10px] uppercase font-bold tracking-widest mt-1">Sincronizado vía Cloud API</p>
         </div>
-        <button onClick={cargarStockDesdeSheet} className="text-gray-500 hover:text-white transition-colors p-2.5 rounded-xl bg-white/5"><RotateCcw size={16} /></button>
+        <button onClick={cargarStockDesdeSheet} className="text-gray-500 hover:text-white transition-colors p-2.5 rounded-xl bg-white/5 cursor-pointer"><RotateCcw size={16} /></button>
       </div>
 
       <div className="flex flex-col gap-3">
         <StatusAccordion title="URGENTE VENDER" icon="🔴" items={processedData.filter(d => d.category === 'urgente')} isOpen={expandedCategory === 'urgente'} onToggle={() => toggleCategory('urgente')} color="red" type="urgente" />
         <StatusAccordion title="STOCK BAJO" icon="🟡" items={processedData.filter(d => d.category === 'bajo')} isOpen={expandedCategory === 'bajo'} onToggle={() => toggleCategory('bajo')} color="amber" type="bajo" />
         <StatusAccordion title="FALTANTE" icon="⚫" items={processedData.filter(d => d.category === 'faltante')} isOpen={expandedCategory === 'faltante'} onToggle={() => toggleCategory('faltante')} color="gray" type="faltante" />
+        <LiquidacionAccordion 
+          items={liquidacionItems} 
+          isOpen={expandedCategory === 'liquidacion'} 
+          onToggle={() => toggleCategory('liquidacion')} 
+          onDeleteItem={eliminarItemLiquidacion}
+          onClearAll={vaciarLiquidacion}
+        />
       </div>
 
       <div className="space-y-10 pt-10 border-t border-white/5">
@@ -1114,6 +1190,110 @@ function StatusAccordion({ title, icon, items, isOpen, onToggle, color, type }) 
                   </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LiquidacionAccordion({ items, isOpen, onToggle, onDeleteItem, onClearAll }) {
+  const totalKg = items.reduce((acc, it) => acc + (Number(it.peso) || 0), 0);
+
+  return (
+    <div className="bg-gradient-to-r from-orange-500/10 via-[#1a120b] to-orange-500/5 border border-orange-500/30 rounded-2xl overflow-hidden transition-all duration-300 shadow-sm">
+      <button 
+        type="button"
+        onClick={onToggle} 
+        className="w-full flex items-center justify-between p-4 lg:p-5 cursor-pointer hover:bg-orange-500/10 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-base">🏷️</span>
+          <h3 className="font-black text-[13px] uppercase tracking-widest text-orange-400">
+            LIQUIDACIÓN
+          </h3>
+          <span className="bg-orange-500/20 text-orange-300 border border-orange-500/30 px-3 py-0.5 rounded-full text-[10px] font-mono font-bold">
+            {items.length} {items.length === 1 ? 'bolsa' : 'bolsas'}
+            {items.length > 0 && ` · ${totalKg.toFixed(3)} kg`}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 text-orange-400/70">
+          {isOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+        </div>
+      </button>
+
+      {isOpen && (
+        <div className="p-4 pt-0 lg:p-6 lg:pt-0 border-t border-orange-500/10 animate-in slide-in-from-top-2 duration-200">
+          {items.length === 0 ? (
+            <div className="py-8 text-center bg-black/30 rounded-2xl border border-white/5 my-3">
+              <span className="text-2xl opacity-60">🏷️</span>
+              <p className="text-[11px] font-black uppercase text-gray-500 mt-2 tracking-widest">
+                No hay productos en liquidación actualmente
+              </p>
+              <p className="text-gray-600 text-[10px] mt-1">
+                Cuando escaneás una bolsa en Gestión y elegís "Liquidación", aparecerá aquí
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4 pt-4">
+              {/* Barra de resumen y vaciado */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-black/40 border border-orange-500/20 rounded-xl px-4 py-2.5">
+                <div className="flex items-center gap-3 text-xs font-mono">
+                  <span className="text-orange-400/80 font-bold uppercase text-[10px] tracking-wider">
+                    Total en Liquidación:
+                  </span>
+                  <span className="text-white font-black">{items.length} bolsas</span>
+                  <span className="text-orange-400 font-bold">{totalKg.toFixed(3)} kg</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={onClearAll}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 text-red-300 text-[10px] font-bold uppercase tracking-wider transition-all self-start sm:self-auto cursor-pointer"
+                  title="Vaciar toda la lista de liquidación"
+                >
+                  <Trash2 size={12} />
+                  <span>Vaciar liquidación</span>
+                </button>
+              </div>
+
+              {/* Grid de bolsas en liquidación */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5">
+                {items.map((it, idx) => (
+                  <div 
+                    key={it.id || idx} 
+                    className="bg-black/50 border border-orange-500/20 hover:border-orange-500/40 rounded-2xl p-3.5 flex flex-col justify-between transition-all group shadow-sm"
+                  >
+                    <div className="flex justify-between items-start gap-2 mb-2">
+                      <div className="min-w-0">
+                        <span className="text-white font-black text-xs uppercase tracking-tight block truncate">
+                          {it.nombre}
+                        </span>
+                        <span className="text-gray-500 text-[9px] font-mono block mt-0.5">
+                          {it.fecha}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteItem(it.id)}
+                        className="opacity-60 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all cursor-pointer shrink-0"
+                        title="Eliminar esta bolsa de liquidación"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-white/5 text-xs font-mono">
+                      <span className="bg-orange-500/10 text-orange-300 border border-orange-500/20 px-2 py-0.5 rounded-lg text-[10px] font-bold">
+                        {it.slot || 'Bolsa'}
+                      </span>
+                      <span className="text-orange-400 font-black text-sm">
+                        {Number(it.peso || 0).toFixed(3)} kg
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
