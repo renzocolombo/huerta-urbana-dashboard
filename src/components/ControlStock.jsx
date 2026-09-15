@@ -47,19 +47,40 @@ function getTipoByNombre(nombre) {
 //   CEBOLLA-MORADA-0.800 →  nombre="cebolla morada", peso=0.800
 function parsearCodigoBarras(raw) {
   if (!raw) return null;
-  // Limpiar caracteres invisibles, retornos de carro, saltos de línea y prefijos AIM
-  const code = String(raw).replace(/[\r\n\x00-\x1F]/g, '').trim().replace(/^\][a-zA-Z0-9]{2}/, '').trim();
+  // Limpiar caracteres invisibles, retornos de carro, saltos de línea, asteriscos de Code39 y prefijos AIM
+  let code = String(raw).replace(/[\r\n\x00-\x1F]/g, '').trim().replace(/^\][a-zA-Z0-9]{2,3}/, '').trim();
+  code = code.replace(/^\*+|\*+$/g, '').trim(); // Quitar asteriscos de Code39 si los tuviera
   if (!code) return null;
 
-  // 1. Formato con ID único por bolsa: NOMBRE-PESO-TAGID (ej: BANANA-1.000-E49A, PAPA-1.120-7K9F)
+  // 1. Formato Balanza Systel / Kretz / Toledo (EAN-13 estándar de balanza de retail)
+  // Normalmente empieza con 20 o 02, seguido de 4-5 dígitos de PLU y 5 dígitos de peso en gramos
+  // Ejemplos: 2000123011205 (PLU 123, 1120g = 1.120 kg) o 020001005008 (PLU 10, 500g = 0.500 kg)
+  const eanBalanza = code.match(/^(20|02)(\d{4,5})(\d{5})\d$/);
+  if (eanBalanza) {
+    const plu = eanBalanza[2];
+    const gramos = parseInt(eanBalanza[3], 10);
+    const pesoKg = Math.round((gramos / 1000) * 1000) / 1000;
+    return {
+      nombre: `plu ${plu}`,
+      plu,
+      peso: pesoKg,
+      tagId: null,
+      uniqueCode: code.toUpperCase(),
+      rawCode: code,
+      origenBalanza: true
+    };
+  }
+
+  // 2. Formato con ID único por bolsa: NOMBRE-PESO-TAGID (ej: BANANA-1.000-E49A, PAPA-1.120-7K9F, CEBOLLA-COMUN-1.000-A1B2)
+  // Admite comas decimales, sufijos de peso (kg, g), y nombres compuestos
   const parts = code.split('-');
   if (parts.length >= 3) {
     const lastPart = parts[parts.length - 1].trim();
-    const secondLastPart = parts[parts.length - 2].trim().replace(',', '.');
-    const pesoNum = parseFloat(secondLastPart);
-    if (!isNaN(pesoNum) && /^[0-9]+([.,][0-9]+)?$/.test(parts[parts.length - 2].trim()) && /^[A-Za-z0-9]{3,8}$/.test(lastPart)) {
+    const secondLastRaw = parts[parts.length - 2].trim().replace(',', '.').replace(/(?:kg|kilos?|g|gr?)$/i, '').trim();
+    const pesoNum = parseFloat(secondLastRaw);
+    if (!isNaN(pesoNum) && pesoNum > 0 && /^[A-Za-z0-9]{2,10}$/.test(lastPart)) {
       const nombre = parts.slice(0, parts.length - 2).join(' ').toLowerCase().trim();
-      const pesoKg = pesoNum >= 100 && !/[.,]/.test(parts[parts.length - 2]) ? pesoNum / 1000 : pesoNum;
+      const pesoKg = pesoNum >= 100 && !/[.,]/.test(secondLastRaw) ? pesoNum / 1000 : pesoNum;
       return {
         nombre,
         peso: Math.round(pesoKg * 1000) / 1000,
@@ -70,16 +91,14 @@ function parsearCodigoBarras(raw) {
     }
   }
 
-  // 2. Formato Brother clásico: NOMBRE-PESO (ej: PAPA-1.120, TOMATE-CHERRY-0.500)
+  // 3. Formato Brother clásico: NOMBRE-PESO (ej: PAPA-1.120, PAPA-1.120KG, TOMATE-CHERRY-0.500)
   const lastDashIdx = code.lastIndexOf('-');
   if (lastDashIdx > 0) {
-    const rawPeso = code.slice(lastDashIdx + 1).replace(',', '.');
+    const rawPeso = code.slice(lastDashIdx + 1).replace(',', '.').replace(/(?:kg|kilos?|g|gr?)$/i, '').trim();
     const pesoNum = parseFloat(rawPeso);
-    if (!isNaN(pesoNum) && /^[0-9]+([.,][0-9]+)?$/.test(code.slice(lastDashIdx + 1))) {
+    if (!isNaN(pesoNum) && pesoNum > 0) {
       const nombre = code.slice(0, lastDashIdx).toLowerCase().replace(/-/g, ' ').trim();
-      const pesoKg = pesoNum >= 100 && !/[.,]/.test(code.slice(lastDashIdx + 1))
-        ? pesoNum / 1000
-        : pesoNum;
+      const pesoKg = pesoNum >= 100 && !/[.,]/.test(rawPeso) ? pesoNum / 1000 : pesoNum;
       return {
         nombre,
         peso: Math.round(pesoKg * 1000) / 1000,
@@ -90,13 +109,13 @@ function parsearCodigoBarras(raw) {
     }
   }
 
-  // 3. Formato alternativo con espacio o guión bajo (ej: PAPA 1.120, PAPA_0.500)
-  const altMatch = code.match(/^(.+?)[_\s]+([0-9]+(?:[.,][0-9]+)?)$/);
+  // 4. Formato alternativo con espacios, guión bajo o dos puntos (ej: "PAPA 1.120", "PAPA 1.120 KG", "PAPA: 1.120", "PAPA_0.500")
+  const altMatch = code.match(/^(.+?)[\s_:–]+([0-9]+(?:[.,][0-9]+)?)\s*(?:kg|kilos?|g|gr?)?$/i);
   if (altMatch) {
     const nombre = altMatch[1].toLowerCase().replace(/[-_]/g, ' ').trim();
     const rawPeso = altMatch[2].replace(',', '.');
     const pesoNum = parseFloat(rawPeso);
-    if (!isNaN(pesoNum)) {
+    if (!isNaN(pesoNum) && pesoNum > 0) {
       const pesoKg = pesoNum >= 100 && !/[.,]/.test(altMatch[2]) ? pesoNum / 1000 : pesoNum;
       return {
         nombre,
@@ -108,9 +127,9 @@ function parsearCodigoBarras(raw) {
     }
   }
 
-  // 4. Si viene solo el nombre del producto o un código directo (ej: PAPA, TOMATE-CHERRY)
+  // 5. Si viene solo el nombre del producto o un código directo (ej: PAPA, 20000101, etc.)
   const nombreSimple = code.toLowerCase().replace(/[-_]/g, ' ').trim();
-  return { nombre: nombreSimple, peso: null, tagId: null, uniqueCode: code.toUpperCase(), rawCode: code };
+  return { nombre: nombreSimple, peso: null, tagId: null, uniqueCode: code.toUpperCase(), rawCode: code, esIncompleto: true };
 }
 
 // Normaliza un string para comparación fuzzy
@@ -168,6 +187,9 @@ export default function ControlStock() {
       localStorage.setItem(PROCESSED_CODES_KEY, JSON.stringify(codigosProcesados));
     } catch (e) {}
   }, [codigosProcesados]);
+
+  // ── Modal de carga manual / asignación de código ─────────────────────────
+  const [manualModal, setManualModal] = useState(null); // { open, code, productoId, peso, modo }
   const [liquidacionItems, setLiquidacionItems] = useState(() => {
     try {
       const saved = localStorage.getItem(LIQUIDACION_KEY);
@@ -240,86 +262,157 @@ export default function ControlStock() {
     if (!rawCode) return;
     setScanError(null);
 
-    const resultado = parsearCodigoBarras(rawCode);
+    const rawCodeClean = String(rawCode).replace(/[\r\n\x00-\x1F]/g, '').trim().replace(/^\][a-zA-Z0-9]{2,3}/, '').replace(/^\*+|\*+$/g, '').trim();
+    if (!rawCodeClean) return;
+
+    const resultado = parsearCodigoBarras(rawCodeClean);
     const activeScanMode = scanModeRef.current;
     const current = stockDataRef.current || {};
-
-    const rawCodeClean = resultado?.rawCode || String(rawCode).trim();
-    const nombreBuscado = resultado?.nombre || rawCodeClean.toLowerCase();
-    const pesoBuscado = resultado?.peso;
     const uniqueCode = (resultado?.uniqueCode || rawCodeClean).toUpperCase();
+    const reg = codigosProcesadosRef.current ? codigosProcesadosRef.current[uniqueCode] : null;
+
+    const nombreBuscado = (reg ? reg.nombre : (resultado?.nombre || rawCodeClean)).toLowerCase();
+    const pesoBuscado = (reg && reg.peso > 0) ? reg.peso : resultado?.peso;
 
     // Buscar producto en el inventario por coincidencia fuzzy exacta o parcial
-    const matchedId = Object.keys(current).find(id => {
-      const pNorm = norm(current[id].nombre);
-      const sNorm = norm(nombreBuscado);
-      return pNorm === sNorm || pNorm.includes(sNorm) || sNorm.includes(pNorm);
-    });
+    const matchedId = (reg && reg.matchedId && current[reg.matchedId])
+      ? reg.matchedId
+      : Object.keys(current).find(id => {
+          const pNorm = norm(current[id].nombre);
+          const sNorm = norm(nombreBuscado);
+          return pNorm === sNorm || pNorm.includes(sNorm) || sNorm.includes(pNorm);
+        });
 
     const prod = matchedId ? current[matchedId] : null;
 
-    // ── MODO GESTIÓN: siempre desplegar el popup ──────────────────────────────
-    if (activeScanMode === 'gestion') {
-      const pesoFinal = pesoBuscado !== null && pesoBuscado !== undefined ? pesoBuscado : 0;
-      let slot = prod ? determinarSlot(prod.tipo, pesoFinal || 0.5) : null;
-
-      // Si no vino peso especificado, preferir el slot que tenga stock disponible
-      if (prod && pesoFinal <= 0) {
-        if ((prod.stock['500g'] || 0) > 0 && (prod.stock['1kg'] || 0) <= 0) {
-          slot = '500g';
-        } else if ((prod.stock['1kg'] || 0) > 0 && (prod.stock['500g'] || 0) <= 0) {
-          slot = '1kg';
-        }
+    // ── 1. CÓDIGO BLOQUEADO (Dado de baja definitiva / Eliminado) ─────────────
+    if (reg?.bloqueado || reg?.estado === 'BAJA_DEFINITIVA') {
+      if (activeScanMode === 'carga') {
+        setScanError(`🚫 CÓDIGO BLOQUEADO: La bolsa "${uniqueCode}" fue dada de baja definitiva. No se puede volver a utilizar.`);
+        setLastScan({ ok: false, raw: uniqueCode, ts: Date.now() });
+        setTimeout(() => setLastScan(null), 4500);
+        return;
+      } else {
+        setGestionPending({
+          matchedId: matchedId || null,
+          prod,
+          slot: reg?.slot || '500g',
+          peso: reg?.peso || 0,
+          feedbackSlotLabel: reg?.slot || '—',
+          rawCode: rawCodeClean,
+          uniqueCode,
+          nombre: reg?.nombre || nombreBuscado,
+          bloqueado: true,
+          motivoBloqueo: reg?.motivoBloqueo || 'Bolsa eliminada / dada de baja definitiva',
+          fechaModificacion: reg?.fechaModificacion || '',
+        });
+        setLastScan(null);
+        return;
       }
+    }
 
-      const feedbackSlotLabel = slot && prod
-        ? DEFAULTS_BY_TYPE[prod.tipo]?.labels[slot === '500g' ? 'small' : 'large'] || slot
-        : (pesoFinal > 0 ? `${pesoFinal} kg` : '1 bolsa');
+    // ── 2. CÓDIGO PREVIAMENTE SACADO / VENDIDO (Devolución / No vendido) ──────
+    if (reg && reg.estado && reg.estado !== 'EN_STOCK' && !reg.bloqueado) {
+      const slot = reg.slot || (prod ? determinarSlot(prod.tipo, reg.peso || 0.5) : '500g');
+      const feedbackSlotLabel = DEFAULTS_BY_TYPE[prod?.tipo || 'hoja verde']?.labels[slot === '500g' ? 'small' : 'large'] || slot;
 
-      // 1. Verificar si este código único ya fue procesado / accionado anteriormente
-      const yaProcesadoInfo = codigosProcesadosRef.current ? codigosProcesadosRef.current[uniqueCode] : null;
+      if (activeScanMode === 'carga') {
+        // En Modo Carga: reingresar al stock directamente acumulándolo en cargaPendiente
+        setCargaPendiente(prev => [
+          ...prev,
+          {
+            id: Date.now().toString() + Math.random().toString(),
+            matchedId: matchedId || reg.matchedId,
+            nombre: reg.nombre || prod?.nombre || 'Producto',
+            prod: prod || { nombre: reg.nombre, stock: { '500g': 0, '1kg': 0 } },
+            slot,
+            peso: reg.peso || 0,
+            uniqueCode,
+            esReingreso: true,
+          }
+        ]);
 
-      // 2. Verificar stock disponible en el slot
-      const stockDisponible = (prod && slot) ? (prod.stock[slot] || 0) : 0;
-      const sinStock = !prod || stockDisponible <= 0;
+        setLastScan({
+          ok: true,
+          productoNombre: reg.nombre,
+          peso: reg.peso || 0,
+          slot: feedbackSlotLabel,
+          ts: Date.now(),
+          accion: 'Reingreso'
+        });
+        setTimeout(() => setLastScan(null), 2500);
+        return;
+      } else {
+        // En Modo Gestión: popup con opción de Reingresar o Dar de baja definitiva
+        setGestionPending({
+          matchedId: matchedId || reg.matchedId,
+          prod,
+          slot,
+          peso: reg.peso || 0,
+          feedbackSlotLabel,
+          rawCode: rawCodeClean,
+          uniqueCode,
+          nombre: reg.nombre,
+          esReingreso: true,
+          regExistente: reg,
+        });
+        setLastScan(null);
+        return;
+      }
+    }
+
+    // ── 3. CÓDIGO YA EN STOCK (Evitar duplicar) ───────────────────────────────
+    if (reg && reg.estado === 'EN_STOCK') {
+      if (activeScanMode === 'carga') {
+        setScanError(`⚠️ Ya está en stock: La bolsa "${uniqueCode}" (${reg.nombre}) ya fue ingresada. No se puede volver a cargar.`);
+        setLastScan({ ok: false, raw: uniqueCode, ts: Date.now() });
+        setTimeout(() => setLastScan(null), 4500);
+        return;
+      }
+      // En modo gestión sigue adelante
+    }
+
+    // ── 4. CÓDIGO INCOMPLETO O NO RECONOCIDO AUTOMÁTICAMENTE ───────────────────
+    if (!pesoBuscado || pesoBuscado <= 0 || !matchedId || !prod || resultado?.esIncompleto) {
+      // Abrir modal de asignación manual para que el usuario no quede bloqueado
+      setManualModal({
+        open: true,
+        code: uniqueCode,
+        productoId: matchedId || Object.keys(current)[0] || '',
+        peso: (pesoBuscado && pesoBuscado > 0) ? String(pesoBuscado) : '1.000',
+        modo: activeScanMode
+      });
+      return;
+    }
+
+    // ── 5. FLUJO NORMAL: Producto y peso identificados ─────────────────────────
+    const pesoFinal = pesoBuscado;
+    let slot = determinarSlot(prod.tipo, pesoFinal);
+    const feedbackSlotLabel = DEFAULTS_BY_TYPE[prod.tipo]?.labels[slot === '500g' ? 'small' : 'large'] || slot;
+
+    if (activeScanMode === 'gestion') {
+      const stockDisponible = prod.stock[slot] || 0;
+      const sinStock = stockDisponible <= 0;
 
       setGestionPending({
-        matchedId: matchedId || null,
+        matchedId,
         prod,
         slot,
         peso: pesoFinal,
         feedbackSlotLabel,
         rawCode: rawCodeClean,
         uniqueCode,
-        nombre: prod?.nombre || nombreBuscado,
+        nombre: prod.nombre,
         stockDisponible,
         sinStock,
-        yaProcesado: !!yaProcesadoInfo,
-        yaProcesadoInfo,
+        yaProcesado: false,
+        regExistente: reg,
       });
       setLastScan(null);
       return;
     }
 
-    // ── MODO CARGA: acumular en pendiente ───────────────────────────────────────
-    if (!resultado || resultado.peso === null || resultado.peso <= 0) {
-      setScanError(`Formato inválido: "${rawCodeClean}" — usar NOMBRE-PESO (ej: PAPA-1.120)`);
-      setLastScan({ ok: false, raw: rawCodeClean, ts: Date.now() });
-      setTimeout(() => setLastScan(null), 4000);
-      return;
-    }
-
-    if (!matchedId || !prod) {
-      setScanError(`Producto no encontrado: "${nombreBuscado}" — verificá el nombre en la etiqueta`);
-      setLastScan({ ok: false, raw: rawCodeClean, nombre: nombreBuscado, ts: Date.now() });
-      setTimeout(() => setLastScan(null), 4000);
-      return;
-    }
-
-    const slot = determinarSlot(prod.tipo, pesoBuscado);
-    const feedbackSlotLabel = DEFAULTS_BY_TYPE[prod.tipo]?.labels[slot === '500g' ? 'small' : 'large'] || slot;
-
-    // Acumular en cargaPendiente como línea individual
+    // Modo Carga regular
     setCargaPendiente(prev => [
       ...prev,
       {
@@ -328,12 +421,12 @@ export default function ControlStock() {
         nombre: prod.nombre,
         prod,
         slot,
-        peso: pesoBuscado
+        peso: pesoFinal,
+        uniqueCode,
       }
     ]);
 
-    // Feedback visual breve del escaneo recibido
-    setLastScan({ ok: true, productoNombre: prod.nombre, peso: pesoBuscado, slot: feedbackSlotLabel, ts: Date.now(), accion: 'Pendiente' });
+    setLastScan({ ok: true, productoNombre: prod.nombre, peso: pesoFinal, slot: feedbackSlotLabel, ts: Date.now(), accion: 'Pendiente' });
     setTimeout(() => setLastScan(null), 1500);
   }, []);
 
@@ -401,7 +494,10 @@ export default function ControlStock() {
     const current = stockDataRef.current;
     const newData = { ...current };
     const today = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
     const logEntries = [];
+    const nuevosCodigos = {};
 
     // Agrupar los pendientes por matchedId para hacer un solo update por producto
     const grouped = cargaPendiente.reduce((acc, item) => {
@@ -415,6 +511,23 @@ export default function ControlStock() {
       acc[item.matchedId].slots[item.slot].pesoTotal += item.peso;
       return acc;
     }, {});
+
+    // Registrar códigos únicos como EN_STOCK
+    cargaPendiente.forEach(item => {
+      const codeKey = item.uniqueCode || `${item.nombre}-${item.peso}-${Date.now()}`;
+      nuevosCodigos[codeKey] = {
+        uniqueCode: codeKey,
+        nombre: item.nombre,
+        matchedId: item.matchedId,
+        slot: item.slot,
+        peso: item.peso,
+        estado: 'EN_STOCK',
+        bloqueado: false,
+        fechaModificacion: horaStr,
+        ultimaAccion: item.esReingreso ? 'Reingreso al stock' : 'Carga de stock',
+        ts: Date.now()
+      };
+    });
 
     Object.entries(grouped).forEach(([id, item]) => {
       if (!newData[id]) return;
@@ -435,12 +548,16 @@ export default function ControlStock() {
       logEntries.push({ ok: true, productoNombre: item.nombre, peso: pesoTotal, slot: `${totalBolsas} bolsa${totalBolsas !== 1 ? 's' : ''}`, ts: Date.now(), accion: 'Carga' });
     });
 
+    setCodigosProcesados(prev => ({
+      ...prev,
+      ...nuevosCodigos
+    }));
     setStockData(newData);
     setScanLog(prev => [...logEntries, ...prev].slice(0, 8));
     setCargaPendiente([]);
     setLastScan(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cargaPendiente, setStockData]);
+  }, [cargaPendiente, setStockData, syncWithSheet]);
 
   const cancelarCarga = () => {
     setCargaPendiente([]);
@@ -451,38 +568,58 @@ export default function ControlStock() {
   // ── Aplicar acción de Gestión ─────────────────────────────────────────────
   const applyGestionAccion = useCallback((accion) => {
     if (!gestionPending) return;
-    const { matchedId, prod, slot, peso, feedbackSlotLabel, rawCode, uniqueCode, nombre, yaProcesado } = gestionPending;
+    const { matchedId, prod, slot, peso, feedbackSlotLabel, rawCode, uniqueCode, nombre, yaProcesado, esReingreso, bloqueado } = gestionPending;
     const current = stockDataRef.current;
 
-    // Validación 1: Si ya fue procesado este código único, bloquear
-    if (yaProcesado) {
-      setScanError(`Código duplicado: La bolsa "${uniqueCode}" ya fue procesada anteriormente.`);
+    // Validación: Si el código está bloqueado definitivamente, impedir cualquier acción
+    if (bloqueado) {
+      setScanError(`Código bloqueado: Esta bolsa fue dada de baja definitiva.`);
       setGestionPending(null);
       setTimeout(refocusScanner, 50);
       return;
     }
 
-    // Validación 2: Verificar producto y slot
     if (!matchedId || !prod || !slot) {
-      setScanError(`No se puede descontar: Producto "${nombre}" no identificado en el inventario.`);
+      setScanError(`No se puede operar: Producto "${nombre}" no identificado en el inventario.`);
       setGestionPending(null);
       setTimeout(refocusScanner, 50);
       return;
     }
 
-    // Validación 3: Verificar stock en tiempo real
     const prodActual = current[matchedId];
     const stockActual = prodActual?.stock?.[slot] || 0;
+    const now = new Date();
+    const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    const regCode = uniqueCode || rawCode?.toUpperCase() || `${prod.nombre}-${Date.now()}`;
 
-    if (stockActual <= 0) {
-      setScanError(`¡Sin stock! No podés sacar "${prod.nombre}" (${feedbackSlotLabel}) porque el stock disponible es 0.`);
-      setGestionPending(null);
-      setTimeout(refocusScanner, 50);
-      return;
+    let nuevoStockSlot = stockActual;
+    let estadoFinal = 'EN_STOCK';
+    let esBloqueadoFinal = false;
+    let motivoBloqueoFinal = null;
+
+    if (accion === 'Reingresar al stock') {
+      // Reingreso: suma 1 al stock
+      nuevoStockSlot = stockActual + 1;
+      estadoFinal = 'EN_STOCK';
+    } else if (accion === 'Dar de baja definitiva') {
+      // Baja definitiva: descuenta 1 si estaba en stock y BLOQUEA el código permanentemente
+      nuevoStockSlot = Math.max(0, stockActual - 1);
+      estadoFinal = 'BAJA_DEFINITIVA';
+      esBloqueadoFinal = true;
+      motivoBloqueoFinal = 'Bolsa eliminada / dada de baja definitiva';
+    } else {
+      // Salida: Sacar del stock, Consumo propio o Liquidación
+      if (stockActual <= 0) {
+        setScanError(`¡Sin stock! No podés sacar "${prod.nombre}" (${feedbackSlotLabel}) porque el stock disponible es 0.`);
+        setGestionPending(null);
+        setTimeout(refocusScanner, 50);
+        return;
+      }
+      nuevoStockSlot = Math.max(0, stockActual - 1);
+      estadoFinal = accion === 'Consumo propio' ? 'CONSUMO' : (accion === 'Liquidación' ? 'LIQUIDACION' : 'SACADO');
     }
 
-    // Descontar exactamente 1 unidad
-    const nuevoStockSlot = Math.max(0, stockActual - 1);
+    // Actualizar stock en memoria y en Sheet
     const newStock = {
       ...prodActual.stock,
       [slot]: nuevoStockSlot
@@ -492,20 +629,20 @@ export default function ControlStock() {
     setStockData(newData);
     syncWithSheet(newData[matchedId]);
 
-    // Registrar código único para que no se pueda procesar dos veces
-    const now = new Date();
-    const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
-    const regCode = uniqueCode || rawCode?.toUpperCase() || `${prod.nombre}-${Date.now()}`;
-
+    // Registrar código único en base de datos persistente
     setCodigosProcesados(prev => ({
       ...prev,
       [regCode]: {
         uniqueCode: regCode,
-        accion,
         nombre: prod.nombre,
-        slot: feedbackSlotLabel,
+        matchedId,
+        slot,
         peso: peso || 0,
-        fecha: horaStr,
+        estado: estadoFinal,
+        bloqueado: esBloqueadoFinal,
+        motivoBloqueo: motivoBloqueoFinal,
+        fechaModificacion: horaStr,
+        ultimaAccion: accion,
         ts: Date.now()
       }
     }));
@@ -526,7 +663,7 @@ export default function ControlStock() {
     setLastScan(entry);
     setScanLog(prev => [entry, ...prev].slice(0, 8));
 
-    // Si la acción fue Liquidación, agregar la bolsa a la lista de Liquidación
+    // Si la acción fue Liquidación, agregar a lista de Liquidación
     if (accion === 'Liquidación') {
       const itemLiq = {
         id: Date.now().toString() + Math.random().toString(),
@@ -543,10 +680,91 @@ export default function ControlStock() {
 
     setGestionPending(null);
     setTimeout(() => setLastScan(null), 4000);
-    // Re-foco al campo
     setTimeout(() => scanInputRef.current?.focus(), 150);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gestionPending, setStockData, refocusScanner]);
+  }, [gestionPending, setStockData, refocusScanner, syncWithSheet]);
+
+  // ── Handler de Carga / Asignación Manual ──────────────────────────────────
+  const handleManualSubmit = (e) => {
+    e?.preventDefault?.();
+    if (!manualModal) return;
+    const { code, productoId, peso, modo } = manualModal;
+    const cleanCode = (code || '').trim().toUpperCase();
+    if (!cleanCode) {
+      alert('Por favor ingresá un código de barras.');
+      return;
+    }
+    const current = stockDataRef.current || {};
+    const prod = current[productoId] || Object.values(current).find(p => p.id === productoId);
+    if (!prod) {
+      alert('Por favor seleccioná un producto válido de la lista.');
+      return;
+    }
+    const pesoNum = parseFloat(String(peso).replace(',', '.'));
+    if (isNaN(pesoNum) || pesoNum <= 0) {
+      alert('Por favor ingresá un peso numérico válido en kg (ej: 1.000).');
+      return;
+    }
+
+    const reg = codigosProcesadosRef.current ? codigosProcesadosRef.current[cleanCode] : null;
+    if (reg?.bloqueado) {
+      alert(`🚫 Este código está bloqueado permanentemente porque fue dado de baja definitiva (${reg.fechaModificacion}).`);
+      return;
+    }
+
+    const slot = determinarSlot(prod.tipo, pesoNum);
+    const feedbackSlotLabel = DEFAULTS_BY_TYPE[prod.tipo]?.labels[slot === '500g' ? 'small' : 'large'] || slot;
+
+    if (modo === 'gestion') {
+      setManualModal(null);
+      const stockDisponible = prod.stock[slot] || 0;
+      setGestionPending({
+        matchedId: prod.id || productoId,
+        prod,
+        slot,
+        peso: pesoNum,
+        feedbackSlotLabel,
+        rawCode: cleanCode,
+        uniqueCode: cleanCode,
+        nombre: prod.nombre,
+        stockDisponible,
+        sinStock: stockDisponible <= 0,
+        esReingreso: reg && reg.estado !== 'EN_STOCK',
+        regExistente: reg,
+      });
+    } else {
+      // Modo Carga: agregar a carga pendiente
+      if (reg && reg.estado === 'EN_STOCK') {
+        alert(`⚠️ La bolsa "${cleanCode}" ya se encuentra registrada en el stock actual.`);
+        return;
+      }
+
+      setCargaPendiente(prev => [
+        ...prev,
+        {
+          id: Date.now().toString() + Math.random().toString(),
+          matchedId: prod.id || productoId,
+          nombre: prod.nombre,
+          prod,
+          slot,
+          peso: pesoNum,
+          uniqueCode: cleanCode,
+          esReingreso: reg && reg.estado !== 'EN_STOCK'
+        }
+      ]);
+      setManualModal(null);
+      setLastScan({
+        ok: true,
+        productoNombre: prod.nombre,
+        peso: pesoNum,
+        slot: feedbackSlotLabel,
+        ts: Date.now(),
+        accion: 'Pendiente'
+      });
+      setTimeout(() => setLastScan(null), 2000);
+      setTimeout(() => scanInputRef.current?.focus(), 100);
+    }
+  };
 
   const handleScanInput = (e) => {
     setScanBuffer(e.target.value);
@@ -874,28 +1092,169 @@ export default function ControlStock() {
           </p>
         </div>
 
-        {/* Campo de escaneo */}
-        <div className="relative">
-          <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
-            <div className={`w-2 h-2 rounded-full transition-all ${
-              document.activeElement === scanInputRef.current
-                ? 'bg-green-400 shadow-[0_0_8px_2px_rgba(74,222,128,0.6)] animate-pulse'
-                : 'bg-gray-600'
-            }`} />
+        {/* Campo de escaneo con botón de Carga Manual */}
+        <div className="flex gap-2 items-center">
+          <div className="relative flex-1">
+            <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
+              <div className={`w-2 h-2 rounded-full transition-all ${
+                document.activeElement === scanInputRef.current
+                  ? 'bg-green-400 shadow-[0_0_8px_2px_rgba(74,222,128,0.6)] animate-pulse'
+                  : 'bg-gray-600'
+              }`} />
+            </div>
+            <input
+              ref={scanInputRef}
+              type="text"
+              value={scanBuffer}
+              onChange={handleScanInput}
+              onKeyDown={handleScanKeyDown}
+              onBlur={() => setTimeout(refocusScanner, 100)}
+              placeholder="Apuntá la pistola y escaneá — PAPA-1.120"
+              className="w-full bg-black/40 border border-white/10 focus:border-green-500/60 text-white text-sm font-mono rounded-2xl pl-10 pr-4 py-3.5 outline-none transition-all placeholder:text-gray-600 focus:bg-black/60 focus:shadow-[0_0_20px_rgba(74,222,128,0.08)]"
+              autoComplete="off"
+              spellCheck={false}
+            />
           </div>
-          <input
-            ref={scanInputRef}
-            type="text"
-            value={scanBuffer}
-            onChange={handleScanInput}
-            onKeyDown={handleScanKeyDown}
-            onBlur={() => setTimeout(refocusScanner, 100)}
-            placeholder="Apuntá la pistola y escaneá — PAPA-1.120"
-            className="w-full bg-black/40 border border-white/10 focus:border-green-500/60 text-white text-sm font-mono rounded-2xl pl-10 pr-4 py-3.5 outline-none transition-all placeholder:text-gray-600 focus:bg-black/60 focus:shadow-[0_0_20px_rgba(74,222,128,0.08)]"
-            autoComplete="off"
-            spellCheck={false}
-          />
+          <button
+            type="button"
+            onClick={() => setManualModal({
+              open: true,
+              code: '',
+              productoId: Object.keys(stockData || {})[0] || '',
+              peso: '1.000',
+              modo: scanMode
+            })}
+            className="flex items-center gap-1.5 px-4 py-3.5 rounded-2xl bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white border border-white/10 text-xs font-bold transition-all cursor-pointer shrink-0 shadow-sm active:scale-95"
+            title="Cargar o asignar bolsa manualmente con código"
+          >
+            <Plus size={15} className="text-green-400" />
+            <span className="hidden sm:inline">Carga manual</span>
+            <span className="sm:hidden">Manual</span>
+          </button>
         </div>
+
+        {/* Modal de Carga Manual / Asignación de Código */}
+        {manualModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setManualModal(null);
+            }}
+          >
+            <form
+              onSubmit={handleManualSubmit}
+              className="bg-gradient-to-b from-gray-900 via-[#131714] to-gray-900 border border-green-500/40 rounded-3xl p-6 max-w-md w-full shadow-[0_0_50px_rgba(34,197,94,0.25)] animate-in zoom-in-95 duration-150 space-y-4"
+            >
+              <div className="flex items-start justify-between border-b border-green-500/20 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400">
+                    <ScanBarcode size={18} />
+                  </div>
+                  <div>
+                    <span className="text-green-400 text-[10px] font-black uppercase tracking-widest block">
+                      Carga Manual de Bolsa
+                    </span>
+                    <span className="text-gray-400 text-[11px] font-mono">
+                      Ingresá o confirmá el código y producto
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setManualModal(null)}
+                  className="p-1.5 text-gray-500 hover:text-white rounded-lg hover:bg-white/10 transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="space-y-3.5">
+                {/* Código de barras */}
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">
+                    Código de barras de la bolsa
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={manualModal.code || ''}
+                    onChange={(e) => setManualModal(prev => ({ ...prev, code: e.target.value }))}
+                    placeholder="Ej: BANANA-1.000-E49A o 200001011205"
+                    className="w-full bg-black/50 border border-white/15 focus:border-green-500/70 rounded-xl px-3.5 py-2.5 text-white font-mono text-xs uppercase outline-none"
+                  />
+                </div>
+
+                {/* Selector de Producto */}
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">
+                    Producto
+                  </label>
+                  <select
+                    value={manualModal.productoId || ''}
+                    onChange={(e) => setManualModal(prev => ({ ...prev, productoId: e.target.value }))}
+                    className="w-full bg-black/60 border border-white/15 focus:border-green-500/70 rounded-xl px-3.5 py-2.5 text-white text-xs uppercase outline-none font-bold"
+                  >
+                    {Object.keys(stockData || {}).map(id => (
+                      <option key={id} value={id} className="bg-gray-900 text-white">
+                        {stockData[id]?.nombre?.toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Peso */}
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">
+                    Peso en Kilogramos (kg)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0.05"
+                    required
+                    value={manualModal.peso || ''}
+                    onChange={(e) => setManualModal(prev => ({ ...prev, peso: e.target.value }))}
+                    placeholder="1.000"
+                    className="w-full bg-black/50 border border-white/15 focus:border-green-500/70 rounded-xl px-3.5 py-2.5 text-white font-mono text-sm font-bold outline-none"
+                  />
+                  {/* Presets rápidos */}
+                  <div className="flex gap-2 mt-2">
+                    {['0.250', '0.500', '1.000', '1.500', '2.000'].map(p => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setManualModal(prev => ({ ...prev, peso: p }))}
+                        className={`flex-1 py-1 rounded-lg text-[10px] font-mono font-bold transition-all border cursor-pointer ${
+                          manualModal.peso === p
+                            ? 'bg-green-500/20 border-green-500 text-green-300'
+                            : 'bg-white/5 border-white/10 text-gray-400 hover:text-white hover:bg-white/10'
+                        }`}
+                      >
+                        {p} kg
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setManualModal(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white text-xs font-bold uppercase transition-all cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-[2] py-2.5 rounded-xl bg-green-600 hover:bg-green-500 text-white text-xs font-black uppercase tracking-wider transition-all shadow-lg border-b-2 border-green-800 active:border-b-0 active:translate-y-px cursor-pointer"
+                >
+                  {manualModal.modo === 'gestion' ? 'Abrir Gestión' : 'Agregar a Carga'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
 
         {/* Modal Popup de Gestión */}
         {gestionPending && (
@@ -997,31 +1356,37 @@ export default function ControlStock() {
                 )}
               </div>
 
-              {/* 1. Alerta de CÓDIGO YA PROCESADO / DUPLICADO */}
-              {gestionPending.yaProcesado && (
-                <div className="bg-amber-500/15 border-2 border-amber-500/60 rounded-2xl p-4 text-center space-y-2 animate-in zoom-in-95 duration-200 shadow-[0_0_20px_rgba(245,158,11,0.15)]">
-                  <div className="flex items-center justify-center gap-2 text-amber-400 font-black text-sm uppercase tracking-wider">
-                    <AlertTriangle size={20} className="shrink-0 animate-bounce" />
-                    <span>¡CÓDIGO YA PROCESADO!</span>
+              {/* 1. Alerta de CÓDIGO BLOQUEADO (Dado de baja definitiva) */}
+              {gestionPending.bloqueado && (
+                <div className="bg-red-500/20 border-2 border-red-500/80 rounded-2xl p-4 text-center space-y-2 animate-in zoom-in-95 duration-200 shadow-[0_0_20px_rgba(239,68,68,0.2)]">
+                  <div className="flex items-center justify-center gap-2 text-red-400 font-black text-sm uppercase tracking-wider">
+                    <AlertCircle size={22} className="shrink-0 animate-bounce" />
+                    <span>¡CÓDIGO BLOQUEADO (DADO DE BAJA)!</span>
                   </div>
-                  <p className="text-amber-200/90 text-xs font-medium">
-                    Esta bolsa ya fue procesada anteriormente. Cada código es único y ninguna bolsa puede sacarse dos veces.
+                  <p className="text-red-200 text-xs font-medium leading-relaxed">
+                    Esta bolsa fue eliminada / dada de baja definitiva del sistema {gestionPending.fechaModificacion ? `el ${gestionPending.fechaModificacion}` : ''}.
                   </p>
-                  {gestionPending.yaProcesadoInfo && (
-                    <div className="bg-black/50 rounded-xl p-2.5 text-[11px] font-mono text-gray-300 text-left space-y-1 border border-white/10">
-                      <div><span className="text-amber-400 font-bold">Acción previa:</span> {gestionPending.yaProcesadoInfo.accion}</div>
-                      <div><span className="text-amber-400 font-bold">Fecha / Hora:</span> {gestionPending.yaProcesadoInfo.fecha}</div>
-                      <div><span className="text-amber-400 font-bold">Código:</span> {gestionPending.uniqueCode}</div>
-                    </div>
-                  )}
-                  <p className="text-amber-400 text-[10px] font-black uppercase tracking-wider">
-                    🚫 Acción bloqueada para evitar duplicados
+                  <p className="text-red-400 text-[10px] font-black uppercase tracking-wider">
+                    🚫 El código de barra quedó bloqueado permanentemente y no puede volver a utilizarse.
                   </p>
                 </div>
               )}
 
-              {/* 2. Alerta de SIN STOCK DISPONIBLE */}
-              {!gestionPending.yaProcesado && gestionPending.sinStock && (
+              {/* 2. Alerta de BOLSA PREVIAMENTE VENDIDA / SACADA (Devolución / No vendido) */}
+              {!gestionPending.bloqueado && gestionPending.esReingreso && (
+                <div className="bg-blue-500/15 border-2 border-blue-500/60 rounded-2xl p-4 text-center space-y-2 animate-in zoom-in-95 duration-200 shadow-[0_0_20px_rgba(59,130,246,0.15)]">
+                  <div className="flex items-center justify-center gap-2 text-blue-400 font-black text-sm uppercase tracking-wider">
+                    <RotateCcw size={20} className="shrink-0" />
+                    <span>Bolsa previamente vendida / sacada</span>
+                  </div>
+                  <p className="text-blue-200 text-xs font-medium">
+                    Esta bolsa salió del stock anteriormente ({gestionPending.regExistente?.ultimaAccion || 'Salida'}). Si no fue vendida o el cliente la devolvió, podés reingresarla al stock.
+                  </p>
+                </div>
+              )}
+
+              {/* 3. Alerta de SIN STOCK DISPONIBLE (solo en bolsas en stock normal cuando stock <= 0) */}
+              {!gestionPending.bloqueado && !gestionPending.esReingreso && gestionPending.sinStock && (
                 <div className="bg-red-500/15 border-2 border-red-500/60 rounded-2xl p-4 text-center space-y-2 animate-in zoom-in-95 duration-200 shadow-[0_0_20px_rgba(239,68,68,0.15)]">
                   <div className="flex items-center justify-center gap-2 text-red-400 font-black text-sm uppercase tracking-wider">
                     <AlertCircle size={20} className="shrink-0" />
@@ -1036,8 +1401,8 @@ export default function ControlStock() {
                 </div>
               )}
 
-              {/* 3. Indicador de STOCK DISPONIBLE (cuando hay stock y es código nuevo) */}
-              {!gestionPending.yaProcesado && !gestionPending.sinStock && (
+              {/* 4. Indicador de STOCK DISPONIBLE */}
+              {!gestionPending.bloqueado && !gestionPending.esReingreso && !gestionPending.sinStock && (
                 <div className="bg-green-500/10 border border-green-500/30 rounded-2xl p-3 flex items-center justify-between text-xs">
                   <div className="flex items-center gap-2.5">
                     <div className="p-2 rounded-xl bg-green-500/20 text-green-400">
@@ -1063,63 +1428,111 @@ export default function ControlStock() {
 
               {/* Botones de Acción */}
               <div className="space-y-2 pt-1">
-                {[
-                  {
-                    accion: 'Sacar del stock',
-                    emoji: '📤',
-                    desc: 'Error de escaneo o bolsa dañada — descuenta 1 bolsa del stock',
-                    color: 'bg-red-500/10 border-red-500/30 hover:bg-red-500/20 hover:border-red-500/50',
-                    textColor: 'text-red-300',
-                    descColor: 'text-red-400/70',
-                  },
-                  {
-                    accion: 'Consumo propio',
-                    emoji: '🍴',
-                    desc: 'Sale del stock y registra el costo interno',
-                    color: 'bg-blue-500/10 border-blue-500/30 hover:bg-blue-500/20 hover:border-blue-500/50',
-                    textColor: 'text-blue-300',
-                    descColor: 'text-blue-400/70',
-                  },
-                  {
-                    accion: 'Liquidación',
-                    emoji: '🏷️',
-                    desc: 'Sale del stock y se envía a lista de liquidación',
-                    color: 'bg-amber-500/10 border-amber-500/30 hover:bg-amber-500/20 hover:border-amber-500/50',
-                    textColor: 'text-amber-300',
-                    descColor: 'text-amber-400/70',
-                  },
-                ].map(({ accion, emoji, desc, color, textColor, descColor }) => {
-                  const isDisabled = gestionPending.yaProcesado || gestionPending.sinStock || !gestionPending.prod;
-                  return (
+                {/* Si es reingreso, ofrecer Reingresar al stock o Dar de baja definitiva */}
+                {gestionPending.esReingreso && !gestionPending.bloqueado ? (
+                  <>
                     <button
-                      key={accion}
                       type="button"
-                      disabled={isDisabled}
-                      onClick={() => !isDisabled && applyGestionAccion(accion)}
-                      className={`${color} border rounded-2xl px-4 py-3 text-left transition-all ${
-                        isDisabled
-                          ? 'opacity-35 cursor-not-allowed grayscale'
-                          : 'active:scale-[0.98] cursor-pointer group'
-                      } flex items-center gap-3.5 w-full`}
+                      onClick={() => applyGestionAccion('Reingresar al stock')}
+                      className="bg-green-500/20 border border-green-500 hover:bg-green-500/30 rounded-2xl px-4 py-3 text-left transition-all active:scale-[0.98] cursor-pointer flex items-center gap-3.5 w-full shadow-lg group"
                     >
-                      <span className={`text-2xl shrink-0 ${!isDisabled ? 'group-hover:scale-110 transition-transform' : ''}`}>
-                        {emoji}
+                      <span className="text-2xl shrink-0 group-hover:scale-110 transition-transform">
+                        📥
                       </span>
                       <div className="min-w-0">
-                        <span className={`text-xs font-black uppercase tracking-wider block ${textColor}`}>
-                          {accion}
+                        <span className="text-xs font-black uppercase tracking-wider block text-green-300">
+                          Reingresar al stock (+1)
                         </span>
-                        <span className={`text-[10px] font-medium ${descColor} block mt-0.5 leading-tight`}>
-                          {desc}
+                        <span className="text-[10px] font-medium text-green-400/80 block mt-0.5 leading-tight">
+                          No fue vendido o devuelto — suma 1 bolsa al inventario y queda disponible
                         </span>
                       </div>
                     </button>
-                  );
-                })}
+                    <button
+                      type="button"
+                      onClick={() => applyGestionAccion('Dar de baja definitiva')}
+                      className="bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 rounded-2xl px-4 py-3 text-left transition-all active:scale-[0.98] cursor-pointer flex items-center gap-3.5 w-full group"
+                    >
+                      <span className="text-2xl shrink-0 group-hover:scale-110 transition-transform">
+                        🗑️
+                      </span>
+                      <div className="min-w-0">
+                        <span className="text-xs font-black uppercase tracking-wider block text-red-300">
+                          Dar de baja definitiva (Eliminar)
+                        </span>
+                        <span className="text-[10px] font-medium text-red-400/70 block mt-0.5 leading-tight">
+                          Producto en mal estado — bloquea el código para que no se use nunca más
+                        </span>
+                      </div>
+                    </button>
+                  </>
+                ) : (
+                  [
+                    {
+                      accion: 'Sacar del stock',
+                      emoji: '📤',
+                      desc: 'Venta regular o bolsa retirada — descuenta 1 bolsa del stock',
+                      color: 'bg-red-500/10 border-red-500/30 hover:bg-red-500/20 hover:border-red-500/50',
+                      textColor: 'text-red-300',
+                      descColor: 'text-red-400/70',
+                    },
+                    {
+                      accion: 'Consumo propio',
+                      emoji: '🍴',
+                      desc: 'Sale del stock y registra el costo interno',
+                      color: 'bg-blue-500/10 border-blue-500/30 hover:bg-blue-500/20 hover:border-blue-500/50',
+                      textColor: 'text-blue-300',
+                      descColor: 'text-blue-400/70',
+                    },
+                    {
+                      accion: 'Liquidación',
+                      emoji: '🏷️',
+                      desc: 'Sale del stock y se envía a lista de liquidación',
+                      color: 'bg-amber-500/10 border-amber-500/30 hover:bg-amber-500/20 hover:border-amber-500/50',
+                      textColor: 'text-amber-300',
+                      descColor: 'text-amber-400/70',
+                    },
+                    {
+                      accion: 'Dar de baja definitiva',
+                      emoji: '🗑️',
+                      desc: 'Bolsa rota o podrida — descuenta y BLOQUEA el código permanentemente',
+                      color: 'bg-rose-500/15 border-rose-500/40 hover:bg-rose-500/25 hover:border-rose-500/60',
+                      textColor: 'text-rose-300',
+                      descColor: 'text-rose-400/80',
+                    },
+                  ].map(({ accion, emoji, desc, color, textColor, descColor }) => {
+                    const isDisabled = gestionPending.bloqueado || (gestionPending.sinStock && accion !== 'Dar de baja definitiva') || !gestionPending.prod;
+                    return (
+                      <button
+                        key={accion}
+                        type="button"
+                        disabled={isDisabled}
+                        onClick={() => !isDisabled && applyGestionAccion(accion)}
+                        className={`${color} border rounded-2xl px-4 py-3 text-left transition-all ${
+                          isDisabled
+                            ? 'opacity-35 cursor-not-allowed grayscale'
+                            : 'active:scale-[0.98] cursor-pointer group'
+                        } flex items-center gap-3.5 w-full`}
+                      >
+                        <span className={`text-2xl shrink-0 ${!isDisabled ? 'group-hover:scale-110 transition-transform' : ''}`}>
+                          {emoji}
+                        </span>
+                        <div className="min-w-0">
+                          <span className={`text-xs font-black uppercase tracking-wider block ${textColor}`}>
+                            {accion}
+                          </span>
+                          <span className={`text-[10px] font-medium ${descColor} block mt-0.5 leading-tight`}>
+                            {desc}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
               </div>
 
               {/* Mensaje de bloqueo si corresponde */}
-              {(gestionPending.yaProcesado || gestionPending.sinStock) && (
+              {(gestionPending.bloqueado || (!gestionPending.esReingreso && gestionPending.sinStock)) && (
                 <p className="text-[10px] text-center font-bold text-gray-500 uppercase tracking-wider pt-1">
                   Acciones deshabilitadas para proteger la exactitud del stock.
                 </p>
@@ -1131,7 +1544,7 @@ export default function ControlStock() {
                   onClick={() => { setGestionPending(null); setTimeout(refocusScanner, 50); }}
                   className="text-xs text-gray-500 hover:text-gray-300 transition-colors uppercase font-bold tracking-wider cursor-pointer"
                 >
-                  Cancelar (Esc)
+                  Cerrar (Esc)
                 </button>
               </div>
             </div>
@@ -1162,15 +1575,31 @@ export default function ControlStock() {
                   productTotals[item.matchedId].peso += item.peso;
                   
                   return (
-                    <div key={item.id} className="flex items-center justify-between px-4 py-2.5 gap-3">
+                    <div key={item.id} className="flex items-center justify-between px-4 py-2.5 gap-3 group hover:bg-white/5 transition-colors">
                       <div className="min-w-0 flex items-center gap-2">
                         <p className="text-white text-xs font-bold uppercase tracking-tight truncate">{item.nombre}</p>
+                        {item.esReingreso && (
+                          <span className="text-[9px] bg-blue-500/20 text-blue-300 border border-blue-500/30 px-1.5 py-0.5 rounded font-bold uppercase shrink-0">
+                            Reingreso
+                          </span>
+                        )}
                         <span className="text-gray-500 text-[10px]">&mdash;</span>
                         <p className="text-gray-400 text-[10px] font-mono">bolsa {productCounts[item.matchedId]}</p>
+                        {item.uniqueCode && (
+                          <span className="text-[9px] text-gray-500 font-mono hidden sm:inline">[{item.uniqueCode}]</span>
+                        )}
                       </div>
                       <div className="text-right shrink-0 flex items-center gap-3">
                         <span className="text-gray-500 text-[9px] font-mono">{item.slot}</span>
-                        <p className="text-green-400 font-mono text-xs">{item.peso.toFixed(3)} kg</p>
+                        <p className="text-green-400 font-mono text-xs font-bold">{item.peso.toFixed(3)} kg</p>
+                        <button
+                          type="button"
+                          onClick={() => setCargaPendiente(prev => prev.filter(p => p.id !== item.id))}
+                          className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-all cursor-pointer"
+                          title="Eliminar esta bolsa de la lista"
+                        >
+                          <Trash2 size={13} />
+                        </button>
                       </div>
                     </div>
                   );
