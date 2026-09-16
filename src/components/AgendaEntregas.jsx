@@ -413,22 +413,9 @@ export default function AgendaEntregas({ rol }) {
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {rol !== 'repartidor' && (
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); imprimirRemitoConPesoReal(p); }}
-                        title="Imprimir remito individual de este pedido"
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 hover:text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
-                      >
-                        <Printer size={13} className="text-indigo-400" />
-                        <span className="hidden sm:inline">Remito</span>
-                      </button>
-                    )}
-                    <button className="text-gray-500 bg-black/40 p-1.5 rounded-lg border border-white/10 shrink-0">
-                      {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    </button>
-                  </div>
+                  <button className="text-gray-500 bg-black/40 p-1.5 rounded-lg border border-white/10 shrink-0">
+                    {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </button>
                 </div>
 
                 {/* Acordeón expandido */}
@@ -507,18 +494,9 @@ export default function AgendaEntregas({ rol }) {
 
                         {/* Botón PREPARAR (inicio) */}
                         {!prep && !estaPreparando && (estadoActual === 'pendiente' || estadoActual === 'preparado' || estadoActual === 'listo') && (
-                          <div className="space-y-2">
-                            <button onClick={() => iniciarPreparacion(p)} className="w-full flex items-center justify-center gap-3 py-4 rounded-2xl bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-black text-sm uppercase tracking-widest transition-all active:scale-[0.98] cursor-pointer shadow-lg shadow-green-900/30 border-b-2 border-green-800">
-                              <ScanBarcode size={20} /> 📦 PREPARAR PEDIDO
-                            </button>
-                            <button 
-                              type="button"
-                              onClick={() => imprimirRemitoConPesoReal(p)} 
-                              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/20 text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer"
-                            >
-                              <Printer size={15} /> 🖨️ Imprimir Remito de este Pedido
-                            </button>
-                          </div>
+                          <button onClick={() => iniciarPreparacion(p)} className="w-full flex items-center justify-center gap-3 py-4 rounded-2xl bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-black text-sm uppercase tracking-widest transition-all active:scale-[0.98] cursor-pointer shadow-lg shadow-green-900/30 border-b-2 border-green-800">
+                            <ScanBarcode size={20} /> 📦 PREPARAR PEDIDO
+                          </button>
                         )}
 
                         {/* Items del pedido con escaneo */}
@@ -622,28 +600,6 @@ export default function AgendaEntregas({ rol }) {
                               </button>
                             )}
 
-                            {/* Imprimir remito: disponible en cualquier momento mientras se carga o al finalizar */}
-                            <div className="pt-2">
-                              <button 
-                                type="button"
-                                onClick={() => imprimirRemitoConPesoReal(p)} 
-                                className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer border ${
-                                  todosCompletos
-                                    ? 'bg-indigo-600 hover:bg-indigo-500 text-white border-indigo-500 shadow-lg shadow-indigo-900/30'
-                                    : tieneBolsas
-                                      ? 'bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border-indigo-500/40'
-                                      : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/10 hover:text-white'
-                                }`}
-                              >
-                                <Printer size={16} />
-                                {todosCompletos 
-                                  ? '🖨️ Imprimir Remito Completo con Peso Real' 
-                                  : tieneBolsas 
-                                    ? `🖨️ Imprimir Remito Actual (${prep?.items?.reduce((s, it) => s + (it.bolsasAsignadas?.length || 0), 0)} bolsas escaneadas)` 
-                                    : '🖨️ Imprimir Remito de este Pedido'}
-                              </button>
-                            </div>
-
                             {/* Botonera de estado */}
                             <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-white/5">
                               <button onClick={() => actualizarEstado(p.numero_pedido, 'Pendiente')} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all cursor-pointer ${estadoActual === 'pendiente' ? 'bg-amber-500/20 border-amber-500/30 text-amber-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-amber-400'}`}>
@@ -673,19 +629,6 @@ export default function AgendaEntregas({ rol }) {
                             </button>
                             <button onClick={() => actualizarEstado(p.numero_pedido, (estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'Preparado' : 'No entregado')} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10'}`}>
                               <span className="text-xl">❌</span> NO ENTREGADO
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Botón de remito para pedidos sin preparación activa */}
-                        {!prep && !estaPreparando && (
-                          <div className="mt-3 pt-3 border-t border-white/5">
-                            <button
-                              type="button"
-                              onClick={() => imprimirRemitoConPesoReal(p)}
-                              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 font-bold text-xs uppercase tracking-wider transition-all cursor-pointer"
-                            >
-                              <Printer size={15} /> 🖨️ Imprimir Remito del Pedido
                             </button>
                           </div>
                         )}
