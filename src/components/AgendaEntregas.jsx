@@ -2,6 +2,7 @@ import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, CheckCircle, Sun, Sunset, Printer, FileText, User, Clock, ScanBarcode, X, Trash2, Check, RotateCcw } from 'lucide-react';
 import { HOY } from '../data/mockData';
+import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido } from '../utils/remitoPrinter';
 
 const DIAS_SEMANA = ['Martes', 'Jueves'];
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
@@ -17,36 +18,6 @@ const PROCESSED_CODES_KEY = 'huerta_codigos_procesados_v1';
 
 // ── Normalizar texto para matcheo fuzzy ────────────────────────────────────
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-
-// ── Parsear el campo "producto" del pedido en items individuales ────────────
-function parsearProductosPedido(textoProducto, cantidadGeneral = 1) {
-  if (!textoProducto) return [];
-  const partes = textoProducto.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
-  
-  return partes.map(parte => {
-    let cantidad = cantidadGeneral;
-    let pesoSolicitado = null;
-    let texto = parte;
-    
-    const cantInicio = texto.match(/^(\d+)\s*[xX]?\s+(.+)$/);
-    if (cantInicio) { cantidad = parseInt(cantInicio[1], 10); texto = cantInicio[2]; }
-    
-    const cantFinal = texto.match(/^(.+?)\s+[xX](\d+)$/);
-    if (cantFinal) { cantidad = parseInt(cantFinal[2], 10); texto = cantFinal[1]; }
-    
-    const pesoMatch = texto.match(/(\d+(?:[.,]\d+)?)\s*(kg|kilos?|g|gr?)\b/i);
-    if (pesoMatch) {
-      let val = parseFloat(pesoMatch[1].replace(',', '.'));
-      const unit = pesoMatch[2].toLowerCase();
-      if (unit.startsWith('g')) val = val / 1000;
-      pesoSolicitado = Math.round(val * 1000) / 1000;
-      texto = texto.replace(pesoMatch[0], '').trim();
-    }
-    
-    const nombre = texto.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
-    return { nombre, cantidad, pesoSolicitado, bolsasAsignadas: [] };
-  });
-}
 
 // ── Parsear código de barras ────────────────────────────────────────────────
 function parsearCodigoBarras(raw) {
@@ -282,88 +253,31 @@ export default function AgendaEntregas({ rol }) {
     actualizarEstado(numPedido, 'Pendiente');
   }, []);
 
-  // ── IMPRIMIR REMITO CON PESO REAL ──────────────────────────────────────────
-  const imprimirRemitoConPesoReal = (p) => {
+  // ── IMPRIMIR REMITOS (INDIVIDUAL O LOTE UNIFICADO) ─────────────────────────
+  const imprimirRemitoConPesoReal = useCallback((p, opciones = {}) => {
     const prep = preparaciones[p.numero_pedido];
-    const win = window.open('', '_blank');
-    
-    const styles = `<style>
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
-      @page { size: A4; margin: 0; }
-      body { font-family: 'Inter', sans-serif; margin: 0; padding: 0; background: white; color: black; line-height: 1.4; }
-      .hoja { width: 210mm; height: 297mm; position: relative; page-break-after: always; padding: 12mm; box-sizing: border-box; display: flex; flex-direction: column; border: 2px solid #000; }
-      .header { display: flex; justify-content: space-between; align-items: start; border-bottom: 2px solid #000; padding-bottom: 12px; margin-bottom: 20px; }
-      .header-left { font-size: 24px; font-weight: 800; }
-      .header-web { font-size: 12px; color: #333; margin-top: 3px; font-weight: 400; }
-      .header-right { text-align: right; font-size: 14px; font-weight: 700; }
-      .client-data { margin-bottom: 25px; font-size: 13px; border-bottom: 1px solid #000; padding-bottom: 15px; }
-      .client-info { font-size: 13px; margin-bottom: 5px; }
-      .client-info strong { font-weight: 700; width: 110px; display: inline-block; }
-      .products-section { flex-grow: 1; margin-bottom: 20px; }
-      .products-title { font-size: 14px; font-weight: 800; margin-bottom: 15px; text-transform: uppercase; border-bottom: 1px solid #000; padding-bottom: 5px; }
-      table { width: 100%; border-collapse: collapse; }
-      th { text-align: left; font-size: 11px; font-weight: 800; border-bottom: 2px solid #000; padding: 8px 4px; text-transform: uppercase; }
-      td { padding: 7px 4px; font-size: 12px; border-bottom: 1px solid #ddd; }
-      .qty { width: 40px; text-align: center; font-weight: 700; }
-      .price { width: 80px; text-align: right; font-weight: 700; }
-      .diff-pos { color: #16a34a; font-weight: 700; }
-      .diff-neg { color: #dc2626; font-weight: 700; }
-      .diff-zero { color: #666; }
-      .total-container { display: flex; justify-content: flex-end; margin-bottom: 15px; }
-      .total-box { font-size: 16px; font-weight: 800; padding: 10px 20px; border: 2px solid #000; min-width: 200px; text-align: right; }
-      .resumen-pesos { margin: 15px 0; padding: 10px; border: 1px solid #000; font-size: 12px; }
-      .resumen-pesos td { border: none; padding: 4px 8px; }
-      .footer { border-top: 2px solid #000; padding-top: 15px; }
-      .signature-row { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 15px; font-size: 13px; }
-      .linea-puntos { border-bottom: 1px solid #000; display: inline-block; min-width: 150px; margin: 0 5px; height: 18px; }
-      .thanks-footer { text-align: center; font-size: 12px; margin-top: 15px; font-weight: 600; }
-    </style>`;
-
-    const crearHoja = (tipo) => {
-      let productosHTML = '';
-      let totalPesoSolicitado = 0;
-      let totalPesoReal = 0;
-      
-      if (prep && prep.items) {
-        productosHTML = prep.items.map(item => {
-          const bolsas = item.bolsasAsignadas || [];
-          const pesoReal = bolsas.reduce((s, b) => s + (b.peso || 0), 0);
-          const pesoPedido = item.pesoSolicitado ? item.pesoSolicitado * item.cantidad : pesoReal;
-          const diff = Math.round((pesoReal - pesoPedido) * 1000) / 1000;
-          totalPesoSolicitado += pesoPedido;
-          totalPesoReal += pesoReal;
-          const diffClass = diff > 0 ? 'diff-pos' : diff < 0 ? 'diff-neg' : 'diff-zero';
-          const diffStr = diff > 0 ? `+${diff.toFixed(3)}` : diff.toFixed(3);
-          const detallebolsas = bolsas.length > 1 ? `<br/><span style="font-size:10px;color:#666">${bolsas.map((b, i) => `Bolsa ${i+1}: ${b.peso?.toFixed(3) || '?'} kg`).join(' | ')}</span>` : '';
-          return `<tr><td class="qty">${item.cantidad}</td><td>${item.nombre.toUpperCase()}${detallebolsas}</td><td class="price">${pesoPedido.toFixed(3)} kg</td><td class="price">${pesoReal.toFixed(3)} kg</td><td class="price ${diffClass}">${diff !== 0 ? diffStr + ' kg' : '—'}</td></tr>`;
-        }).join('');
-      } else {
-        productosHTML = `<tr><td class="qty">${p.cantidades || 1}</td><td>${p.producto || ""}</td><td class="price" colspan="3">$${p.total || 0}</td></tr>`;
-      }
-
-      const diffTotal = Math.round((totalPesoReal - totalPesoSolicitado) * 1000) / 1000;
-      const diffTotalClass = diffTotal > 0 ? 'diff-pos' : diffTotal < 0 ? 'diff-neg' : 'diff-zero';
-
-      return `<div class="hoja">
-        <div class="header"><div class="header-left">🌿 HUERTA URBANA<div class="header-web">huertaurbana.com.ar | Tel: 11 6177-1376</div></div><div class="header-right">PEDIDO: #${p.numero_pedido || '0000'}<br/>FECHA: ${p.fecha || p.dia_entrega || ''}<br/>REMITO - ${tipo}</div></div>
-        <div class="client-data"><div class="client-info"><strong>CLIENTE:</strong> ${p.nombre || "Consumidor Final"}</div><div class="client-info"><strong>DIRECCIÓN:</strong> ${p.direccion || ""}, ${p.localidad || ""}</div><div class="client-info"><strong>TELÉFONO:</strong> ${p.telefono || ""}</div><div class="client-info"><strong>ENTREGA:</strong> ${p.dia_entrega || ""} (${p.horario_entrega || ""})</div><div class="client-info"><strong>PAGO:</strong> APROBADO ✅</div>${p.observaciones ? `<div class="client-info"><strong>OBS:</strong> ${p.observaciones}</div>` : ""}</div>
-        <div class="products-section"><div class="products-title">Detalle de Productos:</div><table><thead><tr><th class="qty">Cant</th><th>Producto</th><th class="price">Pedido</th><th class="price">Peso Real</th><th class="price">Dif.</th></tr></thead><tbody>${productosHTML}</tbody></table>${prep ? `<table class="resumen-pesos"><tr><td><strong>TOTAL PEDIDO:</strong></td><td>${totalPesoSolicitado.toFixed(3)} kg</td><td><strong>TOTAL REAL:</strong></td><td>${totalPesoReal.toFixed(3)} kg</td><td><strong>DIF:</strong></td><td class="${diffTotalClass}">${diffTotal > 0 ? '+' : ''}${diffTotal.toFixed(3)} kg</td></tr></table>` : ''}</div>
-        <div class="total-container"><div class="total-box">TOTAL A PAGAR: $${p.total || 0}</div></div>
-        <div class="footer"><div class="signature-row"><div>Recibí conforme: <span class="linea-puntos" style="min-width: 200px"></span></div></div><div class="signature-row"><div>Firma: <span class="linea-puntos" style="min-width: 180px"></span></div><div>Aclaración: <span class="linea-puntos" style="min-width: 220px"></span></div></div><div class="thanks-footer">¡Gracias por tu compra! 🌿 <strong>huertaurbana.com.ar</strong></div></div>
-      </div>`;
-    };
-
-    win.document.write(`<html><head><title>REMITO #${p.numero_pedido} - HUERTA URBANA</title>${styles}</head><body>${crearHoja("CLIENTE")}${crearHoja("COPIA INTERNA")}<script>setTimeout(() => { window.print(); }, 500);<\/script></body></html>`);
-    win.document.close();
+    imprimirRemitoIndividual(p, prep, opciones);
     if (p.sheetRowIndex) actualizarRemitoEnSheet(p.sheetRowIndex, true);
-  };
+  }, [preparaciones, actualizarRemitoEnSheet]);
 
-  const imprimir = (alcance) => {
+  const imprimir = useCallback((alcance, opciones = {}) => {
     if (rol === 'repartidor') return;
     const aImprimir = alcance === 'turno' ? pedidosDelTurno : pedidosDelDia;
-    if (aImprimir.length === 0) return;
-    aImprimir.forEach(p => imprimirRemitoConPesoReal(p));
-  };
+    if (aImprimir.length === 0) {
+      alert(`No hay pedidos cargados para imprimir en este ${alcance === 'turno' ? 'turno' : 'día'}.`);
+      return;
+    }
+    const titulo = alcance === 'turno'
+      ? `Remitos Turno ${turnoSeleccionado === 'Manana' ? 'Mañana' : 'Tarde'} · ${diaSeleccionado}`
+      : `Remitos Día Completo · ${diaSeleccionado}`;
+
+    imprimirRemitosEnLote(aImprimir, preparaciones, titulo, opciones);
+
+    // Marcar como impresos en sheet si corresponde
+    aImprimir.forEach(p => {
+      if (p.sheetRowIndex) actualizarRemitoEnSheet(p.sheetRowIndex, true);
+    });
+  }, [rol, pedidosDelTurno, pedidosDelDia, turnoSeleccionado, diaSeleccionado, preparaciones, actualizarRemitoEnSheet]);
 
   // ── Filtrado ───────────────────────────────────────────────────────────────
   const pedidosDelDia = useMemo(() => {
@@ -401,11 +315,21 @@ export default function AgendaEntregas({ rol }) {
         </div>
         {rol !== 'repartidor' && (
           <div className="flex flex-col sm:flex-row gap-2">
-            <button onClick={() => imprimir('turno')} className="flex items-center justify-center gap-2 bg-[#1f2937] hover:bg-gray-800 border border-gray-700 hover:border-gray-500 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all">
-              <Printer size={15} /> Imprimir este turno
+            <button 
+              onClick={() => imprimir('turno')} 
+              className="flex items-center justify-center gap-2 bg-[#1f2937] hover:bg-gray-800 border border-gray-700 hover:border-gray-500 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all shadow-sm"
+              title="Imprime todos los remitos del turno en una sola ventana consolidada"
+            >
+              <Printer size={15} className="text-amber-400" />
+              <span>Imprimir este turno ({pedidosDelTurno.length})</span>
             </button>
-            <button onClick={() => imprimir('dia')} className="flex items-center justify-center gap-2 bg-green-500/10 hover:bg-green-500/20 border border-green-500/30 text-green-400 font-medium px-4 py-2 rounded-xl text-sm transition-all">
-              <FileText size={15} /> Imprimir todo el día
+            <button 
+              onClick={() => imprimir('dia')} 
+              className="flex items-center justify-center gap-2 bg-green-500/10 hover:bg-green-500/20 border border-green-500/30 text-green-400 font-medium px-4 py-2 rounded-xl text-sm transition-all shadow-sm"
+              title="Imprime todos los remitos del día completo en una sola ventana consolidada"
+            >
+              <FileText size={15} className="text-green-400" />
+              <span>Imprimir todo el día ({pedidosDelDia.length})</span>
             </button>
           </div>
         )}
@@ -488,9 +412,22 @@ export default function AgendaEntregas({ rol }) {
                       </div>
                     </div>
                   </div>
-                  <button className="text-gray-500 bg-black/40 p-1.5 rounded-lg border border-white/10 shrink-0">
-                    {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {rol !== 'repartidor' && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); imprimirRemitoConPesoReal(p); }}
+                        title="Imprimir remito individual de este pedido"
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 hover:text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
+                      >
+                        <Printer size={13} className="text-indigo-400" />
+                        <span className="hidden sm:inline">Remito</span>
+                      </button>
+                    )}
+                    <button className="text-gray-500 bg-black/40 p-1.5 rounded-lg border border-white/10 shrink-0">
+                      {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    </button>
+                  </div>
                 </div>
 
                 {/* Acordeón expandido */}
@@ -519,9 +456,21 @@ export default function AgendaEntregas({ rol }) {
                         </div>
                       </div>
                       <div className="space-y-4 flex flex-col justify-between">
-                        <button onClick={() => abrirWhatsApp(p.telefono, p.nombre, p.producto)} className="w-full flex items-center justify-center gap-2 bg-[#25D366]/10 hover:bg-[#25D366]/20 border border-[#25D366]/30 text-[#25D366] text-sm font-bold px-4 py-3 rounded-xl transition-all">
-                          <MessageCircle size={18} /> WhatsApp: {p.telefono}
-                        </button>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <button onClick={() => abrirWhatsApp(p.telefono, p.nombre, p.producto)} className="flex-1 flex items-center justify-center gap-2 bg-[#25D366]/10 hover:bg-[#25D366]/20 border border-[#25D366]/30 text-[#25D366] text-sm font-bold px-4 py-3 rounded-xl transition-all">
+                            <MessageCircle size={18} /> WhatsApp: {p.telefono}
+                          </button>
+                          {rol !== 'repartidor' && (
+                            <button 
+                              type="button"
+                              onClick={() => imprimirRemitoConPesoReal(p)} 
+                              className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-sm font-bold px-4 py-3 rounded-xl transition-all shadow-md shadow-indigo-900/30 cursor-pointer"
+                              title="Imprimir remito con toda la información actual del pedido"
+                            >
+                              <Printer size={18} /> 🖨️ Imprimir Remito
+                            </button>
+                          )}
+                        </div>
                         <div className="bg-black/40 border border-white/5 flex flex-col justify-center p-4 rounded-xl flex-1">
                           {rol !== 'repartidor' ? (
                             <>
@@ -557,9 +506,18 @@ export default function AgendaEntregas({ rol }) {
 
                         {/* Botón PREPARAR (inicio) */}
                         {!prep && !estaPreparando && (estadoActual === 'pendiente' || estadoActual === 'preparado' || estadoActual === 'listo') && (
-                          <button onClick={() => iniciarPreparacion(p)} className="w-full flex items-center justify-center gap-3 py-4 rounded-2xl bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-black text-sm uppercase tracking-widest transition-all active:scale-[0.98] cursor-pointer shadow-lg shadow-green-900/30 border-b-2 border-green-800">
-                            <ScanBarcode size={20} /> 📦 PREPARAR PEDIDO
-                          </button>
+                          <div className="space-y-2">
+                            <button onClick={() => iniciarPreparacion(p)} className="w-full flex items-center justify-center gap-3 py-4 rounded-2xl bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-black text-sm uppercase tracking-widest transition-all active:scale-[0.98] cursor-pointer shadow-lg shadow-green-900/30 border-b-2 border-green-800">
+                              <ScanBarcode size={20} /> 📦 PREPARAR PEDIDO
+                            </button>
+                            <button 
+                              type="button"
+                              onClick={() => imprimirRemitoConPesoReal(p)} 
+                              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/20 text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer"
+                            >
+                              <Printer size={15} /> 🖨️ Imprimir Remito de este Pedido
+                            </button>
+                          </div>
                         )}
 
                         {/* Items del pedido con escaneo */}
@@ -663,12 +621,27 @@ export default function AgendaEntregas({ rol }) {
                               </button>
                             )}
 
-                            {/* Imprimir remito */}
-                            {todosCompletos && (
-                              <button onClick={() => imprimirRemitoConPesoReal(p)} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 font-bold text-xs uppercase tracking-wider transition-all cursor-pointer mt-2">
-                                <Printer size={16} /> 🖨️ Imprimir Remito con Peso Real
+                            {/* Imprimir remito: disponible en cualquier momento mientras se carga o al finalizar */}
+                            <div className="pt-2">
+                              <button 
+                                type="button"
+                                onClick={() => imprimirRemitoConPesoReal(p)} 
+                                className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer border ${
+                                  todosCompletos
+                                    ? 'bg-indigo-600 hover:bg-indigo-500 text-white border-indigo-500 shadow-lg shadow-indigo-900/30'
+                                    : tieneBolsas
+                                      ? 'bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border-indigo-500/40'
+                                      : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/10 hover:text-white'
+                                }`}
+                              >
+                                <Printer size={16} />
+                                {todosCompletos 
+                                  ? '🖨️ Imprimir Remito Completo con Peso Real' 
+                                  : tieneBolsas 
+                                    ? `🖨️ Imprimir Remito Actual (${prep?.items?.reduce((s, it) => s + (it.bolsasAsignadas?.length || 0), 0)} bolsas escaneadas)` 
+                                    : '🖨️ Imprimir Remito de este Pedido'}
                               </button>
-                            )}
+                            </div>
 
                             {/* Botonera de estado */}
                             <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-white/5">
@@ -699,6 +672,19 @@ export default function AgendaEntregas({ rol }) {
                             </button>
                             <button onClick={() => actualizarEstado(p.numero_pedido, (estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'Preparado' : 'No entregado')} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10'}`}>
                               <span className="text-xl">❌</span> NO ENTREGADO
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Botón de remito para pedidos sin preparación activa */}
+                        {!prep && !estaPreparando && (
+                          <div className="mt-3 pt-3 border-t border-white/5">
+                            <button
+                              type="button"
+                              onClick={() => imprimirRemitoConPesoReal(p)}
+                              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 font-bold text-xs uppercase tracking-wider transition-all cursor-pointer"
+                            >
+                              <Printer size={15} /> 🖨️ Imprimir Remito del Pedido
                             </button>
                           </div>
                         )}

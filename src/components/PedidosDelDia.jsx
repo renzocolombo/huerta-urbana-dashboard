@@ -1,7 +1,8 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { AlertCircle, Clock, Package } from 'lucide-react';
+import { AlertCircle, Clock, Package, Printer } from 'lucide-react';
 import { HOY } from '../data/mockData';
+import { imprimirRemitoIndividual, imprimirRemitosEnLote } from '../utils/remitoPrinter';
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
@@ -29,24 +30,66 @@ function Badge({ config }) {
 }
 
 export default function PedidosDelDia() {
-  const { pedidos: PEDIDOS } = useGoogleSheets();
+  const { pedidos: PEDIDOS, actualizarRemitoEnSheet } = useGoogleSheets();
+
+  const preparaciones = useMemo(() => {
+    try {
+      const s = localStorage.getItem('huerta_preparaciones_v1');
+      return s ? JSON.parse(s) : {};
+    } catch (e) {
+      return {};
+    }
+  }, []);
 
   const pedidosHoy = useMemo(() =>
     PEDIDOS.filter(p => p.fecha === HOY).sort((a, b) => (a.estado === 'pendiente' ? -1 : 1)),
-  []);
+  [PEDIDOS]);
 
   const pendientesLargo = pedidosHoy.filter(p => p.estado === 'pendiente' && p.horas_atras >= 2);
 
+  const imprimirRemitoPedido = (p) => {
+    const prep = preparaciones[p.numero_pedido] || null;
+    imprimirRemitoIndividual(p, prep);
+    if (p.sheetRowIndex && actualizarRemitoEnSheet) {
+      actualizarRemitoEnSheet(p.sheetRowIndex, true);
+    }
+  };
+
+  const imprimirTodosHoy = () => {
+    if (pedidosHoy.length === 0) {
+      alert('No hay pedidos en el día de hoy para imprimir.');
+      return;
+    }
+    imprimirRemitosEnLote(pedidosHoy, preparaciones, `Remitos del Día · ${HOY}`);
+    pedidosHoy.forEach(p => {
+      if (p.sheetRowIndex && actualizarRemitoEnSheet) {
+        actualizarRemitoEnSheet(p.sheetRowIndex, true);
+      }
+    });
+  };
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-3">
         <div>
           <h2 className="text-xl font-bold text-white">Pedidos del día (Vista Rápida)</h2>
           <p className="text-gray-500 text-sm mt-1">{pedidosHoy.length} pedidos · {HOY}</p>
         </div>
-        <div className="flex items-center gap-2 text-sm font-semibold text-white bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-2">
-          <Package size={15} className="text-green-400" />
-          {pedidosHoy.length} pedidos
+        <div className="flex items-center gap-2 flex-wrap">
+          {pedidosHoy.length > 0 && (
+            <button
+              onClick={imprimirTodosHoy}
+              className="flex items-center gap-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-500/40 rounded-xl px-4 py-2 transition-all shadow-md shadow-indigo-900/30"
+              title="Imprime todos los remitos del día en un solo documento consolidado"
+            >
+              <Printer size={15} />
+              Imprimir remitos de hoy ({pedidosHoy.length})
+            </button>
+          )}
+          <div className="flex items-center gap-2 text-sm font-semibold text-white bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-2">
+            <Package size={15} className="text-green-400" />
+            {pedidosHoy.length} pedidos
+          </div>
         </div>
       </div>
 
@@ -64,7 +107,7 @@ export default function PedidosDelDia() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-800">
-                {['#','Nombre','Localidad','Producto','Total','Estado','Pago'].map(h => (
+                {['#','Nombre','Localidad','Producto','Total','Estado','Pago','Remito'].map(h => (
                   <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
                 ))}
               </tr>
@@ -100,6 +143,16 @@ export default function PedidosDelDia() {
                       <span className={`text-xs font-medium ${PAGO_CONFIG[p.estado_pago]?.color}`}>
                         {PAGO_CONFIG[p.estado_pago]?.label}
                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => imprimirRemitoPedido(p)}
+                        className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-500/10 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 hover:text-white rounded-lg text-xs font-semibold transition-all shadow-sm active:scale-95 cursor-pointer"
+                        title="Imprimir remito individual de este pedido"
+                      >
+                        <Printer size={12} className="text-indigo-400" />
+                        <span>Remito</span>
+                      </button>
                     </td>
                   </tr>
                 );

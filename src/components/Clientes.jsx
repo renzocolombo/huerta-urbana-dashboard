@@ -1,8 +1,9 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { MessageCircle, ShoppingBag, DollarSign, Calendar, ShoppingCart, AlertTriangle, Check, X } from 'lucide-react';
+import { MessageCircle, ShoppingBag, DollarSign, Calendar, ShoppingCart, AlertTriangle, Check, X, Printer } from 'lucide-react';
 import { db } from '../config/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
+import { imprimirRemitoIndividual } from '../utils/remitoPrinter';
 
 const $$ = (n) => {
   const num = Number(n);
@@ -98,6 +99,26 @@ export default function Clientes() {
                   "%F0%9F%8C%BF" + encodeURIComponent(` Huerta Urbana — 11 6177-1376`);
     const url = `https://web.whatsapp.com/send?phone=${(c.telefono || '').replace(/\D/g, '')}&text=${texto}`;
     window.open(url, '_blank');
+  };
+
+  const imprimirRemitoCliente = (c) => {
+    const pedidosCliente = PEDIDOS.filter(p => (c.email && p.email === c.email) || (c.telefono && p.telefono === c.telefono));
+    if (!pedidosCliente || pedidosCliente.length === 0) {
+      alert('No se encontraron pedidos registrados para este cliente.');
+      return;
+    }
+    const ultimoPedido = [...pedidosCliente].sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''))[0];
+
+    let prep = null;
+    try {
+      const s = localStorage.getItem('huerta_preparaciones_v1');
+      if (s) {
+        const parsed = JSON.parse(s);
+        prep = parsed[ultimoPedido.numero_pedido] || null;
+      }
+    } catch (e) {}
+
+    imprimirRemitoIndividual(ultimoPedido, prep);
   };
 
   const enviarCodigoReferido = async (c) => {
@@ -341,10 +362,21 @@ El equipo de Huerta Urbana`;
                 {/* Botón WhatsApp */}
                 <button
                   onClick={() => abrirWhatsApp(c.telefono, c.nombre)}
-                  className="w-full flex items-center justify-center gap-2 bg-green-500/10 hover:bg-green-500/20 border border-green-500/30 text-green-400 text-xs font-medium py-2 rounded-xl transition-all"
+                  className="w-full flex items-center justify-center gap-2 bg-green-500/10 hover:bg-green-500/20 border border-green-500/30 text-green-400 text-xs font-medium py-2.5 rounded-xl transition-all"
                 >
                   <MessageCircle size={13} />
                   Contactar por WhatsApp
+                </button>
+
+                {/* Botón Imprimir Remito */}
+                <button
+                  type="button"
+                  onClick={() => imprimirRemitoCliente(c)}
+                  className="w-full flex items-center justify-center gap-2 mt-2 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 text-xs font-semibold py-2.5 rounded-xl transition-all cursor-pointer shadow-sm active:scale-98"
+                  title="Imprimir remito del último pedido de este cliente"
+                >
+                  <Printer size={13} className="text-indigo-400" />
+                  Imprimir Remito del Cliente
                 </button>
               </div>
             ))}
