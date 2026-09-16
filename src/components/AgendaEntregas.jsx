@@ -83,9 +83,23 @@ export default function AgendaEntregas({ rol }) {
 
   const [diaSeleccionado, setDiaSeleccionado] = useState(DIAS_SEMANA[0]);
   const [turnoSeleccionado, setTurnoSeleccionado] = useState('Manana');
+
+  // ── Filtrado ───────────────────────────────────────────────────────────────
+  const pedidosDelDia = useMemo(() => {
+    return (PEDIDOS || []).filter(p => p.dia_entrega === diaSeleccionado && (p.estado_pago || '').toLowerCase() === 'approved');
+  }, [PEDIDOS, diaSeleccionado]);
+
+  const pedidosDelTurno = useMemo(() => {
+    return pedidosDelDia.filter(p => {
+      const horaInicio = parseInt((p.horario_entrega || '09:00').split(':')[0], 10);
+      const isManana = isNaN(horaInicio) || horaInicio < 13;
+      return (turnoSeleccionado === 'Manana' && isManana) || (turnoSeleccionado === 'Tarde' && !isManana);
+    });
+  }, [pedidosDelDia, turnoSeleccionado]);
+
   const [estados, setEstados] = useState(() => {
     const map = {};
-    PEDIDOS.forEach(p => { map[p.numero_pedido] = p.estado; });
+    (PEDIDOS || []).forEach(p => { map[p.numero_pedido] = p.estado; });
     return map;
   });
   const [pedidosAbiertos, setPedidosAbiertos] = useState({});
@@ -278,19 +292,6 @@ export default function AgendaEntregas({ rol }) {
       if (p.sheetRowIndex) actualizarRemitoEnSheet(p.sheetRowIndex, true);
     });
   }, [rol, pedidosDelTurno, pedidosDelDia, turnoSeleccionado, diaSeleccionado, preparaciones, actualizarRemitoEnSheet]);
-
-  // ── Filtrado ───────────────────────────────────────────────────────────────
-  const pedidosDelDia = useMemo(() => {
-    return PEDIDOS.filter(p => p.dia_entrega === diaSeleccionado && (p.estado_pago || '').toLowerCase() === 'approved');
-  }, [PEDIDOS, diaSeleccionado]);
-
-  const pedidosDelTurno = useMemo(() => {
-    return pedidosDelDia.filter(p => {
-      const horaInicio = parseInt((p.horario_entrega || '09:00').split(':')[0], 10);
-      const isManana = isNaN(horaInicio) || horaInicio < 13;
-      return (turnoSeleccionado === 'Manana' && isManana) || (turnoSeleccionado === 'Tarde' && !isManana);
-    });
-  }, [pedidosDelDia, turnoSeleccionado]);
 
   const handleScanKeyDown = (e) => {
     if (e.key === 'Enter') {
