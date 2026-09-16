@@ -1,6 +1,6 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, CheckCircle, Sun, Sunset, Printer, FileText, User, Clock, ScanBarcode, X, Trash2, Check, RotateCcw } from 'lucide-react';
+import { MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, CheckCircle, Sun, Sunset, Printer, FileText, User, Clock, ScanBarcode, X, Trash2, Check, RotateCcw, Lock, AlertTriangle } from 'lucide-react';
 import { HOY } from '../data/mockData';
 import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido } from '../utils/remitoPrinter';
 
@@ -15,6 +15,16 @@ const PAGO_CONFIG = {
 
 const PREPARACIONES_KEY = 'huerta_preparaciones_v1';
 const PROCESSED_CODES_KEY = 'huerta_codigos_procesados_v1';
+const MOTIVOS_KEY = 'huerta_motivos_no_entrega_v1';
+
+const MOTIVOS_PREDEFINIDOS = [
+  { label: 'Cliente ausente / No atiende', icon: '🚪' },
+  { label: 'Dirección errónea o incompleta', icon: '📍' },
+  { label: 'Cliente rechazó el pedido', icon: '🛑' },
+  { label: 'Cliente pidió reprogramar entrega', icon: '🗓️' },
+  { label: 'Problema de tránsito / acceso / clima', icon: '🌧️' },
+  { label: 'Teléfono apagado / Sin respuesta', icon: '📵' },
+];
 
 // ── Normalizar texto para matcheo fuzzy ────────────────────────────────────
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -78,8 +88,10 @@ function getTipoByNombre(nombre) {
 
 // ══════════════════════════════════════════════════════════════════════════════
 
-export default function AgendaEntregas({ rol }) {
-  const { pedidos: PEDIDOS, actualizarEstadoEnSheet, actualizarRemitoEnSheet, stockData, setStockData } = useGoogleSheets();
+export default function AgendaEntregas({ rol, usuario }) {
+  const { pedidos: PEDIDOS, actualizarEstadoEnSheet, actualizarRemitoEnSheet, eliminarPedidoOCliente, stockData, setStockData } = useGoogleSheets();
+
+  const esRen = (usuario || localStorage.getItem('huerta_auth_usuario') || '').trim().toLowerCase() === 'ren';
 
   const [diaSeleccionado, setDiaSeleccionado] = useState(DIAS_SEMANA[0]);
   const [turnoSeleccionado, setTurnoSeleccionado] = useState('Manana');
@@ -104,6 +116,36 @@ export default function AgendaEntregas({ rol }) {
   });
   const [pedidosAbiertos, setPedidosAbiertos] = useState({});
 
+  // ── Motivos de No Entrega ──────────────────────────────────────────────────
+  const [motivosNoEntrega, setMotivosNoEntrega] = useState(() => {
+    try {
+      const s = localStorage.getItem(MOTIVOS_KEY);
+      return s ? JSON.parse(s) : {};
+    } catch (e) {
+      return {};
+    }
+  });
+
+  const guardarMotivo = (numPedido, motivo) => {
+    setMotivosNoEntrega(prev => {
+      const updated = { ...prev, [numPedido]: motivo };
+      try { localStorage.setItem(MOTIVOS_KEY, JSON.stringify(updated)); } catch (e) {}
+      return updated;
+    });
+  };
+
+  // Modales
+  const [modalNoEntrega, setModalNoEntrega] = useState(null); // { pedido, motivoTexto }
+  const [modalEliminar, setModalEliminar] = useState(null);   // { pedido }
+
+  const abrirModalNoEntrega = (p) => {
+    const motivoExistente = motivosNoEntrega[p.numero_pedido] || p.motivo_no_entrega || '';
+    setModalNoEntrega({
+      pedido: p,
+      motivoTexto: motivoExistente,
+    });
+  };
+
   // ── Preparación de pedidos ─────────────────────────────────────────────────
   const [preparaciones, setPreparaciones] = useState(() => {
     try { const s = localStorage.getItem(PREPARACIONES_KEY); return s ? JSON.parse(s) : {}; } catch (e) { return {}; }
@@ -127,10 +169,12 @@ export default function AgendaEntregas({ rol }) {
 
   const toggleAcordeon = (id) => { setPedidosAbiertos(prev => ({ ...prev, [id]: !prev[id] })); };
 
-  const actualizarEstado = (id, estadoAAsignar) => {
+  const actualizarEstado = (id, estadoAAsignar, motivo = null) => {
     setEstados(prev => ({ ...prev, [id]: estadoAAsignar }));
     const pedido = PEDIDOS.find(p => p.numero_pedido === id);
-    if (pedido && pedido.sheetRowIndex) actualizarEstadoEnSheet(pedido.sheetRowIndex, estadoAAsignar);
+    if (pedido && pedido.sheetRowIndex) {
+      actualizarEstadoEnSheet(pedido.sheetRowIndex, estadoAAsignar, motivo);
+    }
   };
 
   const abrirWhatsApp = (telefono, nombre, producto) => {
@@ -413,9 +457,21 @@ export default function AgendaEntregas({ rol }) {
                       </div>
                     </div>
                   </div>
-                  <button className="text-gray-500 bg-black/40 p-1.5 rounded-lg border border-white/10 shrink-0">
-                    {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {esRen && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setModalEliminar({ pedido: p }); }}
+                        className="text-gray-500 hover:text-red-400 hover:bg-red-500/10 p-1.5 rounded-lg border border-transparent hover:border-red-500/20 transition-all cursor-pointer"
+                        title="Eliminar cliente (Autorizado para Ren)"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
+                    <button className="text-gray-500 bg-black/40 p-1.5 rounded-lg border border-white/10 shrink-0">
+                      {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    </button>
+                  </div>
                 </div>
 
                 {/* Acordeón expandido */}
@@ -436,6 +492,25 @@ export default function AgendaEntregas({ rol }) {
                           <div className="bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl">
                             <p className="text-[10px] uppercase font-bold text-amber-500 tracking-wider mb-1">Observaciones</p>
                             <p className="text-sm text-amber-100 font-medium italic">"{p.observaciones}"</p>
+                          </div>
+                        )}
+                        {(estadoActual === 'no_entregado' || estadoActual === 'no entregado') && (
+                          <div className="bg-red-500/10 border border-red-500/30 p-3.5 rounded-xl flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-[10px] uppercase font-black text-red-400 tracking-wider flex items-center gap-1.5">
+                                <AlertCircle size={14} /> Motivo de No Entrega
+                              </p>
+                              <p className="text-sm text-red-200 mt-1 font-medium italic">
+                                "{motivosNoEntrega[p.numero_pedido] || p.motivo_no_entrega || 'Sin motivo especificado'}"
+                              </p>
+                            </div>
+                            <button 
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); abrirModalNoEntrega(p); }}
+                              className="text-xs text-red-400 hover:text-white underline shrink-0 font-bold px-2 py-1 bg-red-500/20 rounded-lg hover:bg-red-500/30 transition-all cursor-pointer"
+                            >
+                              ✏️ Cambiar motivo
+                            </button>
                           </div>
                         )}
                         <div className="bg-black/40 border border-white/5 p-3 rounded-xl">
@@ -608,7 +683,7 @@ export default function AgendaEntregas({ rol }) {
                               <button onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'Preparado' : 'Entregado')} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all cursor-pointer ${estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/30 text-blue-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-blue-400'}`}>
                                 <span>🚚</span> Entregado
                               </button>
-                              <button onClick={() => actualizarEstado(p.numero_pedido, 'No entregado')} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all cursor-pointer ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/30 text-red-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-red-400'}`}>
+                              <button onClick={() => abrirModalNoEntrega(p)} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all cursor-pointer ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/30 text-red-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-red-400'}`}>
                                 <span>❌</span> No entregado
                               </button>
                             </div>
@@ -627,7 +702,7 @@ export default function AgendaEntregas({ rol }) {
                             <button onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'Preparado' : 'Entregado')} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-blue-500/5 border-blue-500/10 text-blue-500 hover:bg-blue-500/10'}`}>
                               <span className="text-xl">🚚</span> ENTREGADO
                             </button>
-                            <button onClick={() => actualizarEstado(p.numero_pedido, (estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'Preparado' : 'No entregado')} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10'}`}>
+                            <button onClick={() => abrirModalNoEntrega(p)} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10'}`}>
                               <span className="text-xl">❌</span> NO ENTREGADO
                             </button>
                           </div>
@@ -643,16 +718,205 @@ export default function AgendaEntregas({ rol }) {
                           <button className="flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] bg-amber-500/5 border-amber-500/10 text-amber-400 opacity-50 cursor-default"><span className="text-xl">⏳</span> PENDIENTE</button>
                           <button className="flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] bg-green-500/5 border-green-500/10 text-green-500 opacity-50 cursor-default"><span className="text-xl">✅</span> PREPARADO</button>
                           <button onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'Preparado' : 'Entregado')} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-blue-500/5 border-blue-500/10 text-blue-500 hover:bg-blue-500/10'}`}><span className="text-xl">🚚</span> ENTREGADO</button>
-                          <button onClick={() => actualizarEstado(p.numero_pedido, 'No entregado')} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10'}`}><span className="text-xl">❌</span> NO ENTREGADO</button>
+                          <button onClick={() => abrirModalNoEntrega(p)} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10'}`}><span className="text-xl">❌</span> NO ENTREGADO</button>
                         </div>
                         <p className="text-center text-[9px] text-gray-600 mt-4 leading-relaxed italic">Los estados "Pendiente" y "Preparado" son solo de lectura para el repartidor.</p>
                       </div>
                     )}
+
+                    {/* Barra inferior de la tarjeta: Información de Cliente y Acción Eliminar */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-white/5 mt-4">
+                      <div className="flex items-center gap-2 text-xs text-gray-500">
+                        <User size={13} className="text-gray-400 shrink-0" />
+                        <span className="truncate">Cliente: <strong className="text-gray-200">{p.nombre}</strong></span>
+                        <span className="text-gray-600">·</span>
+                        <span className="font-mono text-[11px] text-gray-500">{p.numero_pedido}</span>
+                      </div>
+
+                      {esRen ? (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setModalEliminar({ pedido: p }); }}
+                          className="flex items-center justify-center gap-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 hover:border-red-500/50 text-red-400 hover:text-red-300 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer active:scale-95 w-fit shrink-0"
+                          title="Eliminar este cliente y su entrega del sistema (Acceso exclusivo de Ren)"
+                        >
+                          <Trash2 size={13} />
+                          <span>Eliminar cliente</span>
+                        </button>
+                      ) : (
+                        <div 
+                          className="flex items-center gap-1.5 text-gray-600 bg-white/[0.02] border border-white/5 px-2.5 py-1 rounded-lg text-xs font-medium cursor-not-allowed select-none w-fit shrink-0"
+                          title="Solo el usuario Ren tiene autorización para eliminar clientes"
+                        >
+                          <Lock size={12} className="text-gray-600" />
+                          <span>Eliminar cliente (Solo Ren)</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ═══════ MODAL CUADRO DE DIÁLOGO: PEDIDO NO ENTREGADO ═══════ */}
+      {modalNoEntrega && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#181d24] border border-red-500/30 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 text-lg font-bold">
+                  ❌
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Pedido No Entregado</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {modalNoEntrega.pedido.nombre} · Pedido {modalNoEntrega.pedido.numero_pedido}
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setModalNoEntrega(null)} 
+                className="text-gray-500 hover:text-white p-1 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-black uppercase tracking-wider text-gray-400 mb-2">
+                Seleccioná un motivo rápido:
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {MOTIVOS_PREDEFINIDOS.map((item, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setModalNoEntrega(prev => ({ ...prev, motivoTexto: item.label }))}
+                    className={`text-left text-xs p-2.5 rounded-xl border transition-all flex items-center gap-2 cursor-pointer ${
+                      modalNoEntrega.motivoTexto === item.label
+                        ? 'bg-red-500/20 border-red-500/40 text-red-200 font-bold shadow-sm'
+                        : 'bg-black/30 border-white/5 text-gray-400 hover:text-white hover:border-white/20'
+                    }`}
+                  >
+                    <span className="text-base">{item.icon}</span>
+                    <span className="truncate">{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-black uppercase tracking-wider text-gray-400 mb-1.5">
+                Detalle / Aclaración del motivo:
+              </label>
+              <textarea
+                rows={3}
+                value={modalNoEntrega.motivoTexto}
+                onChange={(e) => setModalNoEntrega(prev => ({ ...prev, motivoTexto: e.target.value }))}
+                placeholder="Escribí aquí por qué no se entregó el pedido..."
+                className="w-full bg-black/50 border border-white/10 focus:border-red-500/50 rounded-xl p-3 text-white text-xs placeholder:text-gray-600 outline-none resize-none transition-colors font-medium"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setModalNoEntrega(null)}
+                className="flex-1 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const motivoFinal = (modalNoEntrega.motivoTexto || '').trim() || 'Sin motivo especificado';
+                  guardarMotivo(modalNoEntrega.pedido.numero_pedido, motivoFinal);
+                  actualizarEstado(modalNoEntrega.pedido.numero_pedido, 'No entregado', motivoFinal);
+                  setModalNoEntrega(null);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 active:scale-95 text-white text-xs font-bold transition-all cursor-pointer shadow-lg shadow-red-900/30 flex items-center justify-center gap-1.5"
+              >
+                <span>Guardar y Marcar No Entregado</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════ MODAL CUADRO DE DIÁLOGO: ELIMINAR CLIENTE (SOLO REN) ═══════ */}
+      {modalEliminar && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#181d24] border border-red-500/30 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-red-400">
+              <div className="w-10 h-10 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-500 shrink-0">
+                <Trash2 size={22} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Eliminar Cliente</h3>
+                <p className="text-xs text-red-400/80 font-medium">Acción autorizada exclusivamente para el usuario Ren</p>
+              </div>
+            </div>
+
+            <div className="bg-black/40 border border-white/5 rounded-xl p-3.5 space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-gray-400">Cliente:</span>
+                <span className="font-bold text-white text-sm">{modalEliminar.pedido.nombre}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Pedido N°:</span>
+                <span className="font-mono text-gray-200">{modalEliminar.pedido.numero_pedido}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Dirección:</span>
+                <span className="text-gray-300 text-right truncate max-w-[220px]">
+                  {modalEliminar.pedido.direccion}, {modalEliminar.pedido.localidad}
+                </span>
+              </div>
+              {modalEliminar.pedido.telefono && (
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Teléfono:</span>
+                  <span className="text-gray-300">{modalEliminar.pedido.telefono}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 text-xs text-red-300 flex items-start gap-2">
+              <AlertTriangle size={16} className="text-red-400 shrink-0 mt-0.5" />
+              <p>¿Estás seguro de que querés eliminar a este cliente? Se quitará de la agenda de entregas y de los pedidos activos del sistema.</p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setModalEliminar(null)}
+                className="flex-1 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!esRen) {
+                    alert('Acceso denegado: Solo el usuario Ren puede realizar esta acción.');
+                    setModalEliminar(null);
+                    return;
+                  }
+                  const p = modalEliminar.pedido;
+                  if (eliminarPedidoOCliente) {
+                    eliminarPedidoOCliente(p.numero_pedido, p.sheetRowIndex, p.email || p.nombre);
+                  }
+                  setModalEliminar(null);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 active:scale-95 text-white text-xs font-bold transition-all cursor-pointer shadow-lg shadow-red-900/30 flex items-center justify-center gap-1.5"
+              >
+                <Trash2 size={14} />
+                <span>Sí, Eliminar Cliente</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -25,10 +25,56 @@ export function GoogleSheetsProvider({ children }) {
     fetchSheetPedidos();
   }, []);
 
+  // Helper de lectura resiliente con fallback automático
+  const fetchRowsFromSheet = useCallback(async (tabName) => {
+    // 1. Intentar vía API v4 oficial de Google Sheets
+    if (API_KEY && SHEET_ID) {
+      try {
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(tabName)}?key=${API_KEY}`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.values && data.values.length > 0) return data.values;
+        } else {
+          console.warn(`[SHEETS-API] Endpoint v4 devolvió ${res.status} para ${tabName}. Activando fallback gviz...`);
+        }
+      } catch (e) {
+        console.warn(`[SHEETS-API] Error v4 para ${tabName}:`, e.message);
+      }
+    }
+
+    // 2. Fallback resiliente: Google Visualization API (gvizz/tq)
+    if (SHEET_ID) {
+      try {
+        const gvizUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(tabName)}`;
+        const gvizRes = await fetch(gvizUrl);
+        if (gvizRes.ok) {
+          const text = await gvizRes.text();
+          const start = text.indexOf('{');
+          const end = text.lastIndexOf('}');
+          if (start !== -1 && end !== -1) {
+            const json = JSON.parse(text.substring(start, end + 1));
+            if (json.status === 'ok' && json.table) {
+              const headers = (json.table.cols || []).map(c => c.label || '');
+              const rows = (json.table.rows || []).map(r => 
+                (r.c || []).map(cell => (cell ? (cell.v !== null && cell.v !== undefined ? cell.v : cell.f || '') : ''))
+              );
+              return [headers, ...rows];
+            }
+          }
+        }
+      } catch (e) {
+        console.warn(`[SHEETS-GVIZ] Fallback error para ${tabName}:`, e.message);
+      }
+    }
+
+    return null;
+  }, []);
+
   // Estabilización de funciones con useCallback
   const fetchSheetPedidos = useCallback(async () => {
-    if (!API_KEY || !SHEET_ID) {
-      console.warn('[SHEETS] Faltan VITE_SHEET_ID o API_KEY en .env');
+    if (!SHEET_ID) {
+      console.warn('[SHEETS] Falta VITE_SHEET_ID en .env');
       return;
     }
 
@@ -36,13 +82,7 @@ export function GoogleSheetsProvider({ children }) {
     console.log('[SHEETS] Cargando pedidos...');
 
     try {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Pedidos?key=${API_KEY}`;
-      const gres = await fetch(url);
-      const data = await gres.json();
-
-      if (!gres.ok) throw new Error(data?.error?.message || `HTTP ${gres.status}`);
-
-      const rows = data.values;
+      const rows = await fetchRowsFromSheet('Pedidos');
       if (!rows || rows.length < 2) {
         console.warn('[SHEETS] Hoja vacía o sin filas de datos.');
         setConectado(false);
@@ -50,7 +90,7 @@ export function GoogleSheetsProvider({ children }) {
       }
 
       const headers = rows[0].map(h =>
-        h.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ /g, '_')
+        String(h || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ /g, '_')
       );
 
       const parsedPedidos = rows.slice(1).map((row, index) => {
@@ -78,14 +118,31 @@ export function GoogleSheetsProvider({ children }) {
           email:           obj.email || '',
           acepto_tyc:       obj.acepto_tyc || '',
           acepto_publicidad: obj.acepto_publicidad || '',
+          motivo_no_entrega: obj.motivo_no_entrega || obj.motivo || obj.motivo_rechazo || '',
         };
       });
 
-      setPedidos(parsedPedidos);
+      let eliminados = [];
+      let motivosLocales = {};
+      try {
+        eliminados = JSON.parse(localStorage.getItem('huerta_pedidos_eliminados') || '[]');
+        motivosLocales = JSON.parse(localStorage.getItem('huerta_motivos_no_entrega_v1') || '{}');
+      } catch (e) {}
+
+      const pedidosProcesados = parsedPedidos
+        .filter(p => !eliminados.includes(p.numero_pedido))
+        .map(p => {
+          if (motivosLocales[p.numero_pedido] && !p.motivo_no_entrega) {
+            return { ...p, motivo_no_entrega: motivosLocales[p.numero_pedido] };
+          }
+          return p;
+        });
+
+      setPedidos(pedidosProcesados);
       setConectado(true);
       setUltimoRefresco(new Date());
       setError(null);
-      console.log(`[SHEETS] ✅ ${parsedPedidos.length} pedidos cargados.`);
+      console.log(`[SHEETS] ✅ ${pedidosProcesados.length} pedidos cargados (${eliminados.length} excluidos por eliminación local).`);
 
     } catch (e) {
       console.error('[SHEETS] ❌ Error al cargar:', e.message);
@@ -94,23 +151,12 @@ export function GoogleSheetsProvider({ children }) {
     } finally {
       setCargando(false);
     }
-  }, []);
+  }, [fetchRowsFromSheet]);
 
   const fetchPanelCostos = useCallback(async () => {
-    if (!API_KEY || !SHEET_ID) {
-      console.warn('[SHEETS-COSTOS] No se puede cargar: Faltan API_KEY o SHEET_ID');
-      return;
-    }
+    if (!SHEET_ID) return;
     try {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/PanelCostos?key=${API_KEY}`;
-      const res = await fetch(url);
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data?.error?.message || `Error HTTP ${res.status}`);
-      }
-
-      const rows = data.values;
+      const rows = await fetchRowsFromSheet('PanelCostos');
       if (!rows || rows.length < 2) return;
       
       let mapped = rows.slice(1).map((row, index) => {
@@ -158,19 +204,15 @@ export function GoogleSheetsProvider({ children }) {
     } catch (e) {
       console.error('[SHEETS-COSTOS] Error:', e.message);
     }
-  }, []);
+  }, [fetchRowsFromSheet]);
 
   const fetchControlStock = useCallback(async () => {
-    if (!API_KEY || !SHEET_ID) return;
+    if (!SHEET_ID) return;
     try {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/ControlStock?key=${API_KEY}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!res.ok) return;
-      const rows = data.values;
+      const rows = await fetchRowsFromSheet('ControlStock');
       if (!rows || rows.length < 2) return;
 
-      const headers = rows[0].map(h => h.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ /g, '_'));
+      const headers = rows[0].map(h => String(h || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ /g, '_'));
       const parsedRows = rows.slice(1).map((row, index) => {
         const obj = { fila: index + 2 };
         headers.forEach((h, i) => { obj[h] = row[i] || ''; });
@@ -183,7 +225,7 @@ export function GoogleSheetsProvider({ children }) {
     } catch (e) {
       console.error('[SHEETS-STOCK] Error:', e);
     }
-  }, []);
+  }, [fetchRowsFromSheet]);
 
   const cargarTodo = useCallback(async () => {
     setCargando(true);
@@ -201,19 +243,38 @@ export function GoogleSheetsProvider({ children }) {
     }
   }, [fetchSheetPedidos, fetchPanelCostos, fetchControlStock]);
 
-  const actualizarEstadoEnSheet = useCallback(async (fila, nuevoEstado) => {
+  const actualizarEstadoEnSheet = useCallback(async (fila, nuevoEstado, motivo = null) => {
     setPedidos(current =>
-      current.map(p => p.sheetRowIndex === fila ? { ...p, estado: nuevoEstado } : p)
+      current.map(p => {
+        if (p.sheetRowIndex === fila) {
+          return {
+            ...p,
+            estado: nuevoEstado,
+            ...(motivo !== null ? { motivo_no_entrega: motivo } : {})
+          };
+        }
+        return p;
+      })
     );
 
     if (!APPS_SCRIPT_URL) return;
 
     try {
+      const payload = {
+        accion: 'updateEstado',
+        action: 'updateEstado',
+        fila,
+        estado: nuevoEstado
+      };
+      if (motivo !== null) {
+        payload.motivo_no_entrega = motivo;
+        payload.motivo = motivo;
+      }
       await fetch(APPS_SCRIPT_URL, {
         method:  'POST',
         mode:    'no-cors',
         headers: { 'Content-Type': 'text/plain' },
-        body:    JSON.stringify({ fila, estado: nuevoEstado }),
+        body:    JSON.stringify(payload),
       });
     } catch (e) {
       console.error(`❌ [SYNC ERROR]`, e.message);
@@ -226,11 +287,17 @@ export function GoogleSheetsProvider({ children }) {
     );
     if (!APPS_SCRIPT_URL) return;
     try {
+      const payload = {
+        accion: 'updateRemito',
+        action: 'updateRemito',
+        fila,
+        remito_impreso: impreso
+      };
       await fetch(APPS_SCRIPT_URL, {
         method:  'POST',
         mode:    'no-cors',
         headers: { 'Content-Type': 'text/plain' },
-        body:    JSON.stringify({ fila, remito_impreso: impreso }),
+        body:    JSON.stringify(payload),
       });
     } catch (e) {
       console.error(`[SYNC ERROR]`, e.message);
@@ -243,14 +310,52 @@ export function GoogleSheetsProvider({ children }) {
     );
     if (!APPS_SCRIPT_URL) return;
     try {
+      const body = {
+        accion: 'updateCliente',
+        action: 'updateCliente',
+        fila,
+        ...payload
+      };
       await fetch(APPS_SCRIPT_URL, {
         method:  'POST',
         mode:    'no-cors',
         headers: { 'Content-Type': 'text/plain' },
-        body:    JSON.stringify({ fila, ...payload }),
+        body:    JSON.stringify(body),
       });
     } catch (e) {
       console.error(`[SYNC ERROR]`, e.message);
+    }
+  }, []);
+
+  const eliminarPedidoOCliente = useCallback(async (numeroPedido, sheetRowIndex, emailOCliente) => {
+    // 1. Quitar del estado en memoria
+    setPedidos(current => current.filter(p => p.numero_pedido !== numeroPedido));
+
+    // 2. Persistir en localStorage
+    try {
+      const eliminados = JSON.parse(localStorage.getItem('huerta_pedidos_eliminados') || '[]');
+      if (!eliminados.includes(numeroPedido)) {
+        eliminados.push(numeroPedido);
+        localStorage.setItem('huerta_pedidos_eliminados', JSON.stringify(eliminados));
+      }
+    } catch (e) {}
+
+    // 3. Notificar al backend de Google Sheets si está disponible
+    if (!APPS_SCRIPT_URL) return;
+    try {
+      await fetch(APPS_SCRIPT_URL, {
+        method:  'POST',
+        mode:    'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
+        body:    JSON.stringify({ 
+          action: 'eliminar_pedido', 
+          fila: sheetRowIndex, 
+          numero_pedido: numeroPedido,
+          email: emailOCliente 
+        }),
+      });
+    } catch (e) {
+      console.error(`❌ [DELETE SYNC ERROR]`, e.message);
     }
   }, []);
 
@@ -267,6 +372,7 @@ export function GoogleSheetsProvider({ children }) {
       actualizarEstadoEnSheet,
       actualizarRemitoEnSheet,
       actualizarDatosCliente,
+      eliminarPedidoOCliente,
       urlSheet: URL_SHEET
     }}>
       {children}

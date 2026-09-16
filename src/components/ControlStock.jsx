@@ -492,10 +492,19 @@ export default function ControlStock() {
   const syncWithSheet = async (updatedProduct) => {
     if (!APPS_SCRIPT_URL || !updatedProduct.fila) return;
     const payload = {
-      accion: 'updateStock', fila: updatedProduct.fila, nombre: updatedProduct.nombre,
-      stock_500g: updatedProduct.stock['500g'], stock_1kg: updatedProduct.stock['1kg'],
-      original_load_500g: updatedProduct.originalLoad['500g'], original_load_1kg: updatedProduct.originalLoad['1kg'],
-      tipo: updatedProduct.tipo, total_days: updatedProduct.totalDays, urgent_days: updatedProduct.urgentDays, ultimo_bandejeado: updatedProduct.ultimo_bandejeado
+      accion: 'updateStock',
+      action: 'updateStock',
+      sheetName: 'ControlStock',
+      fila: updatedProduct.fila,
+      nombre: updatedProduct.nombre,
+      stock_500g: updatedProduct.stock['500g'],
+      stock_1kg: updatedProduct.stock['1kg'],
+      original_load_500g: updatedProduct.originalLoad['500g'],
+      original_load_1kg: updatedProduct.originalLoad['1kg'],
+      tipo: updatedProduct.tipo,
+      total_days: updatedProduct.totalDays,
+      urgent_days: updatedProduct.urgentDays,
+      ultimo_bandejeado: updatedProduct.ultimo_bandejeado
     };
     try {
       await fetch(APPS_SCRIPT_URL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(payload) });
