@@ -1,6 +1,6 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
-import { useState, useMemo, useEffect } from 'react';
-import { MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, CheckCircle, Sun, Sunset, Printer, FileText, User, Clock } from 'lucide-react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, CheckCircle, Sun, Sunset, Printer, FileText, User, Clock, ScanBarcode, X, Trash2, Check, RotateCcw } from 'lucide-react';
 import { HOY } from '../data/mockData';
 
 const DIAS_SEMANA = ['Martes', 'Jueves'];
@@ -12,13 +12,106 @@ const PAGO_CONFIG = {
   sin_pago:  { label: 'Sin pago',  color: 'text-gray-500' },
 };
 
+const PREPARACIONES_KEY = 'huerta_preparaciones_v1';
+const PROCESSED_CODES_KEY = 'huerta_codigos_procesados_v1';
+
+// ── Normalizar texto para matcheo fuzzy ────────────────────────────────────
+const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+// ── Parsear el campo "producto" del pedido en items individuales ────────────
+function parsearProductosPedido(textoProducto, cantidadGeneral = 1) {
+  if (!textoProducto) return [];
+  const partes = textoProducto.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+  
+  return partes.map(parte => {
+    let cantidad = cantidadGeneral;
+    let pesoSolicitado = null;
+    let texto = parte;
+    
+    const cantInicio = texto.match(/^(\d+)\s*[xX]?\s+(.+)$/);
+    if (cantInicio) { cantidad = parseInt(cantInicio[1], 10); texto = cantInicio[2]; }
+    
+    const cantFinal = texto.match(/^(.+?)\s+[xX](\d+)$/);
+    if (cantFinal) { cantidad = parseInt(cantFinal[2], 10); texto = cantFinal[1]; }
+    
+    const pesoMatch = texto.match(/(\d+(?:[.,]\d+)?)\s*(kg|kilos?|g|gr?)\b/i);
+    if (pesoMatch) {
+      let val = parseFloat(pesoMatch[1].replace(',', '.'));
+      const unit = pesoMatch[2].toLowerCase();
+      if (unit.startsWith('g')) val = val / 1000;
+      pesoSolicitado = Math.round(val * 1000) / 1000;
+      texto = texto.replace(pesoMatch[0], '').trim();
+    }
+    
+    const nombre = texto.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return { nombre, cantidad, pesoSolicitado, bolsasAsignadas: [] };
+  });
+}
+
+// ── Parsear código de barras ────────────────────────────────────────────────
+function parsearCodigoBarras(raw) {
+  if (!raw) return null;
+  let code = String(raw).replace(/[\r\n\x00-\x1F]/g, '').trim().replace(/^\][a-zA-Z0-9]{2,3}/, '').trim();
+  code = code.replace(/^\*+|\*+$/g, '').trim();
+  if (!code) return null;
+
+  const eanBalanza = code.match(/^(20|02)(\d{4,5})(\d{5})\d$/);
+  if (eanBalanza) {
+    const plu = eanBalanza[2]; const gramos = parseInt(eanBalanza[3], 10);
+    return { nombre: `plu ${plu}`, plu, peso: Math.round((gramos / 1000) * 1000) / 1000, tagId: null, uniqueCode: code.toUpperCase(), rawCode: code, origenBalanza: true };
+  }
+
+  const parts = code.split('-');
+  if (parts.length >= 3) {
+    const lastPart = parts[parts.length - 1].trim();
+    const secondLastRaw = parts[parts.length - 2].trim().replace(',', '.').replace(/(?:kg|kilos?|g|gr?)$/i, '').trim();
+    const pesoNum = parseFloat(secondLastRaw);
+    if (!isNaN(pesoNum) && pesoNum > 0 && /^[A-Za-z0-9]{2,10}$/.test(lastPart)) {
+      const nombre = parts.slice(0, parts.length - 2).join(' ').toLowerCase().trim();
+      const pesoKg = pesoNum >= 100 && !/[.,]/.test(secondLastRaw) ? pesoNum / 1000 : pesoNum;
+      return { nombre, peso: Math.round(pesoKg * 1000) / 1000, tagId: lastPart.toUpperCase(), uniqueCode: code.toUpperCase(), rawCode: code };
+    }
+  }
+
+  const lastDashIdx = code.lastIndexOf('-');
+  if (lastDashIdx > 0) {
+    const rawPeso = code.slice(lastDashIdx + 1).replace(',', '.').replace(/(?:kg|kilos?|g|gr?)$/i, '').trim();
+    const pesoNum = parseFloat(rawPeso);
+    if (!isNaN(pesoNum) && pesoNum > 0) {
+      const nombre = code.slice(0, lastDashIdx).toLowerCase().replace(/-/g, ' ').trim();
+      const pesoKg = pesoNum >= 100 && !/[.,]/.test(rawPeso) ? pesoNum / 1000 : pesoNum;
+      return { nombre, peso: Math.round(pesoKg * 1000) / 1000, tagId: null, uniqueCode: code.toUpperCase(), rawCode: code };
+    }
+  }
+
+  return { nombre: code.toLowerCase().replace(/[-_]/g, ' ').trim(), peso: null, tagId: null, uniqueCode: code.toUpperCase(), rawCode: code, esIncompleto: true };
+}
+
+function determinarSlot(tipo, pesoKg) {
+  if (tipo === 'hoja verde') return pesoKg <= 0.35 ? '500g' : '1kg';
+  return pesoKg <= 0.75 ? '500g' : '1kg';
+}
+
+const PRODUCT_TYPES = {
+  'hoja verde': ['espinaca', 'lechuga', 'rucula', 'acelga', 'perejil', 'albahaca', 'ciboulette', 'radicheta'],
+  'blando': ['tomate', 'tomate cherry', 'banana', 'durazno', 'frutilla', 'pera', 'morron', 'pepino', 'chaucha', 'berenjena'],
+  'duro': ['papa', 'cebolla', 'cebolla comun', 'cebolla morada', 'zanahoria', 'zapallito', 'zapallo blanco', 'cabutia', 'ajo', 'remolacha', 'hinojo', 'apio', 'brocoli', 'coliflor', 'repollo', 'choclo', 'huevos', 'miel pura', 'palta', 'manzana roja', 'manzana verde', 'naranja', 'limon', 'pomelo', 'uva', 'arandano', 'boniato']
+};
+
+function getTipoByNombre(nombre) {
+  const n = norm(nombre);
+  if (PRODUCT_TYPES['hoja verde'].some(p => n.includes(p))) return 'hoja verde';
+  if (PRODUCT_TYPES['blando'].some(p => n.includes(p))) return 'blando';
+  return 'duro';
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+
 export default function AgendaEntregas({ rol }) {
-  const { pedidos: PEDIDOS, actualizarEstadoEnSheet, actualizarRemitoEnSheet } = useGoogleSheets();
+  const { pedidos: PEDIDOS, actualizarEstadoEnSheet, actualizarRemitoEnSheet, stockData, setStockData } = useGoogleSheets();
 
   const [diaSeleccionado, setDiaSeleccionado] = useState(DIAS_SEMANA[0]);
-  const [turnoSeleccionado, setTurnoSeleccionado] = useState('Manana'); // 'Manana' | 'Tarde'
-
-  // Estados dinámicos para operaciones
+  const [turnoSeleccionado, setTurnoSeleccionado] = useState('Manana');
   const [estados, setEstados] = useState(() => {
     const map = {};
     PEDIDOS.forEach(p => { map[p.numero_pedido] = p.estado; });
@@ -26,18 +119,33 @@ export default function AgendaEntregas({ rol }) {
   });
   const [pedidosAbiertos, setPedidosAbiertos] = useState({});
 
-  const toggleAcordeon = (id) => {
-    setPedidosAbiertos(prev => ({ ...prev, [id]: !prev[id] }));
+  // ── Preparación de pedidos ─────────────────────────────────────────────────
+  const [preparaciones, setPreparaciones] = useState(() => {
+    try { const s = localStorage.getItem(PREPARACIONES_KEY); return s ? JSON.parse(s) : {}; } catch (e) { return {}; }
+  });
+  const [preparandoPedido, setPreparandoPedido] = useState(null);
+  const [scanBuffer, setScanBuffer] = useState('');
+  const [scanError, setScanError] = useState(null);
+  const [scanSuccess, setScanSuccess] = useState(null);
+  const scanInputRef = useRef(null);
+  const stockDataRef = useRef(stockData);
+
+  useEffect(() => { stockDataRef.current = stockData; }, [stockData]);
+  useEffect(() => { try { localStorage.setItem(PREPARACIONES_KEY, JSON.stringify(preparaciones)); } catch (e) {} }, [preparaciones]);
+
+  const getCodigosProcesados = () => {
+    try { const s = localStorage.getItem(PROCESSED_CODES_KEY); return s ? JSON.parse(s) : {}; } catch (e) { return {}; }
   };
+  const setCodigosProcesados = (updater) => {
+    try { const c = getCodigosProcesados(); const n = typeof updater === 'function' ? updater(c) : updater; localStorage.setItem(PROCESSED_CODES_KEY, JSON.stringify(n)); } catch (e) {}
+  };
+
+  const toggleAcordeon = (id) => { setPedidosAbiertos(prev => ({ ...prev, [id]: !prev[id] })); };
 
   const actualizarEstado = (id, estadoAAsignar) => {
     setEstados(prev => ({ ...prev, [id]: estadoAAsignar }));
-    
-    // Obtener el pedido para saber la fila
     const pedido = PEDIDOS.find(p => p.numero_pedido === id);
-    if (pedido && pedido.sheetRowIndex) {
-      actualizarEstadoEnSheet(pedido.sheetRowIndex, estadoAAsignar);
-    }
+    if (pedido && pedido.sheetRowIndex) actualizarEstadoEnSheet(pedido.sheetRowIndex, estadoAAsignar);
   };
 
   const abrirWhatsApp = (telefono, nombre, producto) => {
@@ -48,167 +156,218 @@ export default function AgendaEntregas({ rol }) {
 
   const abrirRutaGoogle = () => {
     if (pedidosDelTurno.length === 0) return;
-
     const origen = 'Labarden 4252, Tortuguitas, Pilar, Buenos Aires';
+    const destinos = pedidosDelTurno.map(p => `${p.direccion || ''}, ${p.localidad || ''}, Partido de Pilar, Buenos Aires`).join('/');
+    window.open(`https://www.google.com/maps/dir/${encodeURIComponent(origen)}/${destinos}`, '_blank');
+  };
 
-    const destinos = pedidosDelTurno
-      .map(p => `${p.direccion || ''}, ${p.localidad || ''}, Partido de Pilar, Buenos Aires`)
-      .join('/');
+  // ── INICIAR PREPARACIÓN ────────────────────────────────────────────────────
+  const iniciarPreparacion = useCallback((pedido) => {
+    const numPedido = pedido.numero_pedido;
+    if (!preparaciones[numPedido]) {
+      const items = parsearProductosPedido(pedido.producto, pedido.cantidades);
+      setPreparaciones(prev => ({ ...prev, [numPedido]: { items, completado: false, fechaInicio: new Date().toISOString() } }));
+    }
+    setPreparandoPedido(numPedido);
+    setPedidosAbiertos(prev => ({ ...prev, [numPedido]: true }));
+    setScanError(null);
+    setScanSuccess(null);
+    setTimeout(() => scanInputRef.current?.focus(), 100);
+  }, [preparaciones]);
 
-    const url = `https://www.google.com/maps/dir/${encodeURIComponent(origen)}/${destinos}`;
+  // ── ESCANEAR BOLSA ─────────────────────────────────────────────────────────
+  const procesarEscaneoPedido = useCallback((rawCode) => {
+    if (!rawCode || !preparandoPedido) return;
+    setScanError(null); setScanSuccess(null);
+    
+    const resultado = parsearCodigoBarras(rawCode);
+    if (!resultado || (!resultado.peso && !resultado.esIncompleto)) {
+      setScanError('No se pudo leer el código. Intentá de nuevo.');
+      return;
+    }
 
-    window.open(url, '_blank');
+    const uniqueCode = resultado.uniqueCode;
+    const codigos = getCodigosProcesados();
+    const reg = codigos[uniqueCode];
+    
+    if (reg?.bloqueado) { setScanError(`🚫 Código BLOQUEADO: "${uniqueCode}" fue dado de baja definitiva.`); return; }
+
+    const prepActual = preparaciones[preparandoPedido];
+    if (prepActual) {
+      const yaAsignado = prepActual.items.some(item => item.bolsasAsignadas?.some(b => b.uniqueCode === uniqueCode));
+      if (yaAsignado) { setScanError(`⚠️ Esta bolsa ya fue asignada a este pedido.`); return; }
+    }
+
+    const nombreEscaneado = norm(resultado.nombre);
+    const current = stockDataRef.current || {};
+    
+    let matchedStockId = null;
+    let matchedProd = null;
+    if (typeof current === 'object' && !Array.isArray(current)) {
+      matchedStockId = Object.keys(current).find(id => {
+        const pNorm = norm(current[id]?.nombre);
+        return pNorm === nombreEscaneado || pNorm.includes(nombreEscaneado) || nombreEscaneado.includes(pNorm);
+      });
+      matchedProd = matchedStockId ? current[matchedStockId] : null;
+    }
+
+    if (!prepActual) return;
+    
+    let matchedItemIdx = -1;
+    for (let i = 0; i < prepActual.items.length; i++) {
+      const itemNorm = norm(prepActual.items[i].nombre);
+      const prodNorm = matchedProd ? norm(matchedProd.nombre) : nombreEscaneado;
+      if (itemNorm === prodNorm || itemNorm.includes(prodNorm) || prodNorm.includes(itemNorm) ||
+          itemNorm === nombreEscaneado || itemNorm.includes(nombreEscaneado) || nombreEscaneado.includes(itemNorm)) {
+        const asignadas = prepActual.items[i].bolsasAsignadas?.length || 0;
+        if (asignadas < prepActual.items[i].cantidad) { matchedItemIdx = i; break; }
+      }
+    }
+    
+    if (matchedItemIdx === -1) {
+      setScanError(`⚠️ "${resultado.nombre}" no coincide con ningún producto pendiente del pedido.`);
+      return;
+    }
+    
+    // Descontar del stock
+    if (matchedProd && matchedStockId) {
+      const tipo = matchedProd.tipo || getTipoByNombre(matchedProd.nombre);
+      const slot = determinarSlot(tipo, resultado.peso || 0.5);
+      const stockActual = matchedProd.stock?.[slot] || 0;
+      if (stockActual <= 0) { setScanError(`🚫 ¡Sin stock! No hay "${matchedProd.nombre}" (${slot}) disponible.`); return; }
+      const newData = { ...current };
+      newData[matchedStockId] = { ...matchedProd, stock: { ...matchedProd.stock, [slot]: stockActual - 1 } };
+      setStockData(newData);
+    }
+    
+    const now = new Date();
+    const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    setCodigosProcesados(prev => ({ ...prev, [uniqueCode]: { uniqueCode, nombre: resultado.nombre, matchedId: matchedStockId, peso: resultado.peso, estado: 'SACADO', bloqueado: false, fechaModificacion: horaStr, ultimaAccion: `Asignado a pedido ${preparandoPedido}`, ts: Date.now() } }));
+    
+    const nuevaBolsa = { uniqueCode, nombre: resultado.nombre, peso: resultado.peso, tagId: resultado.tagId, ts: Date.now() };
+    
+    setPreparaciones(prev => {
+      const prep = { ...prev[preparandoPedido] };
+      const items = [...prep.items];
+      items[matchedItemIdx] = { ...items[matchedItemIdx], bolsasAsignadas: [...(items[matchedItemIdx].bolsasAsignadas || []), nuevaBolsa] };
+      const todosCompletos = items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
+      return { ...prev, [preparandoPedido]: { ...prep, items, completado: todosCompletos } };
+    });
+    
+    setScanSuccess(`✅ ${resultado.nombre.toUpperCase()} — ${resultado.peso?.toFixed(3) || '?'} kg asignado`);
+    setTimeout(() => setScanSuccess(null), 2500);
+    setTimeout(() => scanInputRef.current?.focus(), 50);
+  }, [preparandoPedido, preparaciones, setStockData]);
+
+  const marcarPreparado = useCallback((numPedido) => {
+    actualizarEstado(numPedido, 'Preparado');
+    setPreparaciones(prev => ({ ...prev, [numPedido]: { ...prev[numPedido], completado: true, fechaFin: new Date().toISOString() } }));
+    setPreparandoPedido(null);
+  }, []);
+
+  const quitarBolsaAsignada = useCallback((numPedido, itemIdx, bolsaIdx) => {
+    setPreparaciones(prev => {
+      const prep = { ...prev[numPedido] };
+      const items = [...prep.items];
+      items[itemIdx] = { ...items[itemIdx], bolsasAsignadas: items[itemIdx].bolsasAsignadas.filter((_, i) => i !== bolsaIdx) };
+      const todosCompletos = items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
+      return { ...prev, [numPedido]: { ...prep, items, completado: todosCompletos } };
+    });
+  }, []);
+
+  const resetearPreparacion = useCallback((numPedido) => {
+    if (!window.confirm('¿Deshacer toda la preparación de este pedido?')) return;
+    setPreparaciones(prev => { const { [numPedido]: _, ...rest } = prev; return rest; });
+    setPreparandoPedido(null);
+    actualizarEstado(numPedido, 'Pendiente');
+  }, []);
+
+  // ── IMPRIMIR REMITO CON PESO REAL ──────────────────────────────────────────
+  const imprimirRemitoConPesoReal = (p) => {
+    const prep = preparaciones[p.numero_pedido];
+    const win = window.open('', '_blank');
+    
+    const styles = `<style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+      @page { size: A4; margin: 0; }
+      body { font-family: 'Inter', sans-serif; margin: 0; padding: 0; background: white; color: black; line-height: 1.4; }
+      .hoja { width: 210mm; height: 297mm; position: relative; page-break-after: always; padding: 12mm; box-sizing: border-box; display: flex; flex-direction: column; border: 2px solid #000; }
+      .header { display: flex; justify-content: space-between; align-items: start; border-bottom: 2px solid #000; padding-bottom: 12px; margin-bottom: 20px; }
+      .header-left { font-size: 24px; font-weight: 800; }
+      .header-web { font-size: 12px; color: #333; margin-top: 3px; font-weight: 400; }
+      .header-right { text-align: right; font-size: 14px; font-weight: 700; }
+      .client-data { margin-bottom: 25px; font-size: 13px; border-bottom: 1px solid #000; padding-bottom: 15px; }
+      .client-info { font-size: 13px; margin-bottom: 5px; }
+      .client-info strong { font-weight: 700; width: 110px; display: inline-block; }
+      .products-section { flex-grow: 1; margin-bottom: 20px; }
+      .products-title { font-size: 14px; font-weight: 800; margin-bottom: 15px; text-transform: uppercase; border-bottom: 1px solid #000; padding-bottom: 5px; }
+      table { width: 100%; border-collapse: collapse; }
+      th { text-align: left; font-size: 11px; font-weight: 800; border-bottom: 2px solid #000; padding: 8px 4px; text-transform: uppercase; }
+      td { padding: 7px 4px; font-size: 12px; border-bottom: 1px solid #ddd; }
+      .qty { width: 40px; text-align: center; font-weight: 700; }
+      .price { width: 80px; text-align: right; font-weight: 700; }
+      .diff-pos { color: #16a34a; font-weight: 700; }
+      .diff-neg { color: #dc2626; font-weight: 700; }
+      .diff-zero { color: #666; }
+      .total-container { display: flex; justify-content: flex-end; margin-bottom: 15px; }
+      .total-box { font-size: 16px; font-weight: 800; padding: 10px 20px; border: 2px solid #000; min-width: 200px; text-align: right; }
+      .resumen-pesos { margin: 15px 0; padding: 10px; border: 1px solid #000; font-size: 12px; }
+      .resumen-pesos td { border: none; padding: 4px 8px; }
+      .footer { border-top: 2px solid #000; padding-top: 15px; }
+      .signature-row { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 15px; font-size: 13px; }
+      .linea-puntos { border-bottom: 1px solid #000; display: inline-block; min-width: 150px; margin: 0 5px; height: 18px; }
+      .thanks-footer { text-align: center; font-size: 12px; margin-top: 15px; font-weight: 600; }
+    </style>`;
+
+    const crearHoja = (tipo) => {
+      let productosHTML = '';
+      let totalPesoSolicitado = 0;
+      let totalPesoReal = 0;
+      
+      if (prep && prep.items) {
+        productosHTML = prep.items.map(item => {
+          const bolsas = item.bolsasAsignadas || [];
+          const pesoReal = bolsas.reduce((s, b) => s + (b.peso || 0), 0);
+          const pesoPedido = item.pesoSolicitado ? item.pesoSolicitado * item.cantidad : pesoReal;
+          const diff = Math.round((pesoReal - pesoPedido) * 1000) / 1000;
+          totalPesoSolicitado += pesoPedido;
+          totalPesoReal += pesoReal;
+          const diffClass = diff > 0 ? 'diff-pos' : diff < 0 ? 'diff-neg' : 'diff-zero';
+          const diffStr = diff > 0 ? `+${diff.toFixed(3)}` : diff.toFixed(3);
+          const detallebolsas = bolsas.length > 1 ? `<br/><span style="font-size:10px;color:#666">${bolsas.map((b, i) => `Bolsa ${i+1}: ${b.peso?.toFixed(3) || '?'} kg`).join(' | ')}</span>` : '';
+          return `<tr><td class="qty">${item.cantidad}</td><td>${item.nombre.toUpperCase()}${detallebolsas}</td><td class="price">${pesoPedido.toFixed(3)} kg</td><td class="price">${pesoReal.toFixed(3)} kg</td><td class="price ${diffClass}">${diff !== 0 ? diffStr + ' kg' : '—'}</td></tr>`;
+        }).join('');
+      } else {
+        productosHTML = `<tr><td class="qty">${p.cantidades || 1}</td><td>${p.producto || ""}</td><td class="price" colspan="3">$${p.total || 0}</td></tr>`;
+      }
+
+      const diffTotal = Math.round((totalPesoReal - totalPesoSolicitado) * 1000) / 1000;
+      const diffTotalClass = diffTotal > 0 ? 'diff-pos' : diffTotal < 0 ? 'diff-neg' : 'diff-zero';
+
+      return `<div class="hoja">
+        <div class="header"><div class="header-left">🌿 HUERTA URBANA<div class="header-web">huertaurbana.com.ar | Tel: 11 6177-1376</div></div><div class="header-right">PEDIDO: #${p.numero_pedido || '0000'}<br/>FECHA: ${p.fecha || p.dia_entrega || ''}<br/>REMITO - ${tipo}</div></div>
+        <div class="client-data"><div class="client-info"><strong>CLIENTE:</strong> ${p.nombre || "Consumidor Final"}</div><div class="client-info"><strong>DIRECCIÓN:</strong> ${p.direccion || ""}, ${p.localidad || ""}</div><div class="client-info"><strong>TELÉFONO:</strong> ${p.telefono || ""}</div><div class="client-info"><strong>ENTREGA:</strong> ${p.dia_entrega || ""} (${p.horario_entrega || ""})</div><div class="client-info"><strong>PAGO:</strong> APROBADO ✅</div>${p.observaciones ? `<div class="client-info"><strong>OBS:</strong> ${p.observaciones}</div>` : ""}</div>
+        <div class="products-section"><div class="products-title">Detalle de Productos:</div><table><thead><tr><th class="qty">Cant</th><th>Producto</th><th class="price">Pedido</th><th class="price">Peso Real</th><th class="price">Dif.</th></tr></thead><tbody>${productosHTML}</tbody></table>${prep ? `<table class="resumen-pesos"><tr><td><strong>TOTAL PEDIDO:</strong></td><td>${totalPesoSolicitado.toFixed(3)} kg</td><td><strong>TOTAL REAL:</strong></td><td>${totalPesoReal.toFixed(3)} kg</td><td><strong>DIF:</strong></td><td class="${diffTotalClass}">${diffTotal > 0 ? '+' : ''}${diffTotal.toFixed(3)} kg</td></tr></table>` : ''}</div>
+        <div class="total-container"><div class="total-box">TOTAL A PAGAR: $${p.total || 0}</div></div>
+        <div class="footer"><div class="signature-row"><div>Recibí conforme: <span class="linea-puntos" style="min-width: 200px"></span></div></div><div class="signature-row"><div>Firma: <span class="linea-puntos" style="min-width: 180px"></span></div><div>Aclaración: <span class="linea-puntos" style="min-width: 220px"></span></div></div><div class="thanks-footer">¡Gracias por tu compra! 🌿 <strong>huertaurbana.com.ar</strong></div></div>
+      </div>`;
+    };
+
+    win.document.write(`<html><head><title>REMITO #${p.numero_pedido} - HUERTA URBANA</title>${styles}</head><body>${crearHoja("CLIENTE")}${crearHoja("COPIA INTERNA")}<script>setTimeout(() => { window.print(); }, 500);<\/script></body></html>`);
+    win.document.close();
+    if (p.sheetRowIndex) actualizarRemitoEnSheet(p.sheetRowIndex, true);
   };
 
   const imprimir = (alcance) => {
-    if (rol === 'repartidor') return; // Seguridad extra
+    if (rol === 'repartidor') return;
     const aImprimir = alcance === 'turno' ? pedidosDelTurno : pedidosDelDia;
     if (aImprimir.length === 0) return;
-
-    const win = window.open('', '_blank');
-    
-    const styles = `
-      <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
-        
-        @page { size: A4; margin: 0; }
-        body { font-family: 'Inter', sans-serif; margin: 0; padding: 0; background: white; color: black; line-height: 1.4; }
-        
-        .hoja { 
-          width: 210mm; 
-          height: 297mm; 
-          position: relative; 
-          page-break-after: always; 
-          padding: 12mm;
-          box-sizing: border-box;
-          display: flex;
-          flex-direction: column;
-          border: 2px solid #000; /* Borde rectangular que enmarca todo */
-        }
-        
-        /* HEADER (24px para el logo) */
-        .header { display: flex; justify-content: space-between; align-items: start; border-bottom: 2px solid #000; padding-bottom: 12px; margin-bottom: 20px; }
-        .header-left { font-size: 24px; font-weight: 800; }
-        .header-web { font-size: 12px; color: #333; margin-top: 3px; font-weight: 400; }
-        .header-right { text-align: right; font-size: 14px; font-weight: 700; }
-
-        /* DATOS DEL CLIENTE (13px) */
-        .client-data { margin-bottom: 25px; font-size: 13px; border-bottom: 1px solid #000; padding-bottom: 15px; }
-        .client-info { font-size: 13px; margin-bottom: 5px; }
-        .client-info strong { font-weight: 700; width: 110px; display: inline-block; }
-
-        /* PRODUCTOS (12px, sin renglones) */
-        .products-section { flex-grow: 1; margin-bottom: 20px; }
-        .products-title { font-size: 14px; font-weight: 800; margin-bottom: 15px; text-transform: uppercase; border-bottom: 1px solid #000; padding-bottom: 5px; }
-        table { width: 100%; border-collapse: collapse; }
-        th { text-align: left; font-size: 12px; font-weight: 800; border-bottom: 1px solid #000; padding: 8px 0; text-transform: uppercase; }
-        td { padding: 8px 0; font-size: 12px; border-bottom: none; /* Sin renglones */ }
-        .qty { width: 50px; text-align: center; font-weight: 700; }
-        .price { width: 100px; text-align: right; font-weight: 700; }
-
-        /* TOTAL (Cuadro pegado al footer) */
-        .total-container { display: flex; justify-content: flex-end; margin-bottom: 15px; }
-        .total-box { font-size: 16px; font-weight: 800; padding: 10px 20px; border: 2px solid #000; min-width: 200px; text-align: right; }
-
-        /* FOOTER */
-        .footer { border-top: 2px solid #000; padding-top: 15px; }
-        .signature-row { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 15px; font-size: 13px; }
-        .linea-puntos { border-bottom: 1px solid #000; display: inline-block; min-width: 150px; margin: 0 5px; height: 18px; }
-        .thanks-footer { text-align: center; font-size: 12px; margin-top: 15px; font-weight: 600; }
-      </style>
-    `;
-
-    const renderHojasPedido = (p) => {
-      const crearHoja = (tipo) => {
-        return `
-          <div class="hoja">
-            <div class="header">
-              <div class="header-left">
-                🌿 HUERTA URBANA
-                <div class="header-web">huertaurbana.com.ar | Tel: 11 6177-1376</div>
-              </div>
-              <div class="header-right">
-                PEDIDO: #${p.numero_pedido || '0000'}<br/>
-                FECHA: ${p.fecha || p.dia_entrega || ''}<br/>
-                REMITO - ${tipo}
-              </div>
-            </div>
-
-            <div class="client-data">
-              <div class="client-info"><strong>CLIENTE:</strong> ${p.nombre || "Consumidor Final"}</div>
-              <div class="client-info"><strong>DIRECCIÓN:</strong> ${p.direccion || ""}, ${p.localidad || ""}</div>
-              <div class="client-info"><strong>TELÉFONO:</strong> ${p.telefono || ""}</div>
-              <div class="client-info"><strong>ENTREGA:</strong> ${p.dia_entrega || ""} (${p.horario_entrega || ""})</div>
-              <div class="client-info"><strong>PAGO:</strong> APROBADO ✅</div>
-              ${p.observaciones ? `<div class="client-info"><strong>OBS:</strong> ${p.observaciones}</div>` : ""}
-            </div>
-
-            <div class="products-section">
-              <div class="products-title">Productos:</div>
-              <table>
-                <thead><tr><th class="qty">Cant</th><th>Descripción</th><th class="price">Subtotal</th></tr></thead>
-                <tbody>
-                  <tr>
-                    <td class="qty">${p.cantidades || 1}</td>
-                    <td>${p.producto || ""}</td>
-                    <td class="price">$${p.total || 0}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div class="total-container">
-              <div class="total-box">TOTAL A PAGAR: $${p.total || 0}</div>
-            </div>
-
-            <div class="footer">
-              <div class="signature-row">
-                <div>Recibí conforme: <span class="linea-puntos" style="min-width: 200px"></span></div>
-              </div>
-              <div class="signature-row">
-                <div>Firma: <span class="linea-puntos" style="min-width: 180px"></span></div>
-                <div>Aclaración: <span class="linea-puntos" style="min-width: 220px"></span></div>
-              </div>
-              <div class="thanks-footer">
-                ¡Gracias por tu compra! 🌿 <strong>huertaurbana.com.ar</strong>
-              </div>
-            </div>
-          </div>
-        `;
-      };
-
-      return crearHoja("CLIENTE") + crearHoja("COPIA INTERNA");
-    };
-
-    win.document.write(`
-      <html><head><title>REMITOS - HUERTA URBANA</title>${styles}</head><body>
-      ${aImprimir.map((p) => renderHojasPedido(p)).join('')}
-      <script>
-        setTimeout(() => {
-          window.print();
-        }, 500);
-      </script>
-      </body></html>
-    `);
-    win.document.close();
-
-    // Sincronización
-    aImprimir.forEach(p => {
-      setPedidos(prev => prev.map(item => 
-        item.numero_pedido === p.numero_pedido ? { ...item, remito_impreso: true } : item
-      ));
-      if (p.sheetRowIndex) {
-        actualizarRemitoEnSheet(p.sheetRowIndex, true);
-      }
-    });
+    aImprimir.forEach(p => imprimirRemitoConPesoReal(p));
   };
 
-  // Filtrado de pedidos — solo pagos aprobados
+  // ── Filtrado ───────────────────────────────────────────────────────────────
   const pedidosDelDia = useMemo(() => {
-    return PEDIDOS.filter(p => 
-      p.dia_entrega === diaSeleccionado && 
-      (p.estado_pago || '').toLowerCase() === 'approved'
-    );
+    return PEDIDOS.filter(p => p.dia_entrega === diaSeleccionado && (p.estado_pago || '').toLowerCase() === 'approved');
   }, [PEDIDOS, diaSeleccionado]);
 
   const pedidosDelTurno = useMemo(() => {
@@ -219,87 +378,64 @@ export default function AgendaEntregas({ rol }) {
     });
   }, [pedidosDelDia, turnoSeleccionado]);
 
+  const handleScanKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const code = (e.target.value || scanBuffer || '').replace(/[\r\n]/g, '').trim();
+      e.target.value = '';
+      setScanBuffer('');
+      if (code) procesarEscaneoPedido(code);
+    }
+  };
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // RENDER
+  // ══════════════════════════════════════════════════════════════════════════
+
   return (
     <div>
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
         <div>
-          <h2 className="text-xl font-bold text-white">Agenda de Entregas (Operativa)</h2>
-          <p className="text-gray-500 text-sm mt-1">Gestión completa, impresión y estados.</p>
+          <h2 className="text-xl font-bold text-white">Agenda de Entregas</h2>
+          <p className="text-gray-500 text-sm mt-1">Preparación con escaneo, remitos con peso real y estados.</p>
         </div>
-        
         {rol !== 'repartidor' && (
           <div className="flex flex-col sm:flex-row gap-2">
-            <button
-              onClick={() => imprimir('turno')}
-              className="flex items-center justify-center gap-2 bg-[#1f2937] hover:bg-gray-800 border border-gray-700 hover:border-gray-500 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all"
-            >
-              <Printer size={15} />
-              Imprimir este turno
+            <button onClick={() => imprimir('turno')} className="flex items-center justify-center gap-2 bg-[#1f2937] hover:bg-gray-800 border border-gray-700 hover:border-gray-500 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all">
+              <Printer size={15} /> Imprimir este turno
             </button>
-            <button
-              onClick={() => imprimir('dia')}
-              className="flex items-center justify-center gap-2 bg-green-500/10 hover:bg-green-500/20 border border-green-500/30 text-green-400 font-medium px-4 py-2 rounded-xl text-sm transition-all"
-            >
-              <FileText size={15} />
-              Imprimir todo el día
+            <button onClick={() => imprimir('dia')} className="flex items-center justify-center gap-2 bg-green-500/10 hover:bg-green-500/20 border border-green-500/30 text-green-400 font-medium px-4 py-2 rounded-xl text-sm transition-all">
+              <FileText size={15} /> Imprimir todo el día
             </button>
           </div>
         )}
       </div>
 
-      {/* Tabs Nivel 1: Días */}
+      {/* Tabs Días */}
       <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
         {DIAS_SEMANA.map(dia => (
-          <button
-            key={dia}
-            onClick={() => { setDiaSeleccionado(dia); setPedidosAbiertos({}); }}
-            className={`whitespace-nowrap px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${
-              diaSeleccionado === dia
-                ? 'bg-green-500 text-white shadow-[0_4px_15px_rgba(34,197,94,0.3)]'
-                : 'bg-[#1f2937] border border-gray-800 text-gray-400 hover:text-white hover:border-gray-600'
-            }`}
-          >
+          <button key={dia} onClick={() => { setDiaSeleccionado(dia); setPedidosAbiertos({}); setPreparandoPedido(null); }}
+            className={`whitespace-nowrap px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${diaSeleccionado === dia ? 'bg-green-500 text-white shadow-[0_4px_15px_rgba(34,197,94,0.3)]' : 'bg-[#1f2937] border border-gray-800 text-gray-400 hover:text-white hover:border-gray-600'}`}>
             {dia}
           </button>
         ))}
       </div>
 
-      {/* Tabs Nivel 2: Turnos */}
+      {/* Tabs Turnos */}
       <div className="flex gap-2 mb-6 bg-[#1f2937]/50 p-1.5 rounded-2xl w-fit">
-        <button
-          onClick={() => setTurnoSeleccionado('Manana')}
-          className={`flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-medium transition-all ${
-            turnoSeleccionado === 'Manana'
-              ? 'bg-[#111827] text-amber-400 border border-gray-700 shadow-md'
-              : 'text-gray-500 hover:text-gray-300'
-          }`}
-        >
-          <Sun size={16} />
-          Turno Mañana (8-12 hs)
+        <button onClick={() => setTurnoSeleccionado('Manana')} className={`flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-medium transition-all ${turnoSeleccionado === 'Manana' ? 'bg-[#111827] text-amber-400 border border-gray-700 shadow-md' : 'text-gray-500 hover:text-gray-300'}`}>
+          <Sun size={16} /> Turno Mañana (8-12 hs)
         </button>
-        <button
-          onClick={() => setTurnoSeleccionado('Tarde')}
-          className={`flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-medium transition-all ${
-            turnoSeleccionado === 'Tarde'
-              ? 'bg-[#111827] text-indigo-400 border border-gray-700 shadow-md'
-              : 'text-gray-500 hover:text-gray-300'
-          }`}
-        >
-          <Sunset size={16} />
-          Turno Tarde (14-18 hs)
+        <button onClick={() => setTurnoSeleccionado('Tarde')} className={`flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-medium transition-all ${turnoSeleccionado === 'Tarde' ? 'bg-[#111827] text-indigo-400 border border-gray-700 shadow-md' : 'text-gray-500 hover:text-gray-300'}`}>
+          <Sunset size={16} /> Turno Tarde (14-18 hs)
         </button>
       </div>
 
-      {/* LISTA DE PEDIDOS */}
+      {/* Contador y ruta */}
       <div className="flex items-center justify-between gap-3 mb-4">
-        <span className="text-sm font-medium text-white bg-gray-800 px-3 py-1 rounded-lg border border-gray-700 w-fit">
-          {pedidosDelTurno.length} pedidos
-        </span>
+        <span className="text-sm font-medium text-white bg-gray-800 px-3 py-1 rounded-lg border border-gray-700 w-fit">{pedidosDelTurno.length} pedidos</span>
         {pedidosDelTurno.length > 0 && (
-          <button 
-            onClick={abrirRutaGoogle}
-            className="flex items-center gap-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 font-bold px-4 py-2 rounded-xl text-sm transition-all hover:scale-[1.02] shadow-[0_0_15px_rgba(99,102,241,0.1)] shrink-0"
-          >
+          <button onClick={abrirRutaGoogle} className="flex items-center gap-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 font-bold px-4 py-2 rounded-xl text-sm transition-all hover:scale-[1.02] shadow-[0_0_15px_rgba(99,102,241,0.1)] shrink-0">
             🗺️ Abrir ruta del turno
           </button>
         )}
@@ -315,185 +451,272 @@ export default function AgendaEntregas({ rol }) {
           {pedidosDelTurno.map(p => {
             const isOpen = !!pedidosAbiertos[p.numero_pedido];
             const estadoActual = (estados[p.numero_pedido] || p.estado || 'pendiente').toLowerCase();
+            const prep = preparaciones[p.numero_pedido];
+            const estaPreparando = preparandoPedido === p.numero_pedido;
+            const todosCompletos = prep?.completado || false;
+            const tieneBolsas = prep?.items?.some(it => it.bolsasAsignadas?.length > 0);
 
-            // Configuración visual por estado (Tarjeta principal)
             const configEstado = {
-              'pendiente':    { icon: '⏳', label: 'PENDIENTE',    color: 'text-amber-400', bg: 'bg-amber-500/5', border: 'border-amber-500/10' },
-              'preparado':    { icon: '🔵', label: 'PREPARADO',    color: 'text-blue-400',   bg: 'bg-[#93c5fd]/20', border: 'border-[#93c5fd]/30' },
-              'listo':        { icon: '🔵', label: 'PREPARADO',    color: 'text-blue-400',   bg: 'bg-[#93c5fd]/20', border: 'border-[#93c5fd]/30' },
-              'entregado':    { icon: '✅', label: 'ENTREGADO',    color: 'text-green-400',  bg: 'bg-[#86efac]/20', border: 'border-[#86efac]/30' },
-              'no_entregado': { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400',    bg: 'bg-[#fca5a5]/20', border: 'border-[#fca5a5]/30' },
-              'no entregado': { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400',    bg: 'bg-[#fca5a5]/20', border: 'border-[#fca5a5]/30' },
+              'pendiente':    { icon: '⏳', label: 'PENDIENTE',    color: 'text-amber-400', bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
+              'preparado':    { icon: '✅', label: 'PREPARADO',    color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/20' },
+              'listo':        { icon: '✅', label: 'PREPARADO',    color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/20' },
+              'entregado':    { icon: '🚚', label: 'ENTREGADO',    color: 'text-blue-400',  bg: 'bg-blue-500/10',  border: 'border-blue-500/20' },
+              'no_entregado': { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400',   bg: 'bg-red-500/10',   border: 'border-red-500/20' },
+              'no entregado': { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400',   bg: 'bg-red-500/10',   border: 'border-red-500/20' },
             };
-
             const conf = configEstado[estadoActual] || configEstado.pendiente;
 
             return (
-              <div 
-                key={p.numero_pedido} 
-                className={`transition-all duration-300 rounded-2xl overflow-hidden border ${conf.bg} ${isOpen ? 'ring-1 ring-white/10' : conf.border}`}
-              >
+              <div key={p.numero_pedido} className={`transition-all duration-300 rounded-2xl overflow-hidden border ${conf.bg} ${estaPreparando ? 'ring-2 ring-green-500/60 shadow-[0_0_30px_rgba(34,197,94,0.15)]' : isOpen ? 'ring-1 ring-white/10' : conf.border}`}>
                 
-                {/* Cabecera (Click para expandir) */}
-                <div 
-                  className="px-4 pr-5 py-4 flex items-center justify-between cursor-pointer hover:bg-white/5"
-                  onClick={() => toggleAcordeon(p.numero_pedido)}
-                >
+                {/* Cabecera */}
+                <div className="px-4 pr-5 py-4 flex items-center justify-between cursor-pointer hover:bg-white/5" onClick={() => toggleAcordeon(p.numero_pedido)}>
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-lg">
-                       {conf.icon}
-                    </div>
+                    <div className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-lg">{conf.icon}</div>
                     <div>
-                      <div className="flex items-center gap-2">
-                        <p className="font-bold text-sm text-white">
-                          {p.nombre}
-                        </p>
-                        <span className={`text-[10px] font-black uppercase px-1.5 py-0.5 rounded border ${conf.color} ${conf.border} bg-black/20`}>
-                          {conf.label}
-                        </span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-bold text-sm text-white">{p.nombre}</p>
+                        <span className={`text-[10px] font-black uppercase px-1.5 py-0.5 rounded border ${conf.color} ${conf.border} bg-black/20`}>{conf.label}</span>
+                        {prep && tieneBolsas && !todosCompletos && (
+                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse">EN PREPARACIÓN</span>
+                        )}
                       </div>
-                      <div className="flex items-center gap-2 mt-0.5">
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         <span className="text-[11px] text-gray-500 flex items-center gap-0.5"><MapPin size={10} /> {p.localidad}</span>
                         <span className="text-[11px] text-gray-500 flex items-center gap-0.5"><Clock size={10} /> {p.horario_entrega}</span>
+                        <span className="text-[11px] text-gray-500 font-mono truncate max-w-[200px]">{p.producto}</span>
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                     <button className="text-gray-500 bg-black/40 p-1.5 rounded-lg border border-white/10">
-                       {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                     </button>
-                  </div>
+                  <button className="text-gray-500 bg-black/40 p-1.5 rounded-lg border border-white/10 shrink-0">
+                    {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </button>
                 </div>
 
-                {/* Contenido del Acordeón */}
+                {/* Acordeón expandido */}
                 {isOpen && (
                   <div className="px-5 pb-5 pt-2 border-t border-white/5 bg-black/20 slide-in space-y-5">
                     
-                    {/* Detalles Flex */}
+                    {/* Info del pedido */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-                       
-                       {/* Lista de productos y observaciones */}
-                       <div className="space-y-4">
-                         <div className="bg-black/40 border border-white/5 p-3 rounded-xl flex justify-between items-center">
-                            <div className="flex items-center gap-2">
-                              <Package size={14} className="text-indigo-400" />
-                              <span className="font-semibold text-white text-sm">{p.producto}</span>
-                            </div>
-                            <span className="bg-gray-800 text-gray-300 font-bold px-2.5 py-1 rounded-md text-xs border border-gray-700">x{p.cantidades}</span>
-                         </div>
-                         
-                         {p.observaciones && (
-                           <div className="bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl">
-                             <p className="text-[10px] uppercase font-bold text-amber-500 tracking-wider mb-1">Observaciones</p>
-                             <p className="text-sm text-amber-100 font-medium italic">"{p.observaciones}"</p>
-                           </div>
-                         )}
-
-                         <div className="bg-black/40 border border-white/5 p-3 rounded-xl">
-                           <p className="text-gray-400 text-xs mb-1">Dirección completa</p>
-                           <p className="text-white text-sm font-medium">{p.direccion}, {p.localidad}</p>
-                         </div>
-                       </div>
-
-                       {/* Contacto, Pago y Total */}
-                       <div className="space-y-4 flex flex-col justify-between">
-                         <button
-                           onClick={() => abrirWhatsApp(p.telefono, p.nombre, p.producto)}
-                           className="w-full flex items-center justify-center gap-2 bg-[#25D366]/10 hover:bg-[#25D366]/20 border border-[#25D366]/30 text-[#25D366] text-sm font-bold px-4 py-3 rounded-xl transition-all"
-                         >
-                           <MessageCircle size={18} />
-                           WhatsApp: {p.telefono}
-                         </button>
-
-                         <div className="bg-black/40 border border-white/5 flex flex-col justify-center p-4 rounded-xl flex-1">
-                           {rol !== 'repartidor' ? (
-                             <>
-                               <div className="flex justify-between items-end mb-2">
-                                 <span className="text-gray-400 text-xs">Total del pedido</span>
-                                 <span className="text-xl font-bold text-white">${p.total}</span>
-                               </div>
-                               <div className="flex justify-between items-center border-t border-white/5 pt-2 mt-1 text-sm">
-                                 <span className="text-gray-500">Estado de pago</span>
-                                 <span className={`font-bold ${PAGO_CONFIG[p.estado_pago]?.color}`}>
-                                   {(PAGO_CONFIG[p.estado_pago]?.label || '').toUpperCase()}
-                                 </span>
-                               </div>
-                             </>
-                           ) : (
-                             <div className="flex items-center justify-center h-full text-gray-500 italic text-xs">
-                               Datos de facturación ocultos
-                             </div>
-                           )}
-                         </div>
-                       </div>
-                    </div>
-
-                    {/* Botonera de flujo Dinámica - UNIFICADA */}
-                    <div className="bg-black/60 border border-white/10 rounded-2xl p-5 shadow-inner mt-4">
-                      <p className="text-center text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-4">Actualizar Entrega</p>
-                      
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        
-                        {/* Botón PENDIENTE */}
-                        <button
-                          onClick={() => rol !== 'repartidor' ? actualizarEstado(p.numero_pedido, 'Pendiente') : null}
-                          className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 ${
-                            estadoActual === 'pendiente'
-                              ? 'bg-amber-500/20 border-amber-500/40 text-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.2)]'
-                              : 'bg-amber-500/5 border-amber-500/10 text-amber-400 hover:bg-amber-500/10'
-                          } ${rol === 'repartidor' ? 'opacity-50 cursor-default hover:bg-amber-500/5 active:scale-100' : 'cursor-pointer hover:scale-[1.02]'}`}
-                        >
-                          <span className="text-xl">⏳</span>
-                          PENDIENTE
+                      <div className="space-y-4">
+                        <div className="bg-black/40 border border-white/5 p-3 rounded-xl flex justify-between items-center">
+                          <div className="flex items-center gap-2">
+                            <Package size={14} className="text-indigo-400" />
+                            <span className="font-semibold text-white text-sm">{p.producto}</span>
+                          </div>
+                          <span className="bg-gray-800 text-gray-300 font-bold px-2.5 py-1 rounded-md text-xs border border-gray-700">x{p.cantidades}</span>
+                        </div>
+                        {p.observaciones && (
+                          <div className="bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl">
+                            <p className="text-[10px] uppercase font-bold text-amber-500 tracking-wider mb-1">Observaciones</p>
+                            <p className="text-sm text-amber-100 font-medium italic">"{p.observaciones}"</p>
+                          </div>
+                        )}
+                        <div className="bg-black/40 border border-white/5 p-3 rounded-xl">
+                          <p className="text-gray-400 text-xs mb-1">Dirección completa</p>
+                          <p className="text-white text-sm font-medium">{p.direccion}, {p.localidad}</p>
+                        </div>
+                      </div>
+                      <div className="space-y-4 flex flex-col justify-between">
+                        <button onClick={() => abrirWhatsApp(p.telefono, p.nombre, p.producto)} className="w-full flex items-center justify-center gap-2 bg-[#25D366]/10 hover:bg-[#25D366]/20 border border-[#25D366]/30 text-[#25D366] text-sm font-bold px-4 py-3 rounded-xl transition-all">
+                          <MessageCircle size={18} /> WhatsApp: {p.telefono}
                         </button>
-
-                        {/* Botón PREPARADO */}
-                        <button
-                          onClick={() => rol !== 'repartidor' ? actualizarEstado(p.numero_pedido, 'Preparado') : null}
-                          className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 ${
-                            (estadoActual === 'preparado' || estadoActual === 'listo')
-                              ? 'bg-[#dbeafe] text-blue-800 border-blue-400 shadow-[0_0_20px_rgba(219,234,254,0.4)]'
-                              : 'bg-[#dbeafe]/10 border-blue-500/20 text-blue-500 hover:bg-[#dbeafe]/20'
-                          } ${rol === 'repartidor' ? 'opacity-50 cursor-default hover:bg-[#dbeafe]/10 active:scale-100' : 'cursor-pointer hover:scale-[1.02]'}`}
-                        >
-                          <span className="text-xl">🔵</span>
-                          PREPARADO
-                        </button>
-
-                        {/* Botón ENTREGADO */}
-                        <button
-                          onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'Preparado' : 'Entregado')}
-                          className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${
-                            estadoActual === 'entregado'
-                              ? 'bg-[#dcfce7] text-green-800 border-green-400 shadow-[0_0_20px_rgba(220,252,231,0.4)]'
-                              : 'bg-[#dcfce7]/10 border-green-500/20 text-green-500 hover:bg-[#dcfce7]/20'
-                          }`}
-                        >
-                          <span className="text-xl">✅</span>
-                          ENTREGADO
-                        </button>
-
-                        {/* Botón NO ENTREGADO */}
-                        <button
-                          onClick={() => actualizarEstado(p.numero_pedido, (estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'Preparado' : 'No entregado')}
-                          className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${
-                            (estadoActual === 'no_entregado' || estadoActual === 'no entregado')
-                              ? 'bg-[#fee2e2] text-red-800 border-red-400 shadow-[0_0_20px_rgba(254,226,226,0.4)]'
-                              : 'bg-[#fee2e2]/10 border-red-500/20 text-red-500 hover:bg-[#fee2e2]/20'
-                          }`}
-                        >
-                          <span className="text-xl">❌</span>
-                          NO ENTREGADO
-                        </button>
+                        <div className="bg-black/40 border border-white/5 flex flex-col justify-center p-4 rounded-xl flex-1">
+                          {rol !== 'repartidor' ? (
+                            <>
+                              <div className="flex justify-between items-end mb-2">
+                                <span className="text-gray-400 text-xs">Total del pedido</span>
+                                <span className="text-xl font-bold text-white">${p.total}</span>
+                              </div>
+                              <div className="flex justify-between items-center border-t border-white/5 pt-2 mt-1 text-sm">
+                                <span className="text-gray-500">Estado de pago</span>
+                                <span className={`font-bold ${PAGO_CONFIG[p.estado_pago]?.color}`}>{(PAGO_CONFIG[p.estado_pago]?.label || '').toUpperCase()}</span>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex items-center justify-center h-full text-gray-500 italic text-xs">Datos de facturación ocultos</div>
+                          )}
+                        </div>
                       </div>
                     </div>
 
-                    {/* Info de seguridad (Solo repartidor) */}
+                    {/* ═══════ PANEL DE PREPARACIÓN ═══════ */}
+                    {rol !== 'repartidor' && (
+                      <div className="bg-black/60 border border-white/10 rounded-2xl p-5 shadow-inner mt-4">
+                        <div className="flex items-center justify-between mb-4">
+                          <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">
+                            {estaPreparando ? '📦 PREPARANDO PEDIDO' : todosCompletos ? '✅ PEDIDO PREPARADO' : 'Preparación del Pedido'}
+                          </p>
+                          {prep && (
+                            <button onClick={() => resetearPreparacion(p.numero_pedido)} className="text-[10px] text-gray-500 hover:text-red-400 flex items-center gap-1 cursor-pointer transition-colors">
+                              <RotateCcw size={11} /> Reiniciar
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Botón PREPARAR (inicio) */}
+                        {!prep && !estaPreparando && (estadoActual === 'pendiente' || estadoActual === 'preparado' || estadoActual === 'listo') && (
+                          <button onClick={() => iniciarPreparacion(p)} className="w-full flex items-center justify-center gap-3 py-4 rounded-2xl bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-black text-sm uppercase tracking-widest transition-all active:scale-[0.98] cursor-pointer shadow-lg shadow-green-900/30 border-b-2 border-green-800">
+                            <ScanBarcode size={20} /> 📦 PREPARAR PEDIDO
+                          </button>
+                        )}
+
+                        {/* Items del pedido con escaneo */}
+                        {(prep || estaPreparando) && (
+                          <div className="space-y-3">
+                            {estaPreparando && !todosCompletos && (
+                              <div className="relative">
+                                <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                                  <ScanBarcode size={16} className="text-green-400" />
+                                  <div className="w-2 h-2 rounded-full bg-green-400 shadow-[0_0_8px_2px_rgba(74,222,128,0.6)] animate-pulse" />
+                                </div>
+                                <input ref={scanInputRef} type="text" value={scanBuffer} onChange={(e) => setScanBuffer(e.target.value)} onKeyDown={handleScanKeyDown}
+                                  placeholder="Escaneá la bolsa con la pistola..."
+                                  className="w-full bg-black/50 border border-green-500/30 focus:border-green-500/60 text-white text-sm font-mono rounded-xl pl-14 pr-4 py-3 outline-none transition-all placeholder:text-gray-600 focus:bg-black/70 focus:shadow-[0_0_20px_rgba(74,222,128,0.08)]"
+                                  autoComplete="off" spellCheck={false} />
+                              </div>
+                            )}
+
+                            {scanError && estaPreparando && (
+                              <div className="flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-xl">
+                                <AlertCircle size={14} className="text-red-400 shrink-0" />
+                                <p className="text-red-400 text-xs font-bold">{scanError}</p>
+                              </div>
+                            )}
+                            {scanSuccess && estaPreparando && (
+                              <div className="flex items-center gap-2 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded-xl animate-in slide-in-from-top-1 duration-200">
+                                <Check size={14} className="text-green-400 shrink-0" />
+                                <p className="text-green-400 text-xs font-bold">{scanSuccess}</p>
+                              </div>
+                            )}
+
+                            {/* Items del pedido */}
+                            <div className="space-y-2">
+                              {(prep?.items || []).map((item, idx) => {
+                                const bolsas = item.bolsasAsignadas || [];
+                                const completo = bolsas.length >= item.cantidad;
+                                const pesoReal = bolsas.reduce((s, b) => s + (b.peso || 0), 0);
+                                const pesoPedido = item.pesoSolicitado ? item.pesoSolicitado * item.cantidad : null;
+                                const diff = pesoPedido ? Math.round((pesoReal - pesoPedido) * 1000) / 1000 : null;
+
+                                return (
+                                  <div key={idx} className={`rounded-xl border p-3 transition-all ${completo ? 'bg-green-500/5 border-green-500/20' : 'bg-black/30 border-white/5'}`}>
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center gap-2.5">
+                                        <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-black ${completo ? 'bg-green-500 text-white' : 'bg-gray-800 text-gray-400 border border-gray-700'}`}>
+                                          {completo ? <Check size={14} /> : `${bolsas.length}/${item.cantidad}`}
+                                        </div>
+                                        <div>
+                                          <p className={`text-xs font-bold uppercase tracking-wide ${completo ? 'text-green-300' : 'text-white'}`}>{item.nombre}</p>
+                                          <p className="text-[10px] text-gray-500 font-mono">
+                                            {item.cantidad} {item.cantidad === 1 ? 'bolsa' : 'bolsas'}
+                                            {pesoPedido ? ` · Pedido: ${pesoPedido.toFixed(3)} kg` : ''}
+                                          </p>
+                                        </div>
+                                      </div>
+                                      {bolsas.length > 0 && (
+                                        <div className="text-right">
+                                          <p className="text-green-400 font-mono text-xs font-bold">{pesoReal.toFixed(3)} kg</p>
+                                          {diff !== null && diff !== 0 && (
+                                            <p className={`text-[10px] font-bold font-mono ${diff > 0 ? 'text-amber-400' : 'text-red-400'}`}>{diff > 0 ? '+' : ''}{diff.toFixed(3)} kg</p>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                    {bolsas.length > 0 && (
+                                      <div className="mt-2 space-y-1 pl-8">
+                                        {bolsas.map((bolsa, bIdx) => (
+                                          <div key={bIdx} className="flex items-center justify-between text-[10px] bg-black/30 rounded-lg px-2.5 py-1.5 group">
+                                            <div className="flex items-center gap-2">
+                                              <span className="text-green-400">✓</span>
+                                              <span className="text-gray-300 font-mono">{bolsa.uniqueCode}</span>
+                                              <span className="text-gray-500">—</span>
+                                              <span className="text-green-400 font-bold font-mono">{bolsa.peso?.toFixed(3)} kg</span>
+                                              {bolsa.tagId && <span className="text-gray-600 font-mono">[{bolsa.tagId}]</span>}
+                                            </div>
+                                            {estaPreparando && (
+                                              <button onClick={() => quitarBolsaAsignada(p.numero_pedido, idx, bIdx)} className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 cursor-pointer transition-all p-0.5" title="Quitar bolsa">
+                                                <X size={12} />
+                                              </button>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+
+                            {/* Botón MARCAR PREPARADO */}
+                            {estaPreparando && todosCompletos && (
+                              <button onClick={() => marcarPreparado(p.numero_pedido)} className="w-full flex items-center justify-center gap-3 py-4 rounded-2xl bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-400 hover:to-emerald-400 text-white font-black text-sm uppercase tracking-widest transition-all active:scale-[0.98] cursor-pointer shadow-lg shadow-green-900/40 border-b-2 border-green-700 animate-pulse">
+                                <CheckCircle size={20} /> ✅ MARCAR COMO PREPARADO
+                              </button>
+                            )}
+
+                            {/* Continuar preparando */}
+                            {!estaPreparando && !todosCompletos && tieneBolsas && (
+                              <button onClick={() => { setPreparandoPedido(p.numero_pedido); setTimeout(() => scanInputRef.current?.focus(), 100); }} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 font-bold text-xs uppercase tracking-wider transition-all cursor-pointer">
+                                <ScanBarcode size={16} /> Continuar preparando
+                              </button>
+                            )}
+
+                            {/* Imprimir remito */}
+                            {todosCompletos && (
+                              <button onClick={() => imprimirRemitoConPesoReal(p)} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 font-bold text-xs uppercase tracking-wider transition-all cursor-pointer mt-2">
+                                <Printer size={16} /> 🖨️ Imprimir Remito con Peso Real
+                              </button>
+                            )}
+
+                            {/* Botonera de estado */}
+                            <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-white/5">
+                              <button onClick={() => actualizarEstado(p.numero_pedido, 'Pendiente')} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all cursor-pointer ${estadoActual === 'pendiente' ? 'bg-amber-500/20 border-amber-500/30 text-amber-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-amber-400'}`}>
+                                <span>⏳</span> Pendiente
+                              </button>
+                              <button onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'Preparado' : 'Entregado')} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all cursor-pointer ${estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/30 text-blue-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-blue-400'}`}>
+                                <span>🚚</span> Entregado
+                              </button>
+                              <button onClick={() => actualizarEstado(p.numero_pedido, 'No entregado')} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all cursor-pointer ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/30 text-red-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-red-400'}`}>
+                                <span>❌</span> No entregado
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Botonera legado (sin preparación en memoria) */}
+                        {!prep && !estaPreparando && estadoActual !== 'pendiente' && (
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <button onClick={() => rol !== 'repartidor' ? actualizarEstado(p.numero_pedido, 'Pendiente') : null} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 ${estadoActual === 'pendiente' ? 'bg-amber-500/20 border-amber-500/40 text-amber-400' : 'bg-amber-500/5 border-amber-500/10 text-amber-400 hover:bg-amber-500/10'} ${rol === 'repartidor' ? 'opacity-50 cursor-default' : 'cursor-pointer hover:scale-[1.02]'}`}>
+                              <span className="text-xl">⏳</span> PENDIENTE
+                            </button>
+                            <button onClick={() => rol !== 'repartidor' ? actualizarEstado(p.numero_pedido, 'Preparado') : null} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 ${(estadoActual === 'preparado' || estadoActual === 'listo') ? 'bg-green-500/20 border-green-500/40 text-green-400' : 'bg-green-500/5 border-green-500/10 text-green-500 hover:bg-green-500/10'} ${rol === 'repartidor' ? 'opacity-50 cursor-default' : 'cursor-pointer hover:scale-[1.02]'}`}>
+                              <span className="text-xl">✅</span> PREPARADO
+                            </button>
+                            <button onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'Preparado' : 'Entregado')} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-blue-500/5 border-blue-500/10 text-blue-500 hover:bg-blue-500/10'}`}>
+                              <span className="text-xl">🚚</span> ENTREGADO
+                            </button>
+                            <button onClick={() => actualizarEstado(p.numero_pedido, (estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'Preparado' : 'No entregado')} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10'}`}>
+                              <span className="text-xl">❌</span> NO ENTREGADO
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Repartidor: botonera simplificada */}
                     {rol === 'repartidor' && (
-                      <p className="text-center text-[9px] text-gray-600 mt-4 leading-relaxed italic">
-                        Los estados "Pendiente" y "Preparado" son solo de lectura para el repartidor. 
-                        Cualquier cambio se sincronizará automáticamente con el Google Sheet.
-                      </p>
+                      <div className="bg-black/60 border border-white/10 rounded-2xl p-5 shadow-inner mt-4">
+                        <p className="text-center text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-4">Actualizar Entrega</p>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                          <button className="flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] bg-amber-500/5 border-amber-500/10 text-amber-400 opacity-50 cursor-default"><span className="text-xl">⏳</span> PENDIENTE</button>
+                          <button className="flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] bg-green-500/5 border-green-500/10 text-green-500 opacity-50 cursor-default"><span className="text-xl">✅</span> PREPARADO</button>
+                          <button onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'Preparado' : 'Entregado')} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-blue-500/5 border-blue-500/10 text-blue-500 hover:bg-blue-500/10'}`}><span className="text-xl">🚚</span> ENTREGADO</button>
+                          <button onClick={() => actualizarEstado(p.numero_pedido, 'No entregado')} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10'}`}><span className="text-xl">❌</span> NO ENTREGADO</button>
+                        </div>
+                        <p className="text-center text-[9px] text-gray-600 mt-4 leading-relaxed italic">Los estados "Pendiente" y "Preparado" son solo de lectura para el repartidor.</p>
+                      </div>
                     )}
                   </div>
                 )}
