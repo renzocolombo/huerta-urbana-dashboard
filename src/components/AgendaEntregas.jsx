@@ -177,10 +177,11 @@ export default function AgendaEntregas({ rol, usuario }) {
     }
   };
 
-  const abrirWhatsApp = (telefono, nombre, producto) => {
-    const primerNombre = (nombre || '').split(' ')[0] || "Cliente";
-    const msg = encodeURIComponent(`Hola ${primerNombre}! 🥦 Estuvimos armando tu pedido de *${producto || ''}* de Huerta Urbana. Nos pondremos en contacto pronto por la entrega.`);
-    window.open(`https://wa.me/${(telefono || '').replace(/\D/g, '')}?text=${msg}`, '_blank');
+  const abrirWhatsApp = (telefono, nombre) => {
+    const primerNombre = (nombre || '').split(' ')[0] || 'Cliente';
+    const texto = `Hola ${primerNombre}! %F0%9F%91%8B ¿Cómo estás? Te escribimos desde Huerta Urbana %F0%9F%A5%A6`;
+    const url = `https://web.whatsapp.com/send?phone=${(telefono || '').replace(/\D/g, '')}&text=${texto}`;
+    window.open(url, '_blank');
   };
 
   const abrirRutaGoogle = () => {
@@ -520,7 +521,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                       </div>
                       <div className="space-y-4 flex flex-col justify-between">
                         <div className="flex flex-col sm:flex-row gap-2">
-                          <button onClick={() => abrirWhatsApp(p.telefono, p.nombre, p.producto)} className="flex-1 flex items-center justify-center gap-2 bg-[#25D366]/10 hover:bg-[#25D366]/20 border border-[#25D366]/30 text-[#25D366] text-sm font-bold px-4 py-3 rounded-xl transition-all">
+                          <button onClick={() => abrirWhatsApp(p.telefono, p.nombre)} className="flex-1 flex items-center justify-center gap-2 bg-[#25D366]/10 hover:bg-[#25D366]/20 border border-[#25D366]/30 text-[#25D366] text-sm font-bold px-4 py-3 rounded-xl transition-all">
                             <MessageCircle size={18} /> WhatsApp: {p.telefono}
                           </button>
                           {rol !== 'repartidor' && (
