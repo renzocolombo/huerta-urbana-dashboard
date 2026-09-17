@@ -151,10 +151,12 @@ export default function AgendaEntregas({ rol, usuario }) {
     try { const s = localStorage.getItem(PREPARACIONES_KEY); return s ? JSON.parse(s) : {}; } catch (e) { return {}; }
   });
   const [preparandoPedido, setPreparandoPedido] = useState(null);
+  const [modalPreparacion, setModalPreparacion] = useState(null); // { pedido }
   const [scanBuffer, setScanBuffer] = useState('');
   const [scanError, setScanError] = useState(null);
   const [scanSuccess, setScanSuccess] = useState(null);
   const scanInputRef = useRef(null);
+  const modalScanInputRef = useRef(null);
   const stockDataRef = useRef(stockData);
 
   useEffect(() => { stockDataRef.current = stockData; }, [stockData]);
@@ -202,7 +204,8 @@ export default function AgendaEntregas({ rol, usuario }) {
     setPedidosAbiertos(prev => ({ ...prev, [numPedido]: true }));
     setScanError(null);
     setScanSuccess(null);
-    setTimeout(() => scanInputRef.current?.focus(), 100);
+    setModalPreparacion({ pedido });
+    setTimeout(() => modalScanInputRef.current?.focus(), 150);
   }, [preparaciones]);
 
   // ── ESCANEAR BOLSA ─────────────────────────────────────────────────────────
@@ -295,6 +298,13 @@ export default function AgendaEntregas({ rol, usuario }) {
     setPreparandoPedido(null);
   }, []);
 
+  const cargarRemito = useCallback((numPedido) => {
+    marcarPreparado(numPedido);
+    setModalPreparacion(null);
+    setScanError(null);
+    setScanSuccess(null);
+  }, [marcarPreparado]);
+
   const quitarBolsaAsignada = useCallback((numPedido, itemIdx, bolsaIdx) => {
     setPreparaciones(prev => {
       const prep = { ...prev[numPedido] };
@@ -345,8 +355,17 @@ export default function AgendaEntregas({ rol, usuario }) {
       e.target.value = '';
       setScanBuffer('');
       if (code) procesarEscaneoPedido(code);
+      setTimeout(() => modalScanInputRef.current?.focus(), 50);
     }
   };
+
+  const cerrarModalPreparacion = useCallback(() => {
+    setModalPreparacion(null);
+    setPreparandoPedido(null);
+    setScanError(null);
+    setScanSuccess(null);
+    setScanBuffer('');
+  }, []);
 
   // ══════════════════════════════════════════════════════════════════════════
   // RENDER
@@ -920,6 +939,292 @@ export default function AgendaEntregas({ rol, usuario }) {
           </div>
         </div>
       )}
+
+      {/* ═══════ MODAL FULLSCREEN: ARMAR PEDIDO (2 COLUMNAS) ═══════ */}
+      {modalPreparacion && (() => {
+        const mp = modalPreparacion.pedido;
+        const numPedido = mp.numero_pedido;
+        const prep = preparaciones[numPedido];
+        const todosCompletos = prep?.completado || false;
+        const items = prep?.items || [];
+
+        // Feed de bolsas escaneadas en orden cronológico (todas las bolsas de todos los items)
+        const feedBolsas = items
+          .flatMap((item, itemIdx) =>
+            (item.bolsasAsignadas || []).map((b, bIdx) => ({ ...b, itemNombre: item.nombre, itemIdx, bIdx }))
+          )
+          .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+
+        return (
+          <div
+            className="fixed inset-0 z-[60] flex flex-col bg-[#0a0f16]/98 backdrop-blur-xl animate-in fade-in duration-200"
+            style={{ fontFamily: "'Inter', sans-serif" }}
+          >
+            {/* ── HEADER ── */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-[#111827]/80 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-green-500/20 border border-green-500/30 flex items-center justify-center">
+                  <Package size={20} className="text-green-400" />
+                </div>
+                <div>
+                  <h2 className="text-white font-black text-base tracking-tight">📦 Armando pedido de <span className="text-green-400">{mp.nombre}</span></h2>
+                  <p className="text-gray-500 text-xs font-mono mt-0.5">{numPedido} · {mp.localidad} · {mp.horario_entrega}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                {/* Progreso */}
+                <div className="hidden sm:flex items-center gap-2 bg-black/40 border border-white/10 rounded-xl px-3 py-1.5">
+                  <div className="flex gap-1">
+                    {items.map((item, i) => (
+                      <div
+                        key={i}
+                        className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                          (item.bolsasAsignadas?.length || 0) >= item.cantidad
+                            ? 'bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.6)]'
+                            : 'bg-gray-700'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  <span className="text-gray-400 text-xs font-mono">
+                    {items.filter(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad).length}/{items.length}
+                  </span>
+                </div>
+                <button
+                  onClick={cerrarModalPreparacion}
+                  className="w-9 h-9 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 flex items-center justify-center text-gray-400 hover:text-white transition-all cursor-pointer"
+                  title="Cerrar sin guardar"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* ── INPUT DE ESCANEO ── */}
+            <div className="px-6 py-3 bg-[#0d1117] border-b border-white/5 shrink-0">
+              <div className="relative max-w-2xl mx-auto">
+                <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                  <ScanBarcode size={18} className="text-green-400" />
+                  {!todosCompletos && (
+                    <div className="w-2 h-2 rounded-full bg-green-400 shadow-[0_0_8px_2px_rgba(74,222,128,0.6)] animate-pulse" />
+                  )}
+                </div>
+                <input
+                  ref={modalScanInputRef}
+                  type="text"
+                  value={scanBuffer}
+                  onChange={(e) => setScanBuffer(e.target.value)}
+                  onKeyDown={handleScanKeyDown}
+                  placeholder={todosCompletos ? '✅ Pedido completo — presioná "Cargar remito"' : 'Escaneá la bolsa con la pistola...'}
+                  disabled={todosCompletos}
+                  className="w-full bg-black/60 border border-green-500/30 focus:border-green-500/60 text-white text-sm font-mono rounded-2xl pl-14 pr-4 py-3.5 outline-none transition-all placeholder:text-gray-600 focus:bg-black/80 focus:shadow-[0_0_30px_rgba(74,222,128,0.08)] disabled:opacity-50 disabled:cursor-not-allowed"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+              {/* Error / Success feedback */}
+              {scanError && (
+                <div className="flex items-center gap-2 max-w-2xl mx-auto mt-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-xl">
+                  <AlertCircle size={13} className="text-red-400 shrink-0" />
+                  <p className="text-red-400 text-xs font-bold">{scanError}</p>
+                </div>
+              )}
+              {scanSuccess && !scanError && (
+                <div className="flex items-center gap-2 max-w-2xl mx-auto mt-2 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded-xl animate-in slide-in-from-top-1 duration-200">
+                  <Check size={13} className="text-green-400 shrink-0" />
+                  <p className="text-green-400 text-xs font-bold">{scanSuccess}</p>
+                </div>
+              )}
+            </div>
+
+            {/* ── CUERPO 2 COLUMNAS ── */}
+            <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-0 overflow-hidden">
+
+              {/* ── COL IZQUIERDA: Lista del Pedido ── */}
+              <div className="flex flex-col border-r border-white/5 overflow-hidden">
+                <div className="px-5 py-3 border-b border-white/5 bg-[#111827]/50 shrink-0">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">📋 Lista del Pedido</p>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                  {items.length === 0 && (
+                    <div className="text-center text-gray-600 text-xs italic py-8">Sin productos en el pedido</div>
+                  )}
+                  {items.map((item, idx) => {
+                    const bolsas = item.bolsasAsignadas || [];
+                    const completo = bolsas.length >= item.cantidad;
+                    const parcial = bolsas.length > 0 && !completo;
+                    const pesoReal = bolsas.reduce((s, b) => s + (b.peso || 0), 0);
+                    const pesoPedido = item.pesoSolicitado ? item.pesoSolicitado * item.cantidad : null;
+                    const diff = (pesoPedido && pesoReal > 0) ? Math.round((pesoReal - pesoPedido) * 1000) / 1000 : null;
+
+                    return (
+                      <div
+                        key={idx}
+                        className={`rounded-2xl border p-4 transition-all duration-500 ${
+                          completo
+                            ? 'bg-green-500/8 border-green-500/25 shadow-[0_0_20px_rgba(34,197,94,0.06)]'
+                            : parcial
+                            ? 'bg-amber-500/5 border-amber-500/20'
+                            : 'bg-white/[0.02] border-white/5'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            {/* Indicador visual */}
+                            <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shrink-0 transition-all duration-300 ${
+                              completo
+                                ? 'bg-green-500 text-white shadow-[0_0_15px_rgba(34,197,94,0.4)]'
+                                : parcial
+                                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                : 'bg-gray-800 text-gray-500 border border-gray-700'
+                            }`}>
+                              {completo ? <Check size={16} /> : `${bolsas.length}/${item.cantidad}`}
+                            </div>
+                            <div>
+                              <p className={`text-sm font-bold uppercase tracking-wide transition-colors duration-300 ${
+                                completo ? 'text-green-300' : parcial ? 'text-amber-300' : 'text-gray-400'
+                              }`}>
+                                {item.nombre}
+                              </p>
+                              <p className="text-[11px] text-gray-600 font-mono mt-0.5">
+                                {item.cantidad} {item.cantidad === 1 ? 'bolsa' : 'bolsas'}
+                                {pesoPedido ? ` · Pedido: ${pesoPedido.toFixed(3)} kg` : ''}
+                              </p>
+                            </div>
+                          </div>
+                          {/* Peso real + diferencia */}
+                          {pesoReal > 0 && (
+                            <div className="text-right shrink-0">
+                              <p className="text-green-400 font-mono text-sm font-bold">{pesoReal.toFixed(3)} kg</p>
+                              {diff !== null && diff !== 0 && (
+                                <p className={`text-[11px] font-bold font-mono ${
+                                  diff > 0 ? 'text-emerald-400' : 'text-red-400'
+                                }`}>
+                                  {diff > 0 ? '+' : ''}{diff.toFixed(3)} kg
+                                  {diff > 0 && <span className="ml-1 text-[9px] font-black text-emerald-500 uppercase tracking-wider">regalo</span>}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Sub-bolsas asignadas */}
+                        {bolsas.length > 0 && (
+                          <div className="mt-3 space-y-1 pl-11">
+                            {bolsas.map((bolsa, bIdx) => (
+                              <div key={bIdx} className="flex items-center justify-between text-[10px] bg-black/30 rounded-lg px-2.5 py-1.5 group">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-green-400">✓</span>
+                                  <span className="text-gray-400 font-mono">{bolsa.uniqueCode}</span>
+                                  <span className="text-green-400 font-bold font-mono">{bolsa.peso?.toFixed(3)} kg</span>
+                                </div>
+                                <button
+                                  onClick={() => quitarBolsaAsignada(numPedido, idx, bIdx)}
+                                  className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 cursor-pointer transition-all p-0.5"
+                                  title="Quitar bolsa"
+                                >
+                                  <X size={11} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* ── COL DERECHA: Feed de bolsas escaneadas ── */}
+              <div className="flex flex-col overflow-hidden">
+                <div className="px-5 py-3 border-b border-white/5 bg-[#111827]/50 shrink-0 flex items-center justify-between">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">📡 Escaneado en tiempo real</p>
+                  <span className="text-[10px] font-mono text-gray-600 bg-black/30 px-2 py-0.5 rounded-lg border border-white/5">
+                    {feedBolsas.length} bolsa{feedBolsas.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                  {feedBolsas.length === 0 && (
+                    <div className="flex flex-col items-center justify-center h-full gap-4 text-center py-12">
+                      <div className="w-16 h-16 rounded-2xl bg-white/[0.02] border border-white/5 flex items-center justify-center">
+                        <ScanBarcode size={28} className="text-gray-700" />
+                      </div>
+                      <div>
+                        <p className="text-gray-600 text-sm font-medium">Esperando escaneo...</p>
+                        <p className="text-gray-700 text-xs mt-1">Apuntá la pistola al código de barras de la bolsa</p>
+                      </div>
+                    </div>
+                  )}
+                  {[...feedBolsas].reverse().map((bolsa, i) => (
+                    <div
+                      key={bolsa.uniqueCode}
+                      className={`rounded-2xl border p-3.5 transition-all ${
+                        i === 0
+                          ? 'bg-green-500/10 border-green-500/30 shadow-[0_0_20px_rgba(34,197,94,0.08)] animate-in slide-in-from-top-2 duration-300'
+                          : 'bg-white/[0.02] border-white/5'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                            i === 0 ? 'bg-green-500/20 text-green-400' : 'bg-gray-800 text-gray-500'
+                          }`}>
+                            <Check size={14} />
+                          </div>
+                          <div>
+                            <p className={`text-xs font-bold uppercase tracking-wide ${
+                              i === 0 ? 'text-green-300' : 'text-gray-400'
+                            }`}>
+                              {bolsa.itemNombre}
+                            </p>
+                            <p className="text-[10px] text-gray-600 font-mono">{bolsa.uniqueCode}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className={`font-mono text-sm font-bold ${
+                            i === 0 ? 'text-green-400' : 'text-gray-400'
+                          }`}>
+                            {bolsa.peso?.toFixed(3)} kg
+                          </p>
+                          <p className="text-[9px] text-gray-700 font-mono">
+                            #{feedBolsas.length - i}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* ── FOOTER: Botón Cargar Remito ── */}
+            <div className="px-6 py-4 border-t border-white/10 bg-[#111827]/80 shrink-0">
+              {todosCompletos ? (
+                <button
+                  onClick={() => cargarRemito(numPedido)}
+                  className="w-full flex items-center justify-center gap-3 py-4 rounded-2xl bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-400 hover:to-emerald-400 text-white font-black text-base uppercase tracking-widest transition-all active:scale-[0.98] cursor-pointer shadow-[0_8px_30px_rgba(34,197,94,0.35)] border-b-2 border-green-700 animate-in zoom-in-95 duration-300"
+                >
+                  <CheckCircle size={22} />
+                  ✅ Cargar Remito — Marcar como Preparado
+                </button>
+              ) : (
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2 text-gray-600 text-xs">
+                    <AlertCircle size={13} className="text-gray-600" />
+                    <span>Completá todos los productos para habilitar el cierre</span>
+                  </div>
+                  <button
+                    onClick={cerrarModalPreparacion}
+                    className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-gray-400 hover:text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all cursor-pointer"
+                  >
+                    <X size={14} /> Cerrar sin guardar
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
