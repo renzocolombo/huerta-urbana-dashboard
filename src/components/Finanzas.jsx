@@ -23,7 +23,7 @@ const STORAGE_COMBOS_KEY = 'huerta_data_costos_v31_combos';
 
 const CONFIG_DEFAULT = {
   comisionMP: 8,          // 8%
-  costoPackaging: 500,    // $500 por pedido
+  costoPackaging: 100,    // $100 por kilo de producto (configurable)
   monotributoMensual: 52000, // $52.000 mensual
   diasMesProrrateo: 30,   // Base 30 días
 };
@@ -122,8 +122,8 @@ export default function Finanzas() {
     return 0;
   };
 
-  // ── 6. Calcular costo de un pedido individual ──────────────────────────────
-  const calcularCostoPedido = (pedido) => {
+  // ── 6. Calcular costo y kilos de un pedido individual ──────────────────────
+  const analizarPedido = (pedido) => {
     const texto = pedido.producto || '';
     const nTexto = norm(texto);
     const cantPedido = Number(pedido.cantidades || 1);
@@ -136,18 +136,24 @@ export default function Finanzas() {
 
     if (comboMatch && comboMatch.productos) {
       let costoCombo = 0;
+      let kilosCombo = 0;
       comboMatch.productos.forEach(it => {
         const cKilo = resolverCostoProducto(it.nombre);
-        costoCombo += cKilo * (Number(it.cantidad) || 1);
+        const cantItem = Number(it.cantidad) || 1;
+        costoCombo += cKilo * cantItem;
+        kilosCombo += cantItem;
       });
-      return Math.round(costoCombo * cantPedido);
+      return {
+        costoMercaderia: Math.round(costoCombo * cantPedido),
+        totalKilos: Math.round(kilosCombo * cantPedido * 10) / 10
+      };
     }
 
     // Caso B: Parsear lista de productos sueltos o combos personalizados
     const items = parsearProductosPedido(texto, cantPedido);
     if (items.length > 0) {
       let costoTotalItems = 0;
-      let matchedItems = 0;
+      let kilosTotalItems = 0;
 
       items.forEach(it => {
         // Verificar si el item es un sub-combo
@@ -155,25 +161,33 @@ export default function Finanzas() {
         if (subCombo && subCombo.productos) {
           subCombo.productos.forEach(pIng => {
             const cK = resolverCostoProducto(pIng.nombre);
-            costoTotalItems += cK * (Number(pIng.cantidad) || 1) * (it.cantidad || 1);
+            const cantIng = Number(pIng.cantidad) || 1;
+            costoTotalItems += cK * cantIng * (it.cantidad || 1);
+            kilosTotalItems += cantIng * (it.cantidad || 1);
           });
-          matchedItems++;
           return;
         }
 
         const cKilo = resolverCostoProducto(it.nombre);
-        if (cKilo > 0) matchedItems++;
         const peso = it.pesoSolicitado !== null && it.pesoSolicitado > 0 ? it.pesoSolicitado : (it.cantidad || 1);
         costoTotalItems += cKilo * peso;
+        kilosTotalItems += peso;
       });
 
-      if (costoTotalItems > 0) {
-        return Math.round(costoTotalItems);
+      if (costoTotalItems > 0 || kilosTotalItems > 0) {
+        return {
+          costoMercaderia: Math.round(costoTotalItems),
+          totalKilos: Math.round(kilosTotalItems * 10) / 10
+        };
       }
     }
 
     // Caso C: Fallback para productos sin desglose
-    return Math.round((pedido.total || 0) * 0.40);
+    const kilosEstimados = Math.max(1, cantPedido * 5);
+    return {
+      costoMercaderia: Math.round((pedido.total || 0) * 0.40),
+      totalKilos: kilosEstimados
+    };
   };
 
   // ── 7. Filtrado de ventas aprobadas por período ─────────────────────────────
@@ -236,9 +250,10 @@ export default function Finanzas() {
   const ventasDetalladas = useMemo(() => {
     return pedidosPeriodo.map(p => {
       const precioVenta = Number(p.total || 0);
-      const costoMercaderia = calcularCostoPedido(p);
+      const { costoMercaderia, totalKilos } = analizarPedido(p);
       const comisionMP = Math.round(precioVenta * (config.comisionMP / 100));
-      const packaging = config.costoPackaging;
+      // Packaging ES POR KILO: se multiplica por la cantidad de kilos del pedido
+      const packaging = Math.round(totalKilos * (Number(config.costoPackaging) || 0));
       const gananciaBruta = precioVenta - costoMercaderia - comisionMP - packaging;
       const margenPct = precioVenta > 0 ? ((gananciaBruta / precioVenta) * 100).toFixed(1) : 0;
 
@@ -246,21 +261,23 @@ export default function Finanzas() {
         ...p,
         precioVenta,
         costoMercaderia,
+        totalKilos,
         comisionMP,
         packaging,
         gananciaBruta,
         margenPct
       };
     });
-  }, [pedidosPeriodo, config, catalogoCostos]);
+  }, [pedidosPeriodo, config, catalogoCostos, catalogoCombos]);
 
   // ── 9. Totales y Prorrateo del Período ──────────────────────────────────────
   const stats = useMemo(() => {
     const cantPedidos = ventasDetalladas.length;
     const facturacionBruta = ventasDetalladas.reduce((s, v) => s + v.precioVenta, 0);
     const costoMercaderiaTotal = ventasDetalladas.reduce((s, v) => s + v.costoMercaderia, 0);
+    const totalKilos = ventasDetalladas.reduce((s, v) => s + v.totalKilos, 0);
     const comisionMPTotal = ventasDetalladas.reduce((s, v) => s + v.comisionMP, 0);
-    const packagingTotal = cantPedidos * config.costoPackaging;
+    const packagingTotal = ventasDetalladas.reduce((s, v) => s + v.packaging, 0);
     const gananciaBrutaTotal = facturacionBruta - costoMercaderiaTotal - comisionMPTotal - packagingTotal;
 
     // Prorrateo de Monotributo según el período
@@ -285,6 +302,7 @@ export default function Finanzas() {
       cantPedidos,
       facturacionBruta,
       costoMercaderiaTotal,
+      totalKilos,
       comisionMPTotal,
       packagingTotal,
       gananciaBrutaTotal,
@@ -575,7 +593,7 @@ export default function Finanzas() {
             </div>
           </div>
 
-          {/* Packaging */}
+          {/* Packaging (por kilo) */}
           <div className="rounded-2xl bg-[#111827] border border-white/5 p-4 flex flex-col justify-between">
             <div className="flex items-center justify-between text-gray-400 mb-2">
               <span className="text-[10px] font-bold uppercase tracking-wider">Packaging</span>
@@ -583,7 +601,9 @@ export default function Finanzas() {
             </div>
             <div>
               <p className="text-xl font-black text-red-400">- {$$(stats.packagingTotal)}</p>
-              <p className="text-[10px] text-gray-500 mt-0.5">${config.costoPackaging} por pedido</p>
+              <p className="text-[10px] text-gray-500 mt-0.5" title="Total de kilos vendidos multiplicado por el costo de packaging por kilo">
+                {stats.totalKilos.toFixed(1)} kg (${config.costoPackaging}/kg)
+              </p>
             </div>
           </div>
 
@@ -650,11 +670,11 @@ export default function Finanzas() {
             <thead className="bg-black/40 text-gray-400 font-bold uppercase text-[10px] border-b border-white/5">
               <tr>
                 <th className="px-5 py-3">Pedido / Cliente</th>
-                <th className="px-4 py-3">Productos</th>
+                <th className="px-4 py-3">Productos / Peso</th>
                 <th className="px-4 py-3 text-right">Precio Venta</th>
                 <th className="px-4 py-3 text-right">Costo Mercadería</th>
                 <th className="px-4 py-3 text-right">Comisión MP</th>
-                <th className="px-4 py-3 text-right">Packaging</th>
+                <th className="px-4 py-3 text-right">Packaging (${config.costoPackaging}/kg)</th>
                 <th className="px-5 py-3 text-right">Ganancia Bruta</th>
               </tr>
             </thead>
@@ -687,8 +707,8 @@ export default function Finanzas() {
                         <p className="truncate font-medium text-gray-200" title={v.producto}>
                           {v.producto}
                         </p>
-                        <p className="text-[10px] text-gray-500 font-mono">
-                          x{v.cantidades || 1} {v.cantidades === 1 ? 'unidad' : 'unidades'}
+                        <p className="text-[10px] text-emerald-400 font-mono font-bold">
+                          {v.totalKilos} kg · x{v.cantidades || 1} {v.cantidades === 1 ? 'unidad' : 'unidades'}
                         </p>
                       </td>
                       <td className="px-4 py-3.5 text-right font-mono font-bold text-white">
@@ -701,7 +721,8 @@ export default function Finanzas() {
                         - {$$(v.comisionMP)}
                       </td>
                       <td className="px-4 py-3.5 text-right font-mono text-red-400">
-                        - {$$(v.packaging)}
+                        <span>- {$$(v.packaging)}</span>
+                        <p className="text-[10px] text-gray-500 font-mono">{v.totalKilos} kg x ${config.costoPackaging}</p>
                       </td>
                       <td className="px-5 py-3.5 text-right">
                         <span className="font-mono font-black text-emerald-400">
@@ -755,18 +776,18 @@ export default function Finanzas() {
 
             <form onSubmit={guardarConfiguracion} className="space-y-4 text-xs">
               
-              {/* Packaging */}
+              {/* Packaging por kilo */}
               <div>
                 <label className="block text-gray-300 font-bold mb-1">
-                  Costo de Packaging por Pedido ($)
+                  Costo de Packaging por Kilo ($/kg)
                 </label>
                 <p className="text-[11px] text-gray-500 mb-1.5">
-                  Bolsas kraft, bandejas plásticas, etiquetas y stickers por cada entrega.
+                  Bolsas kraft, bandejas plásticas, etiquetas y stickers por cada kilo de verdura o fruta vendida. Se multiplica automáticamente por los kilos de cada pedido.
                 </p>
                 <input
                   type="number"
                   min="0"
-                  step="50"
+                  step="10"
                   value={tempConfig.costoPackaging}
                   onChange={(e) => setTempConfig({ ...tempConfig, costoPackaging: Number(e.target.value) || 0 })}
                   className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2 text-white font-mono outline-none focus:border-emerald-500"
