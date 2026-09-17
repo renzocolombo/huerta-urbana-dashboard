@@ -14,9 +14,16 @@ const ESTADO_CONFIG = {
 };
 
 const PAGO_CONFIG = {
-  pagado:   { label: 'Pagado',    color: 'text-green-400' },
-  pendiente: { label: 'Pendiente', color: 'text-red-400' },
+  pagado:    { label: 'Pagado',    color: 'text-green-400' },
+  approved:  { label: 'Aprobado',  color: 'text-green-400' },
+  aprobado:  { label: 'Aprobado',  color: 'text-green-400' },
+  pendiente: { label: 'Pendiente', color: 'text-amber-400' },
+  pending:   { label: 'Pendiente', color: 'text-amber-400' },
   sin_pago:  { label: 'Sin pago',  color: 'text-gray-500' },
+  rejected:  { label: 'Rechazado', color: 'text-red-400' },
+  rechazado: { label: 'Rechazado', color: 'text-red-400' },
+  cancelled: { label: 'Cancelado', color: 'text-gray-500' },
+  cancelado: { label: 'Cancelado', color: 'text-gray-500' },
 };
 
 function Badge({ config }) {
@@ -140,9 +147,15 @@ export default function PedidosDelDia() {
                       <Badge config={ESTADO_CONFIG[p.estado]} />
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`text-xs font-medium ${PAGO_CONFIG[p.estado_pago]?.color}`}>
-                        {PAGO_CONFIG[p.estado_pago]?.label}
-                      </span>
+                      {(() => {
+                        const pagoKey = (p.estado_pago || '').toLowerCase().trim();
+                        const config = PAGO_CONFIG[pagoKey] || { label: p.estado_pago || 'Pendiente', color: 'text-amber-400' };
+                        return (
+                          <span className={`text-xs font-medium ${config.color}`}>
+                            {config.label}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-4 py-3">
                       <button

@@ -8,9 +8,16 @@ const DIAS_SEMANA = ['Martes', 'Jueves'];
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
 const PAGO_CONFIG = {
-  pagado:   { label: 'Pagado',    color: 'text-green-400' },
-  pendiente: { label: 'Pendiente', color: 'text-red-400' },
+  pagado:    { label: 'Pagado',    color: 'text-green-400' },
+  approved:  { label: 'Aprobado',  color: 'text-green-400' },
+  aprobado:  { label: 'Aprobado',  color: 'text-green-400' },
+  pendiente: { label: 'Pendiente', color: 'text-amber-400' },
+  pending:   { label: 'Pendiente', color: 'text-amber-400' },
   sin_pago:  { label: 'Sin pago',  color: 'text-gray-500' },
+  rejected:  { label: 'Rechazado', color: 'text-red-400' },
+  rechazado: { label: 'Rechazado', color: 'text-red-400' },
+  cancelled: { label: 'Cancelado', color: 'text-gray-500' },
+  cancelado: { label: 'Cancelado', color: 'text-gray-500' },
 };
 
 const PREPARACIONES_KEY = 'huerta_preparaciones_v1';
@@ -609,7 +616,11 @@ export default function AgendaEntregas({ rol, usuario }) {
                               </div>
                               <div className="flex justify-between items-center border-t border-white/5 pt-2 mt-1 text-sm">
                                 <span className="text-gray-500">Estado de pago</span>
-                                <span className={`font-bold ${PAGO_CONFIG[p.estado_pago]?.color}`}>{(PAGO_CONFIG[p.estado_pago]?.label || '').toUpperCase()}</span>
+                                {(() => {
+                                  const pagoKey = (p.estado_pago || '').toLowerCase().trim();
+                                  const config = PAGO_CONFIG[pagoKey] || { label: p.estado_pago || 'Pendiente', color: 'text-amber-400' };
+                                  return <span className={`font-bold ${config.color}`}>{config.label.toUpperCase()}</span>;
+                                })()}
                               </div>
                             </>
                           ) : (
