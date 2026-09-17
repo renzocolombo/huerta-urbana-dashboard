@@ -144,6 +144,7 @@ export default function AgendaEntregas({ rol, usuario }) {
   // Modales
   const [modalNoEntrega, setModalNoEntrega] = useState(null); // { pedido, motivoTexto }
   const [modalEliminar, setModalEliminar] = useState(null);   // { pedido }
+  const [modalReiniciar, setModalReiniciar] = useState(null); // { pedido, numPedido, nombre }
 
   const abrirModalNoEntrega = (p) => {
     const motivoExistente = motivosNoEntrega[p.numero_pedido] || p.motivo_no_entrega || '';
@@ -368,12 +369,22 @@ export default function AgendaEntregas({ rol, usuario }) {
     });
   }, [revertirStockBolsa]);
 
-  const resetearPreparacion = useCallback((numPedido) => {
-    if (!window.confirm('¿Deshacer toda la preparación de este pedido?')) return;
+  const ejecutarReinicioPreparacion = useCallback((numPedido) => {
+    // Revertir stock de TODAS las bolsas de este pedido
+    const prep = preparaciones[numPedido];
+    if (prep?.items) {
+      prep.items.forEach(item => {
+        (item.bolsasAsignadas || []).forEach(bolsa => revertirStockBolsa(bolsa));
+      });
+    }
+    // Borrar la preparación de este pedido del state y localStorage
     setPreparaciones(prev => { const { [numPedido]: _, ...rest } = prev; return rest; });
     setPreparandoPedido(null);
+    setScanBuffer('');
+    setScanError(null);
+    setScanSuccess(null);
     actualizarEstado(numPedido, 'Pendiente');
-  }, []);
+  }, [preparaciones, revertirStockBolsa, actualizarEstado]);
 
   // ── IMPRIMIR REMITOS (INDIVIDUAL O LOTE UNIFICADO) ─────────────────────────
   const imprimirRemitoConPesoReal = useCallback((p, opciones = {}) => {
@@ -638,8 +649,17 @@ export default function AgendaEntregas({ rol, usuario }) {
                             {estaPreparando ? '📦 PREPARANDO PEDIDO' : todosCompletos ? '✅ PEDIDO PREPARADO' : 'Preparación del Pedido'}
                           </p>
                           {prep && (
-                            <button onClick={() => resetearPreparacion(p.numero_pedido)} className="text-[10px] text-gray-500 hover:text-red-400 flex items-center gap-1 cursor-pointer transition-colors">
-                              <RotateCcw size={11} /> Reiniciar
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setModalReiniciar({ pedido: p, numPedido: p.numero_pedido, nombre: p.nombre });
+                              }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 hover:border-rose-500/50 text-rose-300 hover:text-white text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
+                              title="Reiniciar y volver a preparar este pedido"
+                            >
+                              <RotateCcw size={13} className="text-rose-400" />
+                              <span>Reiniciar preparación</span>
                             </button>
                           )}
                         </div>
@@ -991,6 +1011,62 @@ export default function AgendaEntregas({ rol, usuario }) {
               >
                 <Trash2 size={14} />
                 <span>Sí, Eliminar Cliente</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════ MODAL CONFIRMACIÓN: REINICIAR PREPARACIÓN ═══════ */}
+      {modalReiniciar && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#111827] border border-rose-500/30 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+                <RotateCcw size={20} />
+              </div>
+              <div>
+                <h3 className="text-white font-bold text-base">¿Reiniciar preparación?</h3>
+                <p className="text-gray-400 text-xs font-mono">{modalReiniciar.numPedido} · {modalReiniciar.nombre}</p>
+              </div>
+            </div>
+
+            <div className="bg-black/40 border border-white/5 rounded-xl p-3.5 space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-gray-400">Cliente:</span>
+                <span className="font-bold text-white text-sm">{modalReiniciar.nombre}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Pedido N°:</span>
+                <span className="font-mono text-gray-200">{modalReiniciar.numPedido}</span>
+              </div>
+            </div>
+
+            <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-3.5 text-xs text-rose-300 flex items-start gap-2.5">
+              <AlertTriangle size={16} className="text-rose-400 shrink-0 mt-0.5" />
+              <p className="leading-relaxed">
+                Se deshará la preparación de este pedido, las bolsas escaneadas volverán a sumarse al stock disponible y la tarjeta quedará en estado <span className="font-bold text-amber-300">Pendiente</span> para poder volver a prepararse.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setModalReiniciar(null)}
+                className="flex-1 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  ejecutarReinicioPreparacion(modalReiniciar.numPedido);
+                  setModalReiniciar(null);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 active:scale-95 text-white text-xs font-bold transition-all cursor-pointer shadow-lg shadow-rose-900/30 flex items-center justify-center gap-1.5"
+              >
+                <RotateCcw size={14} />
+                <span>Sí, Reiniciar</span>
               </button>
             </div>
           </div>
