@@ -18,7 +18,7 @@ const PRODUCTOS_INICIALES = [
   { id: 1, nombre: 'Papa', categoria: 'duro', cantidadCajon: 20, unidad: 'kg', precioCajon: 12000, margen: 60, activo: true },
 ];
 
-const COMBOS_INICIALES = [
+export const COMBOS_INICIALES = [
   { 
     id: 101, 
     nombre: 'COMBO 1 — Básico', 

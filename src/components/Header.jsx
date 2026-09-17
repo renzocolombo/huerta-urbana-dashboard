@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Leaf, LayoutDashboard, ShoppingCart, Clock, Users, MapPin, Route, DollarSign, Package, FileText, Menu, X, LogOut, Database } from 'lucide-react';
+import { Leaf, LayoutDashboard, ShoppingCart, Clock, Users, MapPin, Route, DollarSign, Package, FileText, Menu, X, LogOut, Database, Landmark } from 'lucide-react';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 
 const NAV_ITEMS = [
@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { id: 'clientes',  label: 'Clientes',          icon: Users },
   { id: 'agenda',    label: 'Agenda entregas',   icon: MapPin },
   { id: 'costos',    label: 'Panel de costos',   icon: DollarSign },
+  { id: 'finanzas',  label: 'Finanzas',          icon: Landmark },
   { id: 'stock',     label: 'Control stock',     icon: Package },
   { id: 'reportes',  label: 'Reportes',          icon: FileText },
 ];

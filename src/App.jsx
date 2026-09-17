@@ -13,6 +13,7 @@ import Historial from './components/Historial';
 import Clientes from './components/Clientes';
 import AgendaEntregas from './components/AgendaEntregas';
 import PanelCostos from './components/PanelCostos';
+import Finanzas from './components/Finanzas';
 import ControlStock from './components/ControlStock';
 import Reportes from './components/Reportes';
 import IAFlotante from './components/IAFlotante';
@@ -27,6 +28,7 @@ const SECCIONES = {
   clientes:  { label: 'Clientes',         componente: Clientes },
   agenda:    { label: 'Agenda entregas',   componente: AgendaEntregas },
   costos:    { label: 'Panel de costos',  componente: PanelCostos },
+  finanzas:  { label: 'Finanzas',         componente: Finanzas },
   stock:     { label: 'Control stock',    componente: ControlStock },
   reportes:  { label: 'Reportes',         componente: Reportes },
 };

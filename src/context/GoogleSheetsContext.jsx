@@ -11,7 +11,14 @@ const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 
 export function GoogleSheetsProvider({ children }) {
   const [pedidos, setPedidos]         = useState(PEDIDOS_MOCK);
-  const [productosCostos, setProductosCostos] = useState([]);
+  const [productosCostos, setProductosCostos] = useState(() => {
+    try {
+      const s = localStorage.getItem('huerta_data_costos_v1_productos') || localStorage.getItem('huerta_data_costos_v31_productos');
+      return s ? JSON.parse(s) : [];
+    } catch (e) {
+      return [];
+    }
+  });
   const [stockData, setStockData]     = useState({});
   const [cargando, setCargando]       = useState(false);
   const [error, setError]             = useState(null);
@@ -19,11 +26,6 @@ export function GoogleSheetsProvider({ children }) {
   const [ultimoRefresco, setUltimoRefresco] = useState(new Date());
 
   const URL_SHEET = `https://docs.google.com/spreadsheets/d/${KEYS.SHEET_ID}/edit`;
-
-  // Carga única al montar — sin polling
-  useEffect(() => {
-    fetchSheetPedidos();
-  }, []);
 
   // Helper de lectura resiliente con fallback automático
   const fetchRowsFromSheet = useCallback(async (tabName) => {
@@ -242,6 +244,11 @@ export function GoogleSheetsProvider({ children }) {
       setCargando(false);
     }
   }, [fetchSheetPedidos, fetchPanelCostos, fetchControlStock]);
+
+  useEffect(() => {
+    fetchSheetPedidos();
+    fetchPanelCostos();
+  }, [fetchSheetPedidos, fetchPanelCostos]);
 
   const actualizarEstadoEnSheet = useCallback(async (fila, nuevoEstado, motivo = null) => {
     setPedidos(current =>
