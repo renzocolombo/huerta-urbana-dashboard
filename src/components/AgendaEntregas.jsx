@@ -277,7 +277,7 @@ export default function AgendaEntregas({ rol, usuario }) {
     const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
     setCodigosProcesados(prev => ({ ...prev, [uniqueCode]: { uniqueCode, nombre: resultado.nombre, matchedId: matchedStockId, peso: resultado.peso, estado: 'SACADO', bloqueado: false, fechaModificacion: horaStr, ultimaAccion: `Asignado a pedido ${preparandoPedido}`, ts: Date.now() } }));
     
-    const nuevaBolsa = { uniqueCode, nombre: resultado.nombre, peso: resultado.peso, tagId: resultado.tagId, ts: Date.now() };
+    const nuevaBolsa = { uniqueCode, nombre: resultado.nombre, peso: resultado.peso, tagId: resultado.tagId, ts: Date.now(), matchedStockId: matchedStockId || null, slot: (matchedProd && matchedStockId) ? determinarSlot(matchedProd.tipo || getTipoByNombre(matchedProd.nombre), resultado.peso || 0.5) : null };
     
     setPreparaciones(prev => {
       const prep = { ...prev[preparandoPedido] };
@@ -305,15 +305,61 @@ export default function AgendaEntregas({ rol, usuario }) {
     setScanSuccess(null);
   }, [marcarPreparado]);
 
+  const imprimirRemitoDesdeModal = useCallback((pedido, numPedido) => {
+    // Primero marcar como preparado, luego imprimir con la prep actualizada
+    marcarPreparado(numPedido);
+    setModalPreparacion(null);
+    setScanError(null);
+    setScanSuccess(null);
+    // Leer la prep actualizada directamente de preparaciones con el estado final
+    const prep = preparaciones[numPedido];
+    const prepFinal = { ...(prep || {}), completado: true, fechaFin: new Date().toISOString() };
+    imprimirRemitoIndividual(pedido, prepFinal);
+    if (pedido.sheetRowIndex) actualizarRemitoEnSheet(pedido.sheetRowIndex, true);
+  }, [marcarPreparado, preparaciones, actualizarRemitoEnSheet]);
+
+  // Revertir el descuento de stock de una bolsa puntual
+  const revertirStockBolsa = useCallback((bolsa) => {
+    if (!bolsa?.matchedStockId || !bolsa?.slot) return;
+    const current = stockDataRef.current || {};
+    const prod = current[bolsa.matchedStockId];
+    if (!prod) return;
+    const newData = { ...current };
+    newData[bolsa.matchedStockId] = { ...prod, stock: { ...prod.stock, [bolsa.slot]: (prod.stock?.[bolsa.slot] || 0) + 1 } };
+    setStockData(newData);
+  }, [setStockData]);
+
+  const cancelarRemito = useCallback((numPedido) => {
+    // Revertir stock de TODAS las bolsas de este pedido
+    const prep = preparaciones[numPedido];
+    if (prep?.items) {
+      prep.items.forEach(item => {
+        (item.bolsasAsignadas || []).forEach(bolsa => revertirStockBolsa(bolsa));
+      });
+    }
+    // Borrar la preparacion de este pedido del state y localStorage
+    setPreparaciones(prev => { const { [numPedido]: _, ...rest } = prev; return rest; });
+    setPreparandoPedido(null);
+    setModalPreparacion(null);
+    setScanError(null);
+    setScanSuccess(null);
+    setScanBuffer('');
+    // Volver el estado de la tarjeta a Pendiente
+    actualizarEstado(numPedido, 'Pendiente');
+  }, [preparaciones, revertirStockBolsa, actualizarEstado]);
+
   const quitarBolsaAsignada = useCallback((numPedido, itemIdx, bolsaIdx) => {
     setPreparaciones(prev => {
       const prep = { ...prev[numPedido] };
       const items = [...prep.items];
+      const bolsaAQuitar = items[itemIdx]?.bolsasAsignadas?.[bolsaIdx];
+      // Revertir stock de esta bolsa
+      if (bolsaAQuitar) revertirStockBolsa(bolsaAQuitar);
       items[itemIdx] = { ...items[itemIdx], bolsasAsignadas: items[itemIdx].bolsasAsignadas.filter((_, i) => i !== bolsaIdx) };
       const todosCompletos = items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
       return { ...prev, [numPedido]: { ...prep, items, completado: todosCompletos } };
     });
-  }, []);
+  }, [revertirStockBolsa]);
 
   const resetearPreparacion = useCallback((numPedido) => {
     if (!window.confirm('¿Deshacer toda la preparación de este pedido?')) return;
@@ -1158,7 +1204,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                   {[...feedBolsas].reverse().map((bolsa, i) => (
                     <div
                       key={bolsa.uniqueCode}
-                      className={`rounded-2xl border p-3.5 transition-all ${
+                      className={`rounded-2xl border p-3.5 transition-all group ${
                         i === 0
                           ? 'bg-green-500/10 border-green-500/30 shadow-[0_0_20px_rgba(34,197,94,0.08)] animate-in slide-in-from-top-2 duration-300'
                           : 'bg-white/[0.02] border-white/5'
@@ -1180,15 +1226,25 @@ export default function AgendaEntregas({ rol, usuario }) {
                             <p className="text-[10px] text-gray-600 font-mono">{bolsa.uniqueCode}</p>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <p className={`font-mono text-sm font-bold ${
-                            i === 0 ? 'text-green-400' : 'text-gray-400'
-                          }`}>
-                            {bolsa.peso?.toFixed(3)} kg
-                          </p>
-                          <p className="text-[9px] text-gray-700 font-mono">
-                            #{feedBolsas.length - i}
-                          </p>
+                        <div className="flex items-center gap-2">
+                          <div className="text-right">
+                            <p className={`font-mono text-sm font-bold ${
+                              i === 0 ? 'text-green-400' : 'text-gray-400'
+                            }`}>
+                              {bolsa.peso?.toFixed(3)} kg
+                            </p>
+                            <p className="text-[9px] text-gray-700 font-mono">
+                              #{feedBolsas.length - i}
+                            </p>
+                          </div>
+                          {/* Botón Deshacer bolsa individual */}
+                          <button
+                            onClick={() => quitarBolsaAsignada(numPedido, bolsa.itemIdx, bolsa.bIdx)}
+                            className="ml-1 opacity-0 group-hover:opacity-100 w-7 h-7 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-transparent hover:border-red-500/30 text-gray-600 hover:text-red-400 flex items-center justify-center transition-all cursor-pointer shrink-0"
+                            title={`Deshacer: quitar ${bolsa.itemNombre} ${bolsa.peso?.toFixed(3)} kg y devolver al stock`}
+                          >
+                            <Trash2 size={12} />
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -1197,27 +1253,48 @@ export default function AgendaEntregas({ rol, usuario }) {
               </div>
             </div>
 
-            {/* ── FOOTER: Botón Cargar Remito ── */}
+            {/* ── FOOTER: 3 botones siempre visibles ── */}
             <div className="px-6 py-4 border-t border-white/10 bg-[#111827]/80 shrink-0">
               {todosCompletos ? (
-                <button
-                  onClick={() => cargarRemito(numPedido)}
-                  className="w-full flex items-center justify-center gap-3 py-4 rounded-2xl bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-400 hover:to-emerald-400 text-white font-black text-base uppercase tracking-widest transition-all active:scale-[0.98] cursor-pointer shadow-[0_8px_30px_rgba(34,197,94,0.35)] border-b-2 border-green-700 animate-in zoom-in-95 duration-300"
-                >
-                  <CheckCircle size={22} />
-                  ✅ Cargar Remito — Marcar como Preparado
-                </button>
+                /* Pedido completo: 3 botones de acción */
+                <div className="grid grid-cols-3 gap-3">
+                  {/* Cancelar remito */}
+                  <button
+                    onClick={() => cancelarRemito(numPedido)}
+                    className="flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 text-red-400 hover:text-red-300 font-bold text-sm transition-all active:scale-[0.98] cursor-pointer"
+                  >
+                    <RotateCcw size={16} />
+                    <span>Cancelar</span>
+                  </button>
+                  {/* Cargar remito (sin imprimir) */}
+                  <button
+                    onClick={() => cargarRemito(numPedido)}
+                    className="flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-green-500/15 hover:bg-green-500/25 border border-green-500/30 hover:border-green-500/50 text-green-300 hover:text-green-200 font-bold text-sm transition-all active:scale-[0.98] cursor-pointer shadow-[0_0_20px_rgba(34,197,94,0.1)]"
+                  >
+                    <CheckCircle size={16} />
+                    <span>Cargar remito</span>
+                  </button>
+                  {/* Imprimir remito */}
+                  <button
+                    onClick={() => imprimirRemitoDesdeModal(mp, numPedido)}
+                    className="flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 border border-indigo-500/50 text-white font-bold text-sm transition-all active:scale-[0.98] cursor-pointer shadow-[0_4px_20px_rgba(99,102,241,0.3)]"
+                  >
+                    <Printer size={16} />
+                    <span>Imprimir remito</span>
+                  </button>
+                </div>
               ) : (
+                /* Pedido incompleto: aviso + botón cancelar */
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-2 text-gray-600 text-xs">
                     <AlertCircle size={13} className="text-gray-600" />
-                    <span>Completá todos los productos para habilitar el cierre</span>
+                    <span>Completá todos los productos para guardar o imprimir</span>
                   </div>
                   <button
-                    onClick={cerrarModalPreparacion}
-                    className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-gray-400 hover:text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all cursor-pointer"
+                    onClick={() => cancelarRemito(numPedido)}
+                    className="flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 text-red-400 hover:text-red-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all cursor-pointer"
                   >
-                    <X size={14} /> Cerrar sin guardar
+                    <RotateCcw size={13} /> Cancelar y deshacer
                   </button>
                 </div>
               )}
