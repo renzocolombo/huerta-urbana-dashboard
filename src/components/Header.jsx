@@ -3,15 +3,14 @@ import { Leaf, LayoutDashboard, ShoppingCart, Clock, Users, MapPin, Route, Dolla
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 
 const NAV_ITEMS = [
-  { id: 'resumen',   label: 'Resumen',          icon: LayoutDashboard },
-  { id: 'graficos',  label: 'Gráficos',          icon: LayoutDashboard },
   { id: 'pedidos',   label: 'Pedidos del día',   icon: ShoppingCart },
-  { id: 'historial', label: 'Historial',         icon: Clock },
-  { id: 'clientes',  label: 'Clientes',          icon: Users },
   { id: 'agenda',    label: 'Agenda entregas',   icon: MapPin },
-  { id: 'costos',    label: 'Panel de costos',   icon: DollarSign },
   { id: 'finanzas',  label: 'Finanzas',          icon: Landmark },
+  { id: 'costos',    label: 'Panel de costos',   icon: DollarSign },
   { id: 'stock',     label: 'Control stock',     icon: Package },
+  { id: 'clientes',  label: 'Clientes',          icon: Users },
+  { id: 'historial', label: 'Historial',         icon: Clock },
+  { id: 'graficos',  label: 'Gráficos',          icon: LayoutDashboard },
   { id: 'reportes',  label: 'Reportes',          icon: FileText },
 ];
 

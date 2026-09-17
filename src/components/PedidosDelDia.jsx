@@ -52,6 +52,16 @@ export default function PedidosDelDia() {
     PEDIDOS.filter(p => p.fecha === HOY).sort((a, b) => (a.estado === 'pendiente' ? -1 : 1)),
   [PEDIDOS]);
 
+  const [filtroEstado, setFiltroEstado] = useState(null);
+
+  const pedidosMostrados = useMemo(() => {
+    if (!filtroEstado) return pedidosHoy;
+    if (filtroEstado === 'listo') {
+      return pedidosHoy.filter(p => p.estado === 'listo' || p.estado === 'preparado');
+    }
+    return pedidosHoy.filter(p => p.estado === filtroEstado);
+  }, [pedidosHoy, filtroEstado]);
+
   const pendientesLargo = pedidosHoy.filter(p => p.estado === 'pendiente' && p.horas_atras >= 2);
 
   const imprimirRemitoPedido = (p) => {
@@ -100,6 +110,53 @@ export default function PedidosDelDia() {
         </div>
       </div>
 
+      {/* Barra de estado rápido: Estado de pedidos hoy */}
+      <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-5 mb-6 shadow-md">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-white">Estado de pedidos hoy</h3>
+          {filtroEstado && (
+            <button
+              onClick={() => setFiltroEstado(null)}
+              className="text-xs text-green-400 hover:text-green-300 underline font-medium cursor-pointer"
+            >
+              Mostrar todos ({pedidosHoy.length})
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { label: 'Pendientes',      estado: 'pendiente',      color: 'bg-red-500',    light: 'text-red-400',    border: 'border-red-500/40' },
+            { label: 'En preparación',  estado: 'en_preparacion', color: 'bg-amber-500',  light: 'text-amber-400',  border: 'border-amber-500/40' },
+            { label: 'Listos',          estado: 'listo',          color: 'bg-blue-500',   light: 'text-blue-400',   border: 'border-blue-500/40' },
+            { label: 'Entregados',      estado: 'entregado',      color: 'bg-green-500',  light: 'text-green-400',  border: 'border-green-500/40' },
+          ].map(({ label, estado, color, light, border }) => {
+            const cant = pedidosHoy.filter(p => estado === 'listo' ? (p.estado === 'listo' || p.estado === 'preparado') : p.estado === estado).length;
+            const pct = pedidosHoy.length ? Math.round((cant / pedidosHoy.length) * 100) : 0;
+            const isSelected = filtroEstado === estado;
+            return (
+              <div 
+                key={estado} 
+                onClick={() => setFiltroEstado(isSelected ? null : estado)}
+                className={`bg-[#111827] rounded-xl p-3 cursor-pointer transition-all border ${isSelected ? border + ' ring-1 ring-white/20' : 'border-transparent hover:border-gray-700'}`}
+                title={`Click para filtrar por ${label}`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${color}`} />
+                    <span className="text-xs text-gray-400 font-medium">{label}</span>
+                  </div>
+                  {isSelected && <span className="text-[10px] text-green-400 font-mono">Activo</span>}
+                </div>
+                <p className={`text-2xl font-bold ${light}`}>{cant}</p>
+                <div className="w-full bg-gray-800 rounded-full h-1.5 mt-2 overflow-hidden">
+                  <div className={`${color} h-full rounded-full transition-all`} style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {pendientesLargo.length > 0 && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 mb-4 flex items-center gap-3 fade-in">
           <AlertCircle size={16} className="text-red-400 shrink-0" />
@@ -120,7 +177,14 @@ export default function PedidosDelDia() {
               </tr>
             </thead>
             <tbody>
-              {pedidosHoy.map((p) => {
+              {pedidosMostrados.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="text-center py-8 text-gray-500 text-xs italic">
+                    No hay pedidos con el estado seleccionado ({filtroEstado}).
+                  </td>
+                </tr>
+              ) : (
+                pedidosMostrados.map((p) => {
                 const esPendLargo = p.estado === 'pendiente' && p.horas_atras >= 2;
                 return (
                   <tr
@@ -169,7 +233,7 @@ export default function PedidosDelDia() {
                     </td>
                   </tr>
                 );
-              })}
+              }))}
             </tbody>
           </table>
         </div>

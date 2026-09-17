@@ -6,7 +6,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Login from './components/Login';
 import Header from './components/Header';
-import Resumen from './components/Resumen';
 import Graficos from './components/Graficos';
 import PedidosDelDia from './components/PedidosDelDia';
 import Historial from './components/Historial';
@@ -21,15 +20,14 @@ import { useGoogleSheets } from './context/GoogleSheetsContext';
 
 // Mapa de secciones del dashboard
 const SECCIONES = {
-  resumen:   { label: 'Resumen',           componente: Resumen },
-  graficos:  { label: 'Gráficos',          componente: Graficos },
   pedidos:   { label: 'Pedidos del día',   componente: PedidosDelDia },
-  historial: { label: 'Historial',         componente: Historial },
-  clientes:  { label: 'Clientes',         componente: Clientes },
   agenda:    { label: 'Agenda entregas',   componente: AgendaEntregas },
-  costos:    { label: 'Panel de costos',  componente: PanelCostos },
   finanzas:  { label: 'Finanzas',         componente: Finanzas },
+  costos:    { label: 'Panel de costos',  componente: PanelCostos },
   stock:     { label: 'Control stock',    componente: ControlStock },
+  clientes:  { label: 'Clientes',         componente: Clientes },
+  historial: { label: 'Historial',         componente: Historial },
+  graficos:  { label: 'Gráficos',          componente: Graficos },
   reportes:  { label: 'Reportes',         componente: Reportes },
 };
 
@@ -44,7 +42,7 @@ export default function App() {
   const [usuario, setUsuario] = useState(() => {
     return localStorage.getItem('huerta_auth_usuario') || '';
   });
-  const [seccion, setSeccion] = useState('resumen');
+  const [seccion, setSeccion] = useState('pedidos');
 
   // Si no está logueado, mostrar pantalla de login
   if (!logueado) {
@@ -63,7 +61,7 @@ export default function App() {
     }} />;
   }
 
-  const ComponenteActual = SECCIONES[seccion]?.componente || Resumen;
+  const ComponenteActual = SECCIONES[seccion]?.componente || PedidosDelDia;
 
   return (
     <div className="min-h-screen bg-[#0f0f0f]">
@@ -73,7 +71,7 @@ export default function App() {
         onNav={(id) => setSeccion(id)}
         onLogout={() => { 
           setLogueado(false); 
-          setSeccion('resumen'); 
+          setSeccion('pedidos'); 
           setUsuario(''); 
           try {
             localStorage.removeItem('huerta_auth_logueado');

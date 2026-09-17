@@ -30,6 +30,25 @@ export default function Reportes() {
   const porLocalidad = {};
   pedidosPeriodo.forEach(p => { porLocalidad[p.localidad] = (porLocalidad[p.localidad] || 0) + 1; });
 
+  // Top y Menos vendidos del período
+  const productStats = useMemo(() => {
+    const list = Object.entries(porProducto).map(([name, d]) => ({
+      name,
+      unidades: d.unidades,
+      total: d.total,
+    }));
+
+    if (list.length === 0) return null;
+
+    const sortedDesc = [...list].sort((a, b) => b.unidades - a.unidades);
+    const sortedAsc = [...list].sort((a, b) => a.unidades - b.unidades);
+
+    return {
+      top: sortedDesc.slice(0, 5),
+      bottom: sortedAsc.slice(0, 5)
+    };
+  }, [porProducto]);
+
   const generarPDF = () => {
     setGenerado(true);
     const win = window.open('', '_blank');
@@ -118,6 +137,75 @@ export default function Reportes() {
             <p className={`text-xl font-bold ${s.color}`}>{s.valor}</p>
           </div>
         ))}
+      </div>
+
+      {/* WIDGET TOP PRODUCTOS: MÁS VENDIDOS Y MENOS VENDIDOS */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        {/* MÁS VENDIDOS */}
+        <div className="bg-[#1f2937] border border-green-500/20 rounded-2xl p-6 shadow-lg relative overflow-hidden">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🏆</span>
+              <div>
+                <h3 className="font-black text-white text-sm uppercase tracking-wider">Más Vendidos</h3>
+                <p className="text-gray-500 text-xs">Top productos con mayor volumen</p>
+              </div>
+            </div>
+            <span className="text-[10px] font-bold text-green-400 bg-green-500/10 px-2.5 py-0.5 rounded-full border border-green-500/20">
+              Período seleccionado
+            </span>
+          </div>
+          <div className="space-y-3">
+            {!productStats || productStats.top.length === 0 ? (
+              <p className="text-gray-500 text-xs italic">Sin datos suficientes en este período</p>
+            ) : (
+              productStats.top.map((p, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-green-500/5 border border-green-500/10 rounded-xl">
+                  <div className="truncate pr-3">
+                    <span className="text-white text-xs font-bold block truncate">{p.name}</span>
+                    <span className="text-gray-500 text-[10px] font-mono">Facturado: {$$(p.total)}</span>
+                  </div>
+                  <span className="bg-green-500 text-black text-[10px] font-black px-2.5 py-1 rounded-lg shrink-0">
+                    {p.unidades} VENDIDOS
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* MENOS VENDIDOS */}
+        <div className="bg-[#1f2937] border border-blue-500/10 rounded-2xl p-6 shadow-lg">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">📉</span>
+              <div>
+                <h3 className="font-black text-white text-sm uppercase tracking-wider">Menos Vendidos</h3>
+                <p className="text-gray-500 text-xs">Productos con menor rotación</p>
+              </div>
+            </div>
+            <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 px-2.5 py-0.5 rounded-full border border-blue-500/20">
+              Período seleccionado
+            </span>
+          </div>
+          <div className="space-y-3">
+            {!productStats || productStats.bottom.length === 0 ? (
+              <p className="text-gray-500 text-xs italic">Sin datos suficientes en este período</p>
+            ) : (
+              productStats.bottom.map((p, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-blue-500/5 border border-blue-500/5 rounded-xl">
+                  <div className="truncate pr-3">
+                    <span className="text-gray-300 text-xs truncate block">{p.name}</span>
+                    <span className="text-gray-500 text-[10px] font-mono">Facturado: {$$(p.total)}</span>
+                  </div>
+                  <span className="bg-blue-500/20 text-blue-400 text-[10px] font-bold px-2.5 py-1 rounded-lg border border-blue-500/20 shrink-0">
+                    {p.unidades} ventas
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Tabla preview */}
