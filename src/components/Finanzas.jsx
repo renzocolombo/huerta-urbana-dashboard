@@ -31,11 +31,21 @@ const CONFIG_DEFAULT = {
 export default function Finanzas() {
   const { pedidos: PEDIDOS = [], productosCostos: contextCostos = [], cargando } = useGoogleSheets();
 
-  // ── 1. Configuración editable ───────────────────────────────────────────────
+  // ── 1. Configuración editable con persistencia ───────────────────────────────
   const [config, setConfig] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_CONFIG_KEY);
-      return saved ? { ...CONFIG_DEFAULT, ...JSON.parse(saved) } : CONFIG_DEFAULT;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          ...CONFIG_DEFAULT,
+          ...parsed,
+          costoPackaging: parsed.costoPackaging !== undefined ? Number(parsed.costoPackaging) : CONFIG_DEFAULT.costoPackaging,
+          monotributoMensual: parsed.monotributoMensual !== undefined ? Number(parsed.monotributoMensual) : CONFIG_DEFAULT.monotributoMensual,
+          comisionMP: parsed.comisionMP !== undefined ? Number(parsed.comisionMP) : CONFIG_DEFAULT.comisionMP,
+        };
+      }
+      return CONFIG_DEFAULT;
     } catch (e) {
       return CONFIG_DEFAULT;
     }
@@ -43,6 +53,15 @@ export default function Finanzas() {
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [tempConfig, setTempConfig] = useState(config);
   const [configGuardadaMsg, setConfigGuardadaMsg] = useState(false);
+
+  // Auto-persistencia en localStorage ante cualquier cambio de config
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_CONFIG_KEY, JSON.stringify(config));
+    } catch (e) {
+      console.error('Error guardando config de Finanzas:', e);
+    }
+  }, [config]);
 
   // ── 2. Selector de Período ──────────────────────────────────────────────────
   const [periodo, setPeriodo] = useState('mes'); // 'hoy' | 'semana' | 'mes'
@@ -353,18 +372,48 @@ export default function Finanzas() {
     return { hoy: h, semana: s, mes: m };
   }, [ventasAprobadas]);
 
-  // ── 11. Guardar Configuración ──────────────────────────────────────────────
+  // ── 11. Manejo y Guardado en Vivo de Configuración ─────────────────────────
+  const handleConfigFieldChange = (field, val) => {
+    const num = val === '' ? '' : Number(val);
+    setTempConfig(prev => ({ ...prev, [field]: num }));
+    
+    // Si es un valor numérico válido, persistir y actualizar cálculos en tiempo real
+    if (val !== '' && !isNaN(num) && num >= 0) {
+      setConfig(prev => {
+        const next = { ...prev, [field]: num };
+        try {
+          localStorage.setItem(STORAGE_CONFIG_KEY, JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
+    }
+  };
+
   const guardarConfiguracion = (e) => {
-    e.preventDefault();
-    setConfig(tempConfig);
+    if (e) e.preventDefault();
+    const finalConfig = {
+      ...tempConfig,
+      costoPackaging: tempConfig.costoPackaging !== '' && !isNaN(Number(tempConfig.costoPackaging)) 
+        ? Number(tempConfig.costoPackaging) 
+        : config.costoPackaging,
+      monotributoMensual: tempConfig.monotributoMensual !== '' && !isNaN(Number(tempConfig.monotributoMensual)) 
+        ? Number(tempConfig.monotributoMensual) 
+        : config.monotributoMensual,
+      comisionMP: tempConfig.comisionMP !== '' && !isNaN(Number(tempConfig.comisionMP)) 
+        ? Number(tempConfig.comisionMP) 
+        : config.comisionMP,
+    };
+
+    setConfig(finalConfig);
+    setTempConfig(finalConfig);
     try {
-      localStorage.setItem(STORAGE_CONFIG_KEY, JSON.stringify(tempConfig));
+      localStorage.setItem(STORAGE_CONFIG_KEY, JSON.stringify(finalConfig));
     } catch (err) {}
     setConfigGuardadaMsg(true);
     setTimeout(() => {
       setConfigGuardadaMsg(false);
       setShowConfigModal(false);
-    }, 900);
+    }, 600);
   };
 
   // ── 12. Filtrado para la tabla de pedidos ──────────────────────────────────
@@ -594,10 +643,16 @@ export default function Finanzas() {
           </div>
 
           {/* Packaging (por kilo) */}
-          <div className="rounded-2xl bg-[#111827] border border-white/5 p-4 flex flex-col justify-between">
+          <div className="rounded-2xl bg-[#111827] border border-white/5 p-4 flex flex-col justify-between group hover:border-orange-500/30 transition-all">
             <div className="flex items-center justify-between text-gray-400 mb-2">
               <span className="text-[10px] font-bold uppercase tracking-wider">Packaging</span>
-              <Package size={14} className="text-orange-400" />
+              <button
+                onClick={() => { setTempConfig(config); setShowConfigModal(true); }}
+                className="p-1 -mr-1 rounded-lg text-gray-500 hover:text-orange-400 hover:bg-white/5 transition-colors cursor-pointer"
+                title="Editar costo de packaging"
+              >
+                <Sliders size={13} />
+              </button>
             </div>
             <div>
               <p className="text-xl font-black text-red-400">- {$$(stats.packagingTotal)}</p>
@@ -608,10 +663,16 @@ export default function Finanzas() {
           </div>
 
           {/* Monotributo Prorrateado */}
-          <div className="rounded-2xl bg-[#111827] border border-white/5 p-4 flex flex-col justify-between">
+          <div className="rounded-2xl bg-[#111827] border border-white/5 p-4 flex flex-col justify-between group hover:border-purple-500/30 transition-all">
             <div className="flex items-center justify-between text-gray-400 mb-2">
               <span className="text-[10px] font-bold uppercase tracking-wider">Monotributo</span>
-              <Landmark size={14} className="text-purple-400" />
+              <button
+                onClick={() => { setTempConfig(config); setShowConfigModal(true); }}
+                className="p-1 -mr-1 rounded-lg text-gray-500 hover:text-purple-400 hover:bg-white/5 transition-colors cursor-pointer"
+                title="Editar monotributo mensual"
+              >
+                <Sliders size={13} />
+              </button>
             </div>
             <div>
               <p className="text-xl font-black text-red-400">- {$$(stats.monotributoProrrateado)}</p>
@@ -757,67 +818,89 @@ export default function Finanzas() {
           ══════════════════════════════════════════════════════════════════════════ */}
       {showConfigModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-[#111827] border border-white/10 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl animate-in zoom-in-95 duration-200">
+          <div className="bg-[#111827] border border-white/10 rounded-3xl max-w-md w-full p-6 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
             
-            <div className="flex items-center justify-between border-b border-white/5 pb-3">
+            {/* Header Modal */}
+            <div className="flex items-center justify-between border-b border-white/5 pb-3 flex-shrink-0">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
                   <Sliders size={16} />
                 </div>
-                <h3 className="text-base font-bold text-white">Ajustes Financieros</h3>
+                <div>
+                  <h3 className="text-base font-bold text-white">Ajustes Financieros</h3>
+                  <p className="text-[10px] text-gray-400">Se guardan y aplican automáticamente</p>
+                </div>
               </div>
               <button 
                 onClick={() => setShowConfigModal(false)}
-                className="text-gray-500 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
+                className="text-gray-500 hover:text-white p-1.5 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={guardarConfiguracion} className="space-y-4 text-xs">
+            {/* Formulario con scroll independiente */}
+            <form onSubmit={guardarConfiguracion} className="space-y-4 text-xs overflow-y-auto pr-1 my-3 flex-1">
               
               {/* Packaging por kilo */}
-              <div>
-                <label className="block text-gray-300 font-bold mb-1">
-                  Costo de Packaging por Kilo ($/kg)
-                </label>
-                <p className="text-[11px] text-gray-500 mb-1.5">
-                  Bolsas kraft, bandejas plásticas, etiquetas y stickers por cada kilo de verdura o fruta vendida. Se multiplica automáticamente por los kilos de cada pedido.
+              <div className="p-3 rounded-2xl bg-black/30 border border-white/5 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-gray-200 font-bold">
+                    Costo Packaging ($/kg)
+                  </label>
+                  <span className="text-[10px] font-mono text-orange-400 font-bold bg-orange-400/10 px-2 py-0.5 rounded-md">
+                    ${tempConfig.costoPackaging || 0}/kg
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-400 leading-tight">
+                  Bolsas kraft, bandejas y etiquetas por kilo. Se multiplica por los kilos de cada pedido.
                 </p>
                 <input
                   type="number"
                   min="0"
                   step="10"
                   value={tempConfig.costoPackaging}
-                  onChange={(e) => setTempConfig({ ...tempConfig, costoPackaging: Number(e.target.value) || 0 })}
-                  className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2 text-white font-mono outline-none focus:border-emerald-500"
+                  onChange={(e) => handleConfigFieldChange('costoPackaging', e.target.value)}
+                  className="w-full bg-[#161f30] border border-white/10 rounded-xl px-3 py-2 text-white font-mono outline-none focus:border-emerald-500 transition-colors text-sm"
+                  placeholder="Ej: 100"
                 />
               </div>
 
               {/* Monotributo Mensual */}
-              <div>
-                <label className="block text-gray-300 font-bold mb-1">
-                  Monotributo Mensual ($)
-                </label>
-                <p className="text-[11px] text-gray-500 mb-1.5">
-                  Importe total mensual de la cuota impositiva (se prorratea a 30 días).
+              <div className="p-3 rounded-2xl bg-black/30 border border-white/5 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-gray-200 font-bold">
+                    Monotributo Mensual ($)
+                  </label>
+                  <span className="text-[10px] font-mono text-purple-400 font-bold bg-purple-400/10 px-2 py-0.5 rounded-md">
+                    {$$(tempConfig.monotributoMensual || 0)}
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-400 leading-tight">
+                  Cuota mensual fija. Se prorratea por día en la vista Hoy, 7 días en Semana y mes completo.
                 </p>
                 <input
                   type="number"
                   min="0"
                   step="500"
                   value={tempConfig.monotributoMensual}
-                  onChange={(e) => setTempConfig({ ...tempConfig, monotributoMensual: Number(e.target.value) || 0 })}
-                  className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2 text-white font-mono outline-none focus:border-emerald-500"
+                  onChange={(e) => handleConfigFieldChange('monotributoMensual', e.target.value)}
+                  className="w-full bg-[#161f30] border border-white/10 rounded-xl px-3 py-2 text-white font-mono outline-none focus:border-emerald-500 transition-colors text-sm"
+                  placeholder="Ej: 52000"
                 />
               </div>
 
               {/* Comisión Mercado Pago */}
-              <div>
-                <label className="block text-gray-300 font-bold mb-1">
-                  Comisión Mercado Pago (%)
-                </label>
-                <p className="text-[11px] text-gray-500 mb-1.5">
+              <div className="p-3 rounded-2xl bg-black/30 border border-white/5 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-gray-200 font-bold">
+                    Comisión Mercado Pago (%)
+                  </label>
+                  <span className="text-[10px] font-mono text-indigo-400 font-bold bg-indigo-400/10 px-2 py-0.5 rounded-md">
+                    {tempConfig.comisionMP || 0}%
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-400 leading-tight">
                   Porcentaje deducido automáticamente sobre el precio total de cada venta.
                 </p>
                 <input
@@ -826,32 +909,33 @@ export default function Finanzas() {
                   max="100"
                   step="0.5"
                   value={tempConfig.comisionMP}
-                  onChange={(e) => setTempConfig({ ...tempConfig, comisionMP: Number(e.target.value) || 0 })}
-                  className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2 text-white font-mono outline-none focus:border-emerald-500"
+                  onChange={(e) => handleConfigFieldChange('comisionMP', e.target.value)}
+                  className="w-full bg-[#161f30] border border-white/10 rounded-xl px-3 py-2 text-white font-mono outline-none focus:border-emerald-500 transition-colors text-sm"
+                  placeholder="Ej: 8"
                 />
               </div>
 
               {/* Mensaje de confirmación */}
               {configGuardadaMsg && (
-                <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-center font-bold">
-                  ✓ Configuración guardada correctamente
+                <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-center font-bold animate-in fade-in">
+                  ✓ Configuración guardada y activa
                 </div>
               )}
 
-              {/* Botones */}
-              <div className="flex items-center gap-2 pt-3">
+              {/* Botones de acción fijos */}
+              <div className="flex items-center gap-2 pt-2 border-t border-white/5 flex-shrink-0">
                 <button
                   type="button"
                   onClick={() => setShowConfigModal(false)}
                   className="flex-1 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold cursor-pointer transition-all"
                 >
-                  Cancelar
+                  Cerrar
                 </button>
                 <button
                   type="submit"
                   className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold cursor-pointer transition-all shadow-lg shadow-emerald-950/40"
                 >
-                  Guardar Ajustes
+                  Confirmar Ajustes
                 </button>
               </div>
             </form>
