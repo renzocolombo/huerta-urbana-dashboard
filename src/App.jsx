@@ -42,7 +42,7 @@ export default function App() {
   const [usuario, setUsuario] = useState(() => {
     return localStorage.getItem('huerta_auth_usuario') || '';
   });
-  const [seccion, setSeccion] = useState('pedidos');
+  const [seccion, setSeccion] = useState('finanzas');
 
   // Si no está logueado, mostrar pantalla de login
   if (!logueado) {
@@ -56,12 +56,13 @@ export default function App() {
         localStorage.setItem('huerta_auth_usuario', u || '');
       } catch (e) {}
       if (r === 'repartidor') setSeccion('agenda');
-      if (r === 'produccion') setSeccion('stock');
+      else if (r === 'produccion') setSeccion('stock');
+      else setSeccion('finanzas');
       cargarTodo(); // Carga en paralelo: Pedidos, Costos y Stock
     }} />;
   }
 
-  const ComponenteActual = SECCIONES[seccion]?.componente || PedidosDelDia;
+  const ComponenteActual = SECCIONES[seccion]?.componente || Finanzas;
 
   return (
     <div className="min-h-screen bg-[#0f0f0f]">
@@ -71,7 +72,7 @@ export default function App() {
         onNav={(id) => setSeccion(id)}
         onLogout={() => { 
           setLogueado(false); 
-          setSeccion('pedidos'); 
+          setSeccion('finanzas'); 
           setUsuario(''); 
           try {
             localStorage.removeItem('huerta_auth_logueado');

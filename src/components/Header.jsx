@@ -3,9 +3,9 @@ import { Leaf, LayoutDashboard, ShoppingCart, Clock, Users, MapPin, Route, Dolla
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 
 const NAV_ITEMS = [
+  { id: 'finanzas',  label: 'Finanzas',          icon: Landmark },
   { id: 'pedidos',   label: 'Pedidos del día',   icon: ShoppingCart },
   { id: 'agenda',    label: 'Agenda entregas',   icon: MapPin },
-  { id: 'finanzas',  label: 'Finanzas',          icon: Landmark },
   { id: 'costos',    label: 'Panel de costos',   icon: DollarSign },
   { id: 'stock',     label: 'Control stock',     icon: Package },
   { id: 'clientes',  label: 'Clientes',          icon: Users },
