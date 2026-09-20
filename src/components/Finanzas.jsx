@@ -17,14 +17,14 @@ import { COMBOS_INICIALES } from './PanelCostos';
 const $$ = (n) => `$${Number(Math.round(n || 0)).toLocaleString('es-AR')}`;
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-const STORAGE_CONFIG_KEY = 'huerta_finanzas_config_v1';
+const STORAGE_CONFIG_KEY = 'huerta_finanzas_config_v2';
 const STORAGE_COSTOS_KEY = 'huerta_data_costos_v1_productos';
 const STORAGE_COMBOS_KEY = 'huerta_data_costos_v31_combos';
 
 const CONFIG_DEFAULT = {
   comisionMP: 8,          // 8%
-  costoPackaging: 100,    // $100 por kilo de producto (configurable)
-  monotributoMensual: 52000, // $52.000 mensual
+  costoPackaging: 150,    // $150 por kilo de producto (configurable)
+  monotributoMensual: 60000, // $60.000 mensual
   diasMesProrrateo: 30,   // Base 30 días
 };
 
@@ -862,7 +862,7 @@ export default function Finanzas() {
                   value={tempConfig.costoPackaging}
                   onChange={(e) => handleConfigFieldChange('costoPackaging', e.target.value)}
                   className="w-full bg-[#161f30] border border-white/10 rounded-xl px-3 py-2 text-white font-mono outline-none focus:border-emerald-500 transition-colors text-sm"
-                  placeholder="Ej: 100"
+                  placeholder="Ej: 150"
                 />
               </div>
 
@@ -886,7 +886,7 @@ export default function Finanzas() {
                   value={tempConfig.monotributoMensual}
                   onChange={(e) => handleConfigFieldChange('monotributoMensual', e.target.value)}
                   className="w-full bg-[#161f30] border border-white/10 rounded-xl px-3 py-2 text-white font-mono outline-none focus:border-emerald-500 transition-colors text-sm"
-                  placeholder="Ej: 52000"
+                  placeholder="Ej: 60000"
                 />
               </div>
 
