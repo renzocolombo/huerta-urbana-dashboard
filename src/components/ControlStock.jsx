@@ -5,7 +5,7 @@ import {
   Check, Info, Box, Edit2, RotateCcw, X, Save,
   AlertCircle, Loader2, Settings, ChevronDown, ChevronUp,
   ScanBarcode, Trash2, Zap, ClipboardList, Scale, Printer, CheckCircle2, Radio,
-  Tag, ShoppingBag, Layers, Search, Sparkles
+  Tag, ShoppingBag, Layers, Search, Sparkles, Pin
 } from 'lucide-react';
 import { 
   CATEGORIAS_PRINCIPALES, 
@@ -178,6 +178,33 @@ function determinarSlot(tipo, pesoKg) {
   return pesoKg <= 0.75 ? '500g' : '1kg';
 }
 
+// Emite un beep sonoro nítido inmediato al escanear con la pistola
+function playScanBeep(success = true) {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    if (success) {
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.12);
+    } else {
+      osc.frequency.setValueAtTime(220, ctx.currentTime);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.25);
+    }
+  } catch (e) {}
+}
+
 export default function ControlStock() {
   const { stockData, setStockData, productosCostos: contextMaster, setProductosCostos, stockData: contextStock } = useGoogleSheets();
   const [productosMaster, setProductosMaster] = useState([]);
@@ -197,6 +224,44 @@ export default function ControlStock() {
 
   // ── Sub-pestaña interna del bloque de escaneo ────────────────────────────
   const [stockSubTab, setStockSubTab] = useState('escanear'); // 'escanear' | 'pesar'
+
+  // ── Modo Producto Fijo (escaneo rápido consecutivo por unidad sin confirmación)
+  const [productoFijo, setProductoFijo] = useState(null); // { id, nombre, subcategoria, unidad, categoriaPrincipal }
+  const productoFijoRef = useRef(null);
+  useEffect(() => { productoFijoRef.current = productoFijo; }, [productoFijo]);
+
+  const [conteoFijoSesion, setConteoFijoSesion] = useState(0);
+  const conteoFijoSesionRef = useRef(0);
+  useEffect(() => { conteoFijoSesionRef.current = conteoFijoSesion; }, [conteoFijoSesion]);
+
+  const handleSelectProductoFijo = (prodOrId) => {
+    if (!prodOrId) {
+      productoFijoRef.current = null;
+      setProductoFijo(null);
+      setConteoFijoSesion(0);
+      conteoFijoSesionRef.current = 0;
+      return;
+    }
+    let prodObj = null;
+    if (typeof prodOrId === 'string') {
+      const current = stockDataRef.current || {};
+      if (current[prodOrId]) {
+        prodObj = { id: prodOrId, ...current[prodOrId] };
+      } else {
+        const pMaster = (productosMaster || []).find(p => String(p.id) === String(prodOrId) || norm(p.nombre) === norm(prodOrId));
+        if (pMaster) prodObj = { ...pMaster };
+        else prodObj = { id: prodOrId, nombre: prodOrId, subcategoria: 'Almacén', unidad: 'unidad' };
+      }
+    } else {
+      prodObj = prodOrId;
+    }
+    productoFijoRef.current = prodObj;
+    setProductoFijo(prodObj);
+    setConteoFijoSesion(0);
+    conteoFijoSesionRef.current = 0;
+    setScanMode('carga');
+    setTimeout(() => scanInputRef.current?.focus(), 60);
+  };
 
   // ── Scanner state ──────────────────────────────────────────────────────────
   const [scanMode, setScanMode] = useState('carga');    // 'carga' | 'gestion'
@@ -312,6 +377,137 @@ export default function ControlStock() {
     const activeScanMode = scanModeRef.current;
     const current = stockDataRef.current || {};
     const uniqueCode = (resultado?.uniqueCode || rawCodeClean).toUpperCase();
+
+    // ── INTERCEPTOR: MODO PRODUCTO FIJO (Carga rápida por unidad sin confirmación) ──
+    if (productoFijoRef.current) {
+      const pf = productoFijoRef.current;
+      const cleanCode = String(uniqueCode || rawCodeClean).toUpperCase();
+
+      // 1. Si es la primera vez que se ve este código EAN/barra, asociarlo automáticamente
+      const map = getEanMapping();
+      if (!map[cleanCode]) {
+        asociarEanAProducto(cleanCode, {
+          productoId: pf.id,
+          nombre: pf.nombre,
+          subcategoria: pf.subcategoria || 'Almacén',
+          unidad: pf.unidad || 'unidad'
+        });
+      }
+
+      // 2. Sumar 1 unidad al stock del producto fijo
+      let targetId = (pf.id && current[pf.id]) ? pf.id : null;
+      if (!targetId) {
+        targetId = Object.keys(current).find(id => norm(current[id]?.nombre) === norm(pf.nombre));
+      }
+
+      let nuevoStock = 1;
+      let updatedProd = null;
+
+      if (targetId && current[targetId]) {
+        const existingProd = current[targetId];
+        const stockActual = Number(existingProd.stock?.unidades ?? existingProd.stock?.['1kg']) || 0;
+        nuevoStock = stockActual + 1;
+        updatedProd = {
+          ...existingProd,
+          subcategoria: normalizeSubcategoriaAlmacen(existingProd.subcategoria || pf.subcategoria || 'Almacén'),
+          stock: {
+            ...existingProd.stock,
+            '1kg': nuevoStock,
+            unidades: nuevoStock
+          },
+          originalLoad: {
+            ...existingProd.originalLoad,
+            '1kg': Math.max(Number(existingProd.originalLoad?.unidades ?? existingProd.originalLoad?.['1kg']) || 0, nuevoStock),
+            unidades: Math.max(Number(existingProd.originalLoad?.unidades ?? existingProd.originalLoad?.['1kg']) || 0, nuevoStock)
+          }
+        };
+        const newData = { ...current, [targetId]: updatedProd };
+        setStockData(newData);
+        stockDataRef.current = newData;
+        syncWithSheet(updatedProd);
+      } else {
+        const newPid = pf.id || `prod_${Date.now()}`;
+        nuevoStock = 1;
+        updatedProd = {
+          id: newPid,
+          nombre: pf.nombre,
+          categoriaPrincipal: pf.categoriaPrincipal || getCategoriaPrincipal(pf.nombre),
+          subcategoria: normalizeSubcategoriaAlmacen(pf.subcategoria || 'Almacén'),
+          tipo: pf.tipo || getTipoByNombre(pf.nombre),
+          unidad: pf.unidad || getUnidadByNombre(pf.nombre),
+          stock: { '500g': 0, '1kg': nuevoStock, unidades: nuevoStock },
+          originalLoad: { '500g': 0, '1kg': nuevoStock, unidades: nuevoStock },
+          mermaKg: 0,
+          totalDays: 30,
+          urgentDays: 5
+        };
+        const newData = { ...current, [newPid]: updatedProd };
+        setStockData(newData);
+        stockDataRef.current = newData;
+        syncWithSheet(updatedProd);
+        targetId = newPid;
+      }
+
+      // Guardar en cache local para persistencia inmediata de unidades
+      try {
+        const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
+        unitsCache[norm(pf.nombre)] = {
+          stock: nuevoStock,
+          originalLoad: nuevoStock,
+          subcategoria: pf.subcategoria || 'Almacén',
+          unidad: pf.unidad || 'unidad',
+          fecha: new Date().toISOString().split('T')[0]
+        };
+        localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
+      } catch (e) {}
+
+      // 3. Registrar el código escaneado en codigosProcesados
+      setCodigosProcesados(prev => ({
+        ...prev,
+        [cleanCode]: {
+          uniqueCode: cleanCode,
+          nombre: pf.nombre,
+          matchedId: targetId,
+          peso: 1,
+          slot: 'unidad',
+          estado: 'EN_STOCK',
+          timestamp: new Date().toISOString(),
+          esUnidad: true
+        }
+      }));
+
+      // 4. Incrementar contador de sesión
+      const nuevoConteo = (conteoFijoSesionRef.current || 0) + 1;
+      setConteoFijoSesion(nuevoConteo);
+      conteoFijoSesionRef.current = nuevoConteo;
+
+      // 5. Beep sonoro y visual feedback instantáneo sin pausas
+      playScanBeep(true);
+      setLastScan({
+        ok: true,
+        productoNombre: pf.nombre,
+        peso: 1,
+        slot: `+1 ud (#${nuevoConteo} en sesión)`,
+        ts: Date.now(),
+        accion: 'Carga fija',
+        stockRestante: nuevoStock
+      });
+
+      setScanLog(prev => [{
+        ok: true,
+        productoNombre: `${pf.nombre} (+1 ud)`,
+        peso: 1,
+        slot: `Sesión: #${nuevoConteo} (Total: ${nuevoStock})`,
+        ts: Date.now(),
+        accion: 'Carga fija',
+        stockRestante: nuevoStock
+      }, ...prev].slice(0, 8));
+
+      // 6. Limpiar y mantener el foco listo para el siguiente escaneo inmediato con la pistola
+      setScanBuffer('');
+      setTimeout(() => scanInputRef.current?.focus(), 15);
+      return;
+    }
 
     // ── 0. CÓDIGO EAN DE FÁBRICA (Almacén) ─────────────────────────────────
     if (resultado?.esEan) {
@@ -1191,6 +1387,54 @@ export default function ControlStock() {
     return res;
   }, [stockData]);
 
+  // ── Lista unificada de productos para selector de Producto Fijo ───────────
+  const listaProductosDisponibles = useMemo(() => {
+    const map = new Map();
+    // 1. Stock / processedData actual
+    (processedData || []).forEach(p => {
+      if (p && p.nombre) {
+        map.set(norm(p.nombre), {
+          id: p.id,
+          nombre: p.nombre,
+          categoriaPrincipal: p.categoriaPrincipal || getCategoriaPrincipal(p.nombre),
+          subcategoria: p.subcategoria || '',
+          unidad: p.unidad || getUnidadByNombre(p.nombre),
+          stockActual: Number(p.stock?.unidades ?? p.stock?.['1kg']) || 0
+        });
+      }
+    });
+
+    // 2. Catálogo maestro de productos
+    (productosMaster || []).forEach(p => {
+      if (p && p.nombre && !map.has(norm(p.nombre))) {
+        map.set(norm(p.nombre), {
+          id: p.id,
+          nombre: p.nombre,
+          categoriaPrincipal: p.categoriaPrincipal || getCategoriaPrincipal(p.nombre),
+          subcategoria: p.subcategoria || '',
+          unidad: p.unidad || getUnidadByNombre(p.nombre),
+          stockActual: 0
+        });
+      }
+    });
+
+    // 3. Presets de almacén
+    (ALMACEN_PRESETS || []).forEach(ap => {
+      if (!map.has(norm(ap.nombre))) {
+        map.set(norm(ap.nombre), {
+          id: `preset_${ap.id}`,
+          nombre: ap.nombre,
+          categoriaPrincipal: 'Almacén',
+          subcategoria: ap.subcategoria,
+          unidad: ap.unidad || 'unidad',
+          stockActual: 0
+        });
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [processedData, productosMaster]);
+
   // ── Handler de Carga Simplificada por Unidad (Ajo, Choclo, Almacén) ─────────
   const handleConfirmCargaUnidad = ({ productoId, nombre, subcategoria, costoTotal, cantidad, costoUnitario, fecha }) => {
     const current = stockDataRef.current || {};
@@ -1546,13 +1790,172 @@ export default function ControlStock() {
           </p>
         </div>
 
+        {/* ── SELECTOR DE PRODUCTO FIJO PARA ESCANEO CONTINUO POR UNIDAD ────── */}
+        <div className={`mb-4 p-4 rounded-2xl border transition-all duration-300 ${
+          productoFijo 
+            ? 'bg-gradient-to-r from-emerald-950/50 via-gray-900 to-emerald-950/30 border-emerald-500/60 shadow-[0_0_25px_rgba(16,185,129,0.18)]'
+            : 'bg-black/30 border-white/10 hover:border-white/20'
+        }`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-2.5">
+              <div className={`p-2 rounded-xl transition-all ${productoFijo ? 'bg-emerald-500/20 text-emerald-400 shadow-sm shadow-emerald-500/20' : 'bg-white/5 text-gray-400'}`}>
+                <Pin size={17} className={productoFijo ? 'rotate-45 text-emerald-400 animate-pulse' : ''} />
+              </div>
+              <div>
+                <h4 className="text-xs font-black uppercase tracking-wider text-white flex items-center gap-2">
+                  Producto Fijo para Escaneo Continuo
+                  {productoFijo ? (
+                    <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-500/30">
+                      FIJADO • MODO RÁPIDO
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-gray-500 font-semibold lowercase">
+                      (opcional para Almacén / Unidades)
+                    </span>
+                  )}
+                </h4>
+                <p className="text-[11px] text-gray-400 mt-0.5">
+                  {productoFijo
+                    ? `Cada código escaneado se asocia a "${productoFijo.nombre}" y suma 1 unidad automáticamente sin confirmaciones.`
+                    : 'Seleccioná un producto (ej: Papa, Latas de choclo) para escanear con la pistola sin pausas ni ventanas de confirmación.'}
+                </p>
+              </div>
+            </div>
+
+            {productoFijo && (
+              <div className="flex items-center gap-2 self-end sm:self-center">
+                <button
+                  type="button"
+                  onClick={() => setConteoFijoSesion(0)}
+                  className="flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
+                  title="Reiniciar contador de sesión a 0"
+                >
+                  <RotateCcw size={12} />
+                  <span>Reiniciar contador</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectProductoFijo(null)}
+                  className="flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-400 hover:text-red-300 border border-red-500/25 transition cursor-pointer"
+                  title="Desactivar modo producto fijo y volver al modo normal"
+                >
+                  <X size={13} />
+                  <span>Desactivar fijo</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Selector Dropdown y Contador de Sesión */}
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+            <div className={productoFijo ? 'md:col-span-7' : 'md:col-span-12'}>
+              <select
+                value={productoFijo ? norm(productoFijo.nombre) : ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (!val) {
+                    handleSelectProductoFijo(null);
+                  } else {
+                    const found = listaProductosDisponibles.find(p => norm(p.nombre) === norm(val));
+                    if (found) handleSelectProductoFijo(found);
+                  }
+                }}
+                className={`w-full border text-xs font-semibold rounded-xl px-3.5 py-2.5 outline-none transition cursor-pointer ${
+                  productoFijo
+                    ? 'bg-black/70 border-emerald-500/50 text-emerald-300 focus:border-emerald-400'
+                    : 'bg-black/50 border-white/15 text-white focus:border-green-500'
+                }`}
+              >
+                <option value="">-- Seleccionar producto para dejar fijo (ej: Papa, Latas de choclo...) --</option>
+                {CATEGORIAS_PRINCIPALES.filter(c => c !== 'Todas').map(cat => {
+                  const prodsInCat = listaProductosDisponibles.filter(p => p.categoriaPrincipal === cat);
+                  if (prodsInCat.length === 0) return null;
+                  return (
+                    <optgroup key={cat} label={`── ${cat.toUpperCase()} ──`} className="bg-gray-900 text-gray-300 font-bold">
+                      {prodsInCat.map(p => (
+                        <option key={norm(p.nombre)} value={norm(p.nombre)} className="text-white py-1">
+                          {p.nombre} {p.subcategoria ? `(${p.subcategoria})` : ''} [{p.unidad || 'ud'}] {p.stockActual > 0 ? `• Stock: ${p.stockActual}` : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
+              </select>
+            </div>
+
+            {productoFijo && (
+              <div className="md:col-span-5 flex items-center justify-between sm:justify-end gap-3 bg-emerald-950/50 border border-emerald-500/40 rounded-xl px-4 py-2 shadow-inner">
+                <div className="text-left sm:text-right">
+                  <div className="text-[10px] uppercase font-extrabold text-emerald-300 tracking-wider">Cargadas en sesión</div>
+                  <div className="text-xs font-bold text-gray-300 truncate max-w-[150px]">{productoFijo.nombre}</div>
+                </div>
+                <div className="flex items-baseline gap-1.5 bg-black/40 px-3 py-1 rounded-lg border border-emerald-500/30">
+                  <span className="text-2xl sm:text-3xl font-black font-mono text-emerald-400 tracking-tight">
+                    {conteoFijoSesion}
+                  </span>
+                  <span className="text-xs font-bold text-emerald-300">
+                    {conteoFijoSesion === 1 ? 'ud' : 'uds'}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Chips de Selección Rápida */}
+          <div className="mt-3 flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] uppercase font-bold text-gray-500 mr-1 flex items-center gap-1">
+              <Sparkles size={11} className="text-amber-400" /> Rápido:
+            </span>
+            {[
+              { nombre: 'Papa', emoji: '🥔' },
+              { nombre: 'Latas de choclo', emoji: '🥫' },
+              { nombre: 'Harina leudante Favorita', emoji: '🌾' },
+              { nombre: 'Ajo', emoji: '🧄' },
+              { nombre: 'Choclo', emoji: '🌽' },
+              { nombre: 'Fideos secos guiseros', emoji: '🍝' },
+              { nombre: 'Arroz blanco largo fino', emoji: '🍚' },
+              { nombre: 'Aceite de girasol 900ml', emoji: '🌻' }
+            ].map(chip => {
+              const isActivo = productoFijo && norm(productoFijo.nombre) === norm(chip.nombre);
+              return (
+                <button
+                  key={chip.nombre}
+                  type="button"
+                  onClick={() => {
+                    const found = listaProductosDisponibles.find(p => norm(p.nombre) === norm(chip.nombre));
+                    if (found) {
+                      handleSelectProductoFijo(found);
+                    } else {
+                      handleSelectProductoFijo({
+                        id: `chip_${chip.nombre.toLowerCase().replace(/\s+/g, '_')}`,
+                        nombre: chip.nombre,
+                        categoriaPrincipal: getCategoriaPrincipal(chip.nombre),
+                        subcategoria: getSubcategoriaAlmacen(chip.nombre),
+                        unidad: getUnidadByNombre(chip.nombre)
+                      });
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 cursor-pointer ${
+                    isActivo
+                      ? 'bg-emerald-500 text-white font-bold shadow-sm shadow-emerald-900/50 scale-105 ring-2 ring-emerald-400/40'
+                      : 'bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white border border-white/5'
+                  }`}
+                >
+                  <span>{chip.emoji}</span>
+                  <span>{chip.nombre}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Campo de escaneo con botón de Carga Manual */}
         <div className="flex gap-2 items-center">
           <div className="relative flex-1">
             <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
               <div className={`w-2 h-2 rounded-full transition-all ${
                 document.activeElement === scanInputRef.current
-                  ? 'bg-green-400 shadow-[0_0_8px_2px_rgba(74,222,128,0.6)] animate-pulse'
+                  ? (productoFijo ? 'bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.8)] animate-pulse' : 'bg-green-400 shadow-[0_0_8px_2px_rgba(74,222,128,0.6)] animate-pulse')
                   : 'bg-gray-600'
               }`} />
             </div>
@@ -1563,8 +1966,16 @@ export default function ControlStock() {
               onChange={handleScanInput}
               onKeyDown={handleScanKeyDown}
               onBlur={() => setTimeout(refocusScanner, 100)}
-              placeholder="Apuntá la pistola y escaneá — PAPA-1.120"
-              className="w-full bg-black/40 border border-white/10 focus:border-green-500/60 text-white text-sm font-mono rounded-2xl pl-10 pr-4 py-3.5 outline-none transition-all placeholder:text-gray-600 focus:bg-black/60 focus:shadow-[0_0_20px_rgba(74,222,128,0.08)]"
+              placeholder={
+                productoFijo
+                  ? `🔫 Escaneá para "${productoFijo.nombre}" — Suma +1 ud automática (Llevás ${conteoFijoSesion})`
+                  : "Apuntá la pistola y escaneá — PAPA-1.120"
+              }
+              className={`w-full bg-black/40 border text-white text-sm font-mono rounded-2xl pl-10 pr-4 py-3.5 outline-none transition-all placeholder:text-gray-600 focus:bg-black/60 ${
+                productoFijo
+                  ? 'border-emerald-500/70 focus:border-emerald-400 focus:shadow-[0_0_25px_rgba(52,211,153,0.3)] bg-emerald-950/10'
+                  : 'border-white/10 focus:border-green-500/60 focus:shadow-[0_0_20px_rgba(74,222,128,0.08)]'
+              }`}
               autoComplete="off"
               spellCheck={false}
             />
