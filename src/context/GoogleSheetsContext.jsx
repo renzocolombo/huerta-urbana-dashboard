@@ -6,6 +6,7 @@ import {
   getUnidadByNombre, 
   getCategoriaPrincipal, 
   getSubcategoriaAlmacen, 
+  normalizeSubcategoriaAlmacen,
   ALMACEN_PRESETS 
 } from '../data/productUtils';
 
@@ -224,7 +225,7 @@ export function GoogleSheetsProvider({ children }) {
             nombre: alm.nombre,
             categoria: 'otros',
             categoriaPrincipal: 'Almacén',
-            subcategoria: alm.subcategoria || getSubcategoriaAlmacen(alm.nombre),
+            subcategoria: normalizeSubcategoriaAlmacen(alm.subcategoria || getSubcategoriaAlmacen(alm.nombre)),
             cantidadCajon: 1,
             unidad: 'unidad',
             precioCajon: alm.precioCajon || 0,

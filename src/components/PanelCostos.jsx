@@ -1005,7 +1005,7 @@ export default function PanelCostos() {
                         setTempProd({
                           ...tempProd, 
                           categoriaPrincipal: cat,
-                          subcategoria: cat === 'Almacén' ? (tempProd.subcategoria || 'Almacén seco') : '',
+                          subcategoria: cat === 'Almacén' ? (tempProd.subcategoria || 'Almacén') : '',
                           unidad: esUnidadDefault ? 'unidad' : 'kg'
                         });
                       }}

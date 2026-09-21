@@ -17,6 +17,7 @@ import {
   asociarEanAProducto,
   esCodigoEan,
   getSubcategoriaAlmacen,
+  normalizeSubcategoriaAlmacen,
   ALMACEN_PRESETS
 } from '../data/productUtils';
 
@@ -188,7 +189,7 @@ export default function ControlStock() {
 
   // ── Filtros por categoría principal y subcategoría de Almacén ─────────────
   const [categoriaFiltro, setCategoriaFiltro] = useState('Todas');
-  const [subcategoriaAlmacen, setSubcategoriaAlmacen] = useState('Bebidas');
+  const [subcategoriaAlmacen, setSubcategoriaAlmacen] = useState('Almacén');
 
   // ── Modales de carga por unidad y asociación EAN ────────────────────────
   const [modalCargaUnidad, setModalCargaUnidad] = useState(null); // { open, productoId, nombre, unidad }
@@ -1062,7 +1063,9 @@ export default function ControlStock() {
       const unidad = p.unidad || autoUnidad;
       const esUnidad = unidad === 'unidad';
       const catPrincipal = p.categoriaPrincipal || p.categoria || remoteInfo?.categoria || autoCat;
-      const subCat = p.subcategoria || remoteInfo?.subcategoria || (catPrincipal === 'Almacén' ? getSubcategoriaAlmacen(p.nombre) : '');
+      const subCat = catPrincipal === 'Almacén'
+        ? normalizeSubcategoriaAlmacen(p.subcategoria || remoteInfo?.subcategoria || getSubcategoriaAlmacen(p.nombre))
+        : '';
 
       const cachedUnits = unitsCache[norm(p.nombre)];
 
@@ -1129,7 +1132,9 @@ export default function ControlStock() {
       if (!item) return null;
 
       const catPrincipal = item.categoriaPrincipal || getCategoriaPrincipal(item.nombre);
-      const subCat = item.subcategoria || (catPrincipal === 'Almacén' ? getSubcategoriaAlmacen(item.nombre) : '');
+      const subCat = catPrincipal === 'Almacén'
+        ? normalizeSubcategoriaAlmacen(item.subcategoria || getSubcategoriaAlmacen(item.nombre))
+        : '';
       const unidad = item.unidad || getUnidadByNombre(item.nombre);
       const esUnidad = item.esUnidad || unidad === 'unidad';
 
@@ -1198,7 +1203,9 @@ export default function ControlStock() {
     }
 
     const catPrincipal = prod?.categoriaPrincipal || getCategoriaPrincipal(nombre);
-    const subCat = subcategoria || prod?.subcategoria || (catPrincipal === 'Almacén' ? getSubcategoriaAlmacen(nombre) : '');
+    const subCat = catPrincipal === 'Almacén'
+      ? normalizeSubcategoriaAlmacen(subcategoria || prod?.subcategoria || getSubcategoriaAlmacen(nombre))
+      : '';
 
     if (!prod) {
       // Producto nuevo creado al vuelo (ej: Harina leudante Favorita)
@@ -1361,7 +1368,7 @@ export default function ControlStock() {
       const nuevoStock = stockActual + 1;
       const updatedProd = {
         ...prod,
-        subcategoria: subcategoria || prod.subcategoria,
+        subcategoria: normalizeSubcategoriaAlmacen(subcategoria || prod.subcategoria),
         stock: {
           ...prod.stock,
           '1kg': nuevoStock,
@@ -2290,7 +2297,7 @@ export default function ControlStock() {
                   productoId: null,
                   nombre: '',
                   unidad: 'unidad',
-                  subcategoria: subcategoriaAlmacen !== 'Todas' ? subcategoriaAlmacen : 'Almacén seco'
+                  subcategoria: subcategoriaAlmacen !== 'Todas' ? subcategoriaAlmacen : 'Almacén'
                 })}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-md cursor-pointer border border-emerald-400/40"
               >
@@ -2304,8 +2311,8 @@ export default function ControlStock() {
           </div>
           <div className="flex flex-wrap gap-1.5">
             {[
+              { id: 'Almacén', label: 'Almacén', icon: '🥫' },
               { id: 'Bebidas', label: 'Bebidas', icon: '🥤' },
-              { id: 'Almacén seco', label: 'Almacén seco', icon: '🍝' },
               { id: 'Limpieza', label: 'Limpieza', icon: '🧼' },
               { id: 'Lácteos', label: 'Lácteos', icon: '🧀' },
               { id: 'Golosinas', label: 'Golosinas', icon: '🍫' },
@@ -2904,7 +2911,7 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
   const [modoCrear, setModoCrear] = useState(!initialProduct?.id);
   const [selectedId, setSelectedId] = useState(initialProduct?.id || '');
   const [nuevoNombre, setNuevoNombre] = useState('');
-  const [subcategoria, setSubcategoria] = useState(initialProduct?.subcategoria || 'Almacén seco');
+  const [subcategoria, setSubcategoria] = useState(initialProduct?.subcategoria ? normalizeSubcategoriaAlmacen(initialProduct.subcategoria) : 'Almacén');
   const [costoTotal, setCostoTotal] = useState('');
   const [cantidad, setCantidad] = useState('6');
   const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
@@ -2913,16 +2920,16 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
     if (initialProduct?.id) {
       setSelectedId(initialProduct.id);
       setModoCrear(false);
-      if (initialProduct.subcategoria) setSubcategoria(initialProduct.subcategoria);
+      if (initialProduct.subcategoria) setSubcategoria(normalizeSubcategoriaAlmacen(initialProduct.subcategoria));
     } else if (initialProduct?.subcategoria) {
-      setSubcategoria(initialProduct.subcategoria);
+      setSubcategoria(normalizeSubcategoriaAlmacen(initialProduct.subcategoria));
       setModoCrear(true);
     } else if (!selectedId && stockData) {
       const prodsList = Object.values(stockData);
       const firstUnit = prodsList.find(p => p.categoriaPrincipal === 'Almacén') || prodsList.find(p => p.esUnidad);
       if (firstUnit) {
         setSelectedId(firstUnit.id);
-        if (firstUnit.subcategoria) setSubcategoria(firstUnit.subcategoria);
+        if (firstUnit.subcategoria) setSubcategoria(normalizeSubcategoriaAlmacen(firstUnit.subcategoria));
       }
     }
   }, [initialProduct, stockData]);
@@ -3045,7 +3052,7 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
           <div className="space-y-1.5">
             <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Subcategoría de Almacén</label>
             <div className="grid grid-cols-3 gap-1.5">
-              {['Bebidas', 'Almacén seco', 'Limpieza', 'Lácteos', 'Golosinas'].map(sub => (
+              {SUBCATEGORIAS_ALMACEN.map(sub => (
                 <button
                   key={sub}
                   type="button"
@@ -3167,7 +3174,7 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
 function ModalEanAsociar({ isOpen, onClose, ean, stockData, onConfirmAsociar }) {
   const [selectedProdId, setSelectedProdId] = useState('');
   const [nuevoNombre, setNuevoNombre] = useState('');
-  const [subcategoria, setSubcategoria] = useState('Almacén seco');
+  const [subcategoria, setSubcategoria] = useState('Almacén');
   const [modoCrear, setModoCrear] = useState(false);
 
   useEffect(() => {
@@ -3175,7 +3182,7 @@ function ModalEanAsociar({ isOpen, onClose, ean, stockData, onConfirmAsociar }) 
       const almacenProds = Object.values(stockData).filter(p => p.categoriaPrincipal === 'Almacén');
       if (almacenProds.length > 0) {
         setSelectedProdId(almacenProds[0].id);
-        setSubcategoria(almacenProds[0].subcategoria || 'Almacén seco');
+        setSubcategoria(normalizeSubcategoriaAlmacen(almacenProds[0].subcategoria || 'Almacén'));
       } else {
         const first = Object.values(stockData)[0];
         if (first) setSelectedProdId(first.id);
@@ -3296,7 +3303,7 @@ function ModalEanAsociar({ isOpen, onClose, ean, stockData, onConfirmAsociar }) 
           <div className="space-y-1.5">
             <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Subcategoría</label>
             <div className="grid grid-cols-3 gap-1.5">
-              {['Bebidas', 'Almacén seco', 'Limpieza', 'Lácteos', 'Golosinas'].map(sub => (
+              {SUBCATEGORIAS_ALMACEN.map(sub => (
                 <button
                   key={sub}
                   type="button"
