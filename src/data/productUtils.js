@@ -13,9 +13,55 @@ export const PRODUCT_DATABASE = {
   'otros': ['huevos', 'miel', 'miel pura', 'maple']
 };
 
+export const ALMACEN_PRESETS = [
+  // Almacén seco
+  { id: 9101, nombre: 'Latas de choclo', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9102, nombre: 'Harina leudante Favorita', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9103, nombre: 'Harina 0000', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9104, nombre: 'Fideos tallarines', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9105, nombre: 'Fideos guiseros', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9106, nombre: 'Arroz blanco', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9107, nombre: 'Aceite de girasol', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9108, nombre: 'Azúcar común', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9109, nombre: 'Sal fina', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9110, nombre: 'Yerba mate', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9111, nombre: 'Atún al natural', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9112, nombre: 'Puré de tomate', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9113, nombre: 'Arvejas en lata', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9114, nombre: 'Mayonesa', subcategoria: 'Almacén seco', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+
+  // Bebidas
+  { id: 9120, nombre: 'Coca Cola 1.5L', subcategoria: 'Bebidas', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9121, nombre: 'Agua mineral 1.5L', subcategoria: 'Bebidas', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9122, nombre: 'Soda sifón', subcategoria: 'Bebidas', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9123, nombre: 'Jugo de naranja', subcategoria: 'Bebidas', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+
+  // Limpieza
+  { id: 9130, nombre: 'Detergente lavavajilla', subcategoria: 'Limpieza', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9131, nombre: 'Lavandina común', subcategoria: 'Limpieza', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9132, nombre: 'Jabón líquido ropa', subcategoria: 'Limpieza', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9133, nombre: 'Papel higiénico x4', subcategoria: 'Limpieza', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9134, nombre: 'Rollo de cocina', subcategoria: 'Limpieza', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+
+  // Lácteos
+  { id: 9140, nombre: 'Leche entera 1L', subcategoria: 'Lácteos', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9141, nombre: 'Yogur bebible 1L', subcategoria: 'Lácteos', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9142, nombre: 'Queso cremoso', subcategoria: 'Lácteos', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9143, nombre: 'Manteca 200g', subcategoria: 'Lácteos', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9144, nombre: 'Dulce de leche 400g', subcategoria: 'Lácteos', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+
+  // Golosinas
+  { id: 9150, nombre: 'Alfajor de chocolate', subcategoria: 'Golosinas', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9151, nombre: 'Galletitas dulces', subcategoria: 'Golosinas', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' },
+  { id: 9152, nombre: 'Snack papas fritas', subcategoria: 'Golosinas', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' }
+];
+
 export function getCategoriaPrincipal(nombre) {
   if (!nombre) return 'Verduras';
   const n = nombre.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  // Tomate y Tomate cherry SIEMPRE en Verduras
+  if (n.includes('tomate')) return 'Verduras';
 
   // Carnes
   const carnes = ['carne', 'pollo', 'cerdo', 'vaca', 'picada', 'bife', 'asado', 'pechuga', 'muslo', 'milanesa', 'chorizo', 'morcilla', 'costilla'];
@@ -36,9 +82,9 @@ export function getCategoriaPrincipal(nombre) {
   const almacen = [
     'fideo', 'arroz', 'aceite', 'leche', 'queso', 'yogur', 'galletita', 'coca', 'agua', 
     'detergente', 'jabon', 'lavandina', 'alfajor', 'chocolate', 'snack', 'yerba', 'azucar', 
-    'sal', 'atun', 'harina', 'pure', 'conserva', 'mayonesa', 'mermelada', 'te ', 'cafe'
+    'sal', 'atun', 'harina', 'pure', 'conserva', 'mayonesa', 'mermelada', 'cafe', 'lata'
   ];
-  if (almacen.some(a => n.includes(a))) return 'Almacén';
+  if (almacen.some(a => n.includes(a)) || /\bte\b/i.test(n)) return 'Almacén';
 
   // Por defecto es Verduras
   return 'Verduras';
@@ -68,6 +114,7 @@ export function getUnidadByNombre(nombre) {
   if (n.includes('brocoli')) return 'unidad';
   if (n.includes('albahaca')) return 'atado';
   if (n.includes('perejil')) return 'atado';
+  if (n.includes('tomate cherry')) return 'kg';
   
   // Productos de almacén comunes por unidad
   const cat = getCategoriaPrincipal(nombre);

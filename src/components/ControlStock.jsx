@@ -16,7 +16,8 @@ import {
   getEanMapping,
   asociarEanAProducto,
   esCodigoEan,
-  getSubcategoriaAlmacen
+  getSubcategoriaAlmacen,
+  ALMACEN_PRESETS
 } from '../data/productUtils';
 
 // Configuración de entorno
@@ -1023,7 +1024,32 @@ export default function ControlStock() {
     const newStockData = {};
     
     // Si master está vacío (ej: usuario Produccion), usar nombres de remoteData
-    const catalog = (master && master.length > 0) ? master : remoteData.map((r, idx) => ({ id: 1000 + idx, nombre: r.producto || r.nombre }));
+    const catalog = (master && master.length > 0) ? [...master] : remoteData.map((r, idx) => ({ id: 1000 + idx, nombre: r.producto || r.nombre }));
+
+    // Cargar productos personalizados de almacén guardados en localStorage
+    let customProds = [];
+    try {
+      const saved = localStorage.getItem('huerta_custom_almacen_prods_v1');
+      if (saved) customProds = JSON.parse(saved);
+    } catch(e) {}
+    customProds.forEach(cp => {
+      if (!catalog.some(p => norm(p.nombre) === norm(cp.nombre))) {
+        catalog.push(cp);
+      }
+    });
+
+    // Cargar presets de almacén para que todas las subcategorías tengan sus productos disponibles
+    ALMACEN_PRESETS.forEach(pre => {
+      if (!catalog.some(p => norm(p.nombre) === norm(pre.nombre))) {
+        catalog.push(pre);
+      }
+    });
+
+    // Leer cache local de unidades cargadas para persistir entre sesiones
+    let unitsCache = {};
+    try {
+      unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
+    } catch(e) {}
 
     catalog.forEach(p => {
       if (!p.nombre) return;
@@ -1035,23 +1061,30 @@ export default function ControlStock() {
       const autoUnidad = getUnidadByNombre(p.nombre);
       const unidad = p.unidad || autoUnidad;
       const esUnidad = unidad === 'unidad';
-      const catPrincipal = p.categoria || remoteInfo?.categoria || autoCat;
+      const catPrincipal = p.categoriaPrincipal || p.categoria || remoteInfo?.categoria || autoCat;
       const subCat = p.subcategoria || remoteInfo?.subcategoria || (catPrincipal === 'Almacén' ? getSubcategoriaAlmacen(p.nombre) : '');
 
+      const cachedUnits = unitsCache[norm(p.nombre)];
+
       if (remoteInfo) {
-        // Mapeo robusto: acepta tanto nombres de propiedades como índices si fuera necesario
         const stock_500 = Number(remoteInfo.stock_500g || remoteInfo[3] || 0);
         const stock_1k = Number(remoteInfo.stock_1kg || remoteInfo[4] || 0);
         const orig_500 = Number(remoteInfo.original_load_500g || remoteInfo.stock_500g || remoteInfo[3] || 0);
         const orig_1k = Number(remoteInfo.original_load_1kg || remoteInfo.stock_1kg || remoteInfo[4] || 0);
-        const stock_unidades = remoteInfo.stock_unidades !== undefined ? Number(remoteInfo.stock_unidades) : stock_1k;
+        let stock_unidades = remoteInfo.stock_unidades !== undefined ? Number(remoteInfo.stock_unidades) : stock_1k;
+        let orig_unidades = orig_1k;
+
+        if (cachedUnits && esUnidad) {
+          stock_unidades = cachedUnits.stock;
+          orig_unidades = cachedUnits.originalLoad || stock_unidades;
+        }
 
         newStockData[p.id] = {
           nombre: p.nombre,
           fila: remoteInfo.fila || remoteInfo.fila_index,
-          stock: { '500g': stock_500, '1kg': stock_1k, unidades: esUnidad ? stock_unidades : stock_1k },
-          originalLoad: { '500g': orig_500, '1kg': orig_1k, unidades: esUnidad ? stock_unidades : orig_1k },
-          ultimoBandejeado: remoteInfo.ultimo_bandejeado || remoteInfo[5] || null,
+          stock: { '500g': stock_500, '1kg': esUnidad ? stock_unidades : stock_1k, unidades: esUnidad ? stock_unidades : stock_1k },
+          originalLoad: { '500g': orig_500, '1kg': esUnidad ? orig_unidades : orig_1k, unidades: esUnidad ? orig_unidades : orig_1k },
+          ultimoBandejeado: (cachedUnits && cachedUnits.fecha) || remoteInfo.ultimo_bandejeado || remoteInfo[5] || null,
           tipo: remoteInfo.tipo || remoteInfo[1] || autoTipo,
           categoriaPrincipal: catPrincipal,
           subcategoria: subCat,
@@ -1061,17 +1094,24 @@ export default function ControlStock() {
           urgentDays: Number(remoteInfo.urgent_days || (remoteInfo.dias_alerta ? 2 : null) || (DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo] || DEFAULTS_BY_TYPE['duro']).alertDays)
         };
       } else if (p.fila) {
-         // Si venía de remoteData pero no tiene match (raro)
          const def = DEFAULTS_BY_TYPE[autoTipo] || DEFAULTS_BY_TYPE['duro'];
+         const savedStock = (cachedUnits && esUnidad) ? cachedUnits.stock : 0;
          newStockData[p.id] = {
-           nombre: p.nombre, fila: p.fila, stock: { '500g': 0, '1kg': 0, unidades: 0 }, originalLoad: { '500g': 0, '1kg': 0, unidades: 0 },
-           ultimoBandejeado: null, tipo: autoTipo, categoriaPrincipal: catPrincipal, subcategoria: subCat, unidad, esUnidad, totalDays: def.totalDays, urgentDays: def.alertDays
+           nombre: p.nombre, fila: p.fila, 
+           stock: { '500g': 0, '1kg': savedStock, unidades: savedStock }, 
+           originalLoad: { '500g': 0, '1kg': savedStock, unidades: savedStock },
+           ultimoBandejeado: (cachedUnits && cachedUnits.fecha) || null, 
+           tipo: autoTipo, categoriaPrincipal: catPrincipal, subcategoria: subCat, unidad, esUnidad, totalDays: def.totalDays, urgentDays: def.alertDays
          };
       } else {
         const def = DEFAULTS_BY_TYPE[autoTipo] || DEFAULTS_BY_TYPE['duro'];
+        const savedStock = (cachedUnits && esUnidad) ? cachedUnits.stock : 0;
         newStockData[p.id] = {
-          nombre: p.nombre, fila: null, stock: { '500g': 0, '1kg': 0, unidades: 0 }, originalLoad: { '500g': 0, '1kg': 0, unidades: 0 },
-          ultimoBandejeado: null, tipo: autoTipo, categoriaPrincipal: catPrincipal, subcategoria: subCat, unidad, esUnidad, totalDays: def.totalDays, urgentDays: def.alertDays
+          nombre: p.nombre, fila: null, 
+          stock: { '500g': 0, '1kg': savedStock, unidades: savedStock }, 
+          originalLoad: { '500g': 0, '1kg': savedStock, unidades: savedStock },
+          ultimoBandejeado: (cachedUnits && cachedUnits.fecha) || null, 
+          tipo: autoTipo, categoriaPrincipal: catPrincipal, subcategoria: subCat, unidad, esUnidad, totalDays: def.totalDays, urgentDays: def.alertDays
         };
       }
     });
@@ -1128,7 +1168,7 @@ export default function ControlStock() {
       }
 
       return {
-        id: Number(id),
+        id: item.id || id,
         ...item,
         categoriaPrincipal: catPrincipal,
         subcategoria: subCat,
@@ -1147,10 +1187,38 @@ export default function ControlStock() {
   }, [stockData]);
 
   // ── Handler de Carga Simplificada por Unidad (Ajo, Choclo, Almacén) ─────────
-  const handleConfirmCargaUnidad = ({ productoId, nombre, costoTotal, cantidad, costoUnitario, fecha }) => {
+  const handleConfirmCargaUnidad = ({ productoId, nombre, subcategoria, costoTotal, cantidad, costoUnitario, fecha }) => {
     const current = stockDataRef.current || {};
-    const prod = current[productoId];
-    if (!prod) return;
+    let targetId = productoId;
+    let prod = targetId ? current[targetId] : null;
+
+    if (!prod && nombre) {
+      targetId = Object.keys(current).find(id => norm(current[id]?.nombre) === norm(nombre));
+      if (targetId) prod = current[targetId];
+    }
+
+    const catPrincipal = prod?.categoriaPrincipal || getCategoriaPrincipal(nombre);
+    const subCat = subcategoria || prod?.subcategoria || (catPrincipal === 'Almacén' ? getSubcategoriaAlmacen(nombre) : '');
+
+    if (!prod) {
+      // Producto nuevo creado al vuelo (ej: Harina leudante Favorita)
+      targetId = 'alm_custom_' + Date.now();
+      prod = {
+        id: targetId,
+        nombre: nombre.trim(),
+        fila: null,
+        stock: { '500g': 0, '1kg': 0, unidades: 0 },
+        originalLoad: { '500g': 0, '1kg': 0, unidades: 0 },
+        ultimoBandejeado: fecha,
+        tipo: 'otros',
+        categoriaPrincipal: catPrincipal,
+        subcategoria: subCat,
+        unidad: 'unidad',
+        esUnidad: true,
+        totalDays: 30,
+        urgentDays: 25
+      };
+    }
 
     const stockActual = Number(prod.stock?.unidades ?? prod.stock?.['1kg']) || 0;
     const nuevoStock = stockActual + cantidad;
@@ -1159,6 +1227,8 @@ export default function ControlStock() {
 
     const updatedProd = {
       ...prod,
+      categoriaPrincipal: catPrincipal,
+      subcategoria: subCat,
       stock: {
         '500g': 0,
         '1kg': nuevoStock,
@@ -1172,49 +1242,103 @@ export default function ControlStock() {
       ultimoBandejeado: fecha
     };
 
-    const newData = { ...current, [productoId]: updatedProd };
+    const newData = { ...current, [targetId]: updatedProd };
     setStockData(newData);
     syncWithSheet(updatedProd);
 
-    // Actualizar costo unitario vigente en catálogo de costos
-    if (contextMaster && Array.isArray(contextMaster) && costoUnitario > 0) {
-      const updatedCostos = contextMaster.map(item => {
-        if (item.id === productoId || norm(item.nombre) === norm(nombre)) {
-          return {
-            ...item,
+    // Guardar en cache local para persistencia inmediata
+    try {
+      const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
+      unitsCache[norm(updatedProd.nombre)] = {
+        stock: nuevoStock,
+        originalLoad: nuevoOrig,
+        fecha,
+        subcategoria: subCat,
+        costoUnitario,
+        costoTotal,
+        cantidad
+      };
+      localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
+
+      // Guardar lista de productos personalizados de almacén
+      const customSaved = JSON.parse(localStorage.getItem('huerta_custom_almacen_prods_v1') || '[]');
+      if (!customSaved.some(cp => norm(cp.nombre) === norm(updatedProd.nombre))) {
+        customSaved.push({
+          id: targetId,
+          nombre: updatedProd.nombre,
+          subcategoria: subCat,
+          categoriaPrincipal: catPrincipal,
+          unidad: 'unidad',
+          tipo: 'otros'
+        });
+        localStorage.setItem('huerta_custom_almacen_prods_v1', JSON.stringify(customSaved));
+      }
+    } catch (e) {}
+
+    // Actualizar catálogo de costos en contexto y localStorage
+    if (typeof setProductosCostos === 'function') {
+      setProductosCostos(prev => {
+        const list = prev || [];
+        const exists = list.some(item => item.id === targetId || norm(item.nombre) === norm(updatedProd.nombre));
+        if (exists) {
+          const next = list.map(item => {
+            if (item.id === targetId || norm(item.nombre) === norm(updatedProd.nombre)) {
+              return {
+                ...item,
+                costo_kilo: costoUnitario > 0 ? costoUnitario : item.costo_kilo,
+                costo_cajon: costoTotal > 0 ? costoTotal : item.costo_cajon,
+                kilos_cajon: cantidad > 0 ? cantidad : item.kilos_cajon,
+                costoUnitario: costoUnitario > 0 ? costoUnitario : item.costoUnitario,
+                precioCajon: costoTotal > 0 ? costoTotal : item.precioCajon,
+                cantidadCajon: cantidad > 0 ? cantidad : item.cantidadCajon,
+                subcategoria: subCat || item.subcategoria,
+                categoriaPrincipal: catPrincipal,
+                unidad: 'unidad'
+              };
+            }
+            return item;
+          });
+          try { localStorage.setItem(COSTOS_KEY, JSON.stringify(next)); } catch(e){}
+          return next;
+        } else {
+          const nuevoCosto = {
+            id: targetId,
+            nombre: updatedProd.nombre,
             costo_kilo: costoUnitario,
             costo_cajon: costoTotal,
             kilos_cajon: cantidad,
             costoUnitario: costoUnitario,
             precioCajon: costoTotal,
             cantidadCajon: cantidad,
+            margen: 60,
+            precioMaxManual: null,
+            activo: true,
+            categoria: 'otros',
+            categoriaPrincipal: catPrincipal,
+            subcategoria: subCat,
             unidad: 'unidad'
           };
+          const nextList = [...list, nuevoCosto];
+          try { localStorage.setItem(COSTOS_KEY, JSON.stringify(nextList)); } catch(e){}
+          return nextList;
         }
-        return item;
       });
-      if (typeof setProductosCostos === 'function') {
-        setProductosCostos(updatedCostos);
-      }
-      try {
-        localStorage.setItem(COSTOS_KEY, JSON.stringify(updatedCostos));
-      } catch (e) {}
     }
 
     setLastScan({
       ok: true,
-      productoNombre: prod.nombre,
+      productoNombre: updatedProd.nombre,
       peso: cantidad,
-      slot: `${cantidad} ud${cantidad !== 1 ? 's' : ''}`,
+      slot: `${cantidad} uds (Total: ${nuevoStock})`,
+      stockRestante: nuevoStock,
       ts: Date.now(),
-      accion: 'Carga',
-      stockRestante: nuevoStock
+      accion: 'Carga'
     });
     setScanLog(prev => [{
       ok: true,
-      productoNombre: prod.nombre,
+      productoNombre: updatedProd.nombre,
       peso: cantidad,
-      slot: `${cantidad} ud${cantidad !== 1 ? 's' : ''}`,
+      slot: `${cantidad} uds (Total: ${nuevoStock})`,
       ts: Date.now(),
       accion: 'Carga',
       stockRestante: nuevoStock
@@ -2158,9 +2282,25 @@ export default function ControlStock() {
                 <p className="text-[10px] text-gray-400">Selector fijo para cargar productos sucesivos sin desplazamiento</p>
               </div>
             </div>
-            <span className="text-[10px] font-mono font-bold text-purple-300 bg-purple-500/20 border border-purple-500/30 px-2.5 py-1 rounded-lg">
-              Activa: {subcategoriaAlmacen}
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setModalCargaUnidad({
+                  open: true,
+                  productoId: null,
+                  nombre: '',
+                  unidad: 'unidad',
+                  subcategoria: subcategoriaAlmacen !== 'Todas' ? subcategoriaAlmacen : 'Almacén seco'
+                })}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-md cursor-pointer border border-emerald-400/40"
+              >
+                <Plus size={14} />
+                <span>+ Cargar Producto</span>
+              </button>
+              <span className="text-[10px] font-mono font-bold text-purple-300 bg-purple-500/20 border border-purple-500/30 px-2.5 py-1 rounded-lg">
+                Activa: {subcategoriaAlmacen}
+              </span>
+            </div>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {[
@@ -2760,39 +2900,63 @@ function AddStockInline({ nombre, labels, currentStock, onCancel, onSave }) {
   );
 }
 
-// ── Modal de Carga Rápida Simplificada por Unidad (Ajo, Choclo, Almacén) ───────
 function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfirmCarga }) {
+  const [modoCrear, setModoCrear] = useState(!initialProduct?.id);
   const [selectedId, setSelectedId] = useState(initialProduct?.id || '');
+  const [nuevoNombre, setNuevoNombre] = useState('');
+  const [subcategoria, setSubcategoria] = useState(initialProduct?.subcategoria || 'Almacén seco');
   const [costoTotal, setCostoTotal] = useState('');
-  const [cantidad, setCantidad] = useState('');
+  const [cantidad, setCantidad] = useState('6');
   const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
 
   useEffect(() => {
     if (initialProduct?.id) {
       setSelectedId(initialProduct.id);
+      setModoCrear(false);
+      if (initialProduct.subcategoria) setSubcategoria(initialProduct.subcategoria);
+    } else if (initialProduct?.subcategoria) {
+      setSubcategoria(initialProduct.subcategoria);
+      setModoCrear(true);
     } else if (!selectedId && stockData) {
       const prodsList = Object.values(stockData);
-      const firstUnit = prodsList.find(p => p.esUnidad || p.unidad === 'unidad' || p.categoriaPrincipal === 'Almacén');
-      if (firstUnit) setSelectedId(firstUnit.id);
-      else if (prodsList.length > 0) setSelectedId(prodsList[0].id);
+      const firstUnit = prodsList.find(p => p.categoriaPrincipal === 'Almacén') || prodsList.find(p => p.esUnidad);
+      if (firstUnit) {
+        setSelectedId(firstUnit.id);
+        if (firstUnit.subcategoria) setSubcategoria(firstUnit.subcategoria);
+      }
     }
   }, [initialProduct, stockData]);
 
   if (!isOpen) return null;
 
-  const prod = stockData?.[selectedId];
-  const stockActual = prod ? (Number(prod.stock?.unidades ?? prod.stock?.['1kg']) || 0) : 0;
+  const prod = !modoCrear ? stockData?.[selectedId] : null;
+  const nombreFinal = modoCrear ? nuevoNombre.trim() : (prod?.nombre || '');
+  
+  // Buscar si el producto nuevo ya existía en stockData por nombre
+  const existingByName = modoCrear && nombreFinal
+    ? Object.values(stockData || {}).find(p => norm(p.nombre) === norm(nombreFinal))
+    : null;
+
+  const activeItem = prod || existingByName;
+  const stockActual = activeItem ? (Number(activeItem.stock?.unidades ?? activeItem.stock?.['1kg']) || 0) : 0;
   const cantNum = Math.max(0, parseInt(cantidad, 10) || 0);
   const costoNum = Math.max(0, parseFloat(costoTotal) || 0);
-  const costoUnitario = cantNum > 0 ? Math.round(costoNum / cantNum) : 0;
+  const costoUnitario = cantNum > 0 && costoNum > 0 ? Math.round(costoNum / cantNum) : 0;
   const stockFinal = stockActual + cantNum;
+
+  const handleNombreChange = (val) => {
+    setNuevoNombre(val);
+    const guessed = getSubcategoriaAlmacen(val);
+    if (guessed) setSubcategoria(guessed);
+  };
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!prod || cantNum <= 0) return;
+    if (!nombreFinal || cantNum <= 0) return;
     onConfirmCarga({
-      productoId: prod.id,
-      nombre: prod.nombre,
+      productoId: activeItem?.id || (modoCrear ? null : selectedId),
+      nombre: nombreFinal,
+      subcategoria,
       costoTotal: costoNum,
       cantidad: cantNum,
       costoUnitario,
@@ -2803,15 +2967,15 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
-      <div className="bg-gray-900 border border-emerald-500/30 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-in zoom-in-95">
+      <div className="bg-gray-900 border border-emerald-500/40 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-in zoom-in-95">
         <div className="flex items-center justify-between pb-3 border-b border-white/10">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
               <Zap size={18} />
             </div>
             <div>
-              <h3 className="text-sm font-black text-white uppercase tracking-wider">Carga Rápida por Unidad</h3>
-              <p className="text-[10px] text-gray-400">1 solo paso directo a stock y costo sin merma</p>
+              <h3 className="text-sm font-black text-white uppercase tracking-wider">Carga Rápida de Stock (Unidades)</h3>
+              <p className="text-[10px] text-gray-400">Sumar al inventario y actualizar costo sin merma</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 text-gray-500 hover:text-white rounded-xl bg-white/5 transition-colors cursor-pointer">
@@ -2819,26 +2983,116 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
           </button>
         </div>
 
+        {/* Selector de modo: Existente vs Nuevo */}
+        <div className="flex bg-black/40 p-1 rounded-xl border border-white/5 gap-1">
+          <button
+            type="button"
+            onClick={() => setModoCrear(false)}
+            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+              !modoCrear ? 'bg-emerald-600 text-white font-black shadow-md' : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            Producto de la lista
+          </button>
+          <button
+            type="button"
+            onClick={() => setModoCrear(true)}
+            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+              modoCrear ? 'bg-emerald-600 text-white font-black shadow-md' : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            + Escribir nuevo
+          </button>
+        </div>
+
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Selector de producto */}
+          {!modoCrear ? (
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Seleccionar Producto</label>
+              <select
+                value={selectedId}
+                onChange={(e) => {
+                  setSelectedId(e.target.value);
+                  const p = stockData?.[e.target.value];
+                  if (p?.subcategoria) setSubcategoria(p.subcategoria);
+                }}
+                className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-white text-xs font-bold outline-none focus:border-emerald-500"
+              >
+                {Object.values(stockData || {})
+                  .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''))
+                  .map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.nombre} ({p.categoriaPrincipal || 'Almacén'} {p.subcategoria ? `· ${p.subcategoria}` : ''})
+                    </option>
+                  ))}
+              </select>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Nombre del Producto</label>
+              <input
+                type="text"
+                required
+                placeholder="Ej: Latas de choclo, Harina leudante Favorita..."
+                value={nuevoNombre}
+                onChange={(e) => handleNombreChange(e.target.value)}
+                className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-white text-xs font-bold outline-none focus:border-emerald-500"
+              />
+            </div>
+          )}
+
+          {/* Subcategoría de Almacén */}
           <div className="space-y-1.5">
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Producto</label>
-            <select
-              value={selectedId}
-              onChange={(e) => setSelectedId(e.target.value)}
-              className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-white text-xs font-bold outline-none focus:border-emerald-500"
-            >
-              {Object.values(stockData || {})
-                .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''))
-                .map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.nombre} ({p.categoriaPrincipal || 'Verduras'} · {p.unidad || 'unidad'})
-                  </option>
-                ))}
-            </select>
+            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Subcategoría de Almacén</label>
+            <div className="grid grid-cols-3 gap-1.5">
+              {['Bebidas', 'Almacén seco', 'Limpieza', 'Lácteos', 'Golosinas'].map(sub => (
+                <button
+                  key={sub}
+                  type="button"
+                  onClick={() => setSubcategoria(sub)}
+                  className={`py-2 px-1 text-[10px] font-bold rounded-xl border text-center transition-all cursor-pointer ${
+                    subcategoria === sub
+                      ? 'bg-purple-600/40 border-purple-500 text-purple-200 font-black shadow-sm'
+                      : 'bg-black/30 border-white/5 text-gray-400 hover:text-white'
+                  }`}
+                >
+                  {sub}
+                </button>
+              ))}
+            </div>
           </div>
 
+          {/* Cantidad y Costo Total */}
           <div className="grid grid-cols-2 gap-3">
+            {/* Cantidad de unidades con botones rápidos */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Cantidad (Uds)</label>
+                <div className="flex gap-1">
+                  {[6, 12, 24].map(n => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setCantidad(String(n))}
+                      className="text-[9px] font-mono font-bold bg-white/5 hover:bg-emerald-500/20 text-gray-400 hover:text-emerald-300 px-1.5 py-0.5 rounded cursor-pointer"
+                    >
+                      +{n}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                required
+                placeholder="Ej: 6"
+                value={cantidad}
+                onChange={(e) => setCantidad(e.target.value)}
+                className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm font-mono font-bold outline-none focus:border-emerald-500"
+              />
+            </div>
+
             {/* Costo total */}
             <div className="space-y-1.5">
               <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Costo Total ($)</label>
@@ -2846,31 +3100,15 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
                 type="number"
                 min="0"
                 step="any"
-                required
-                placeholder="Ej: 12000"
+                placeholder="Ej: 9000 (Opcional)"
                 value={costoTotal}
                 onChange={(e) => setCostoTotal(e.target.value)}
                 className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm font-mono font-bold outline-none focus:border-emerald-500"
               />
             </div>
-
-            {/* Cantidad de unidades */}
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Cantidad (Uds)</label>
-              <input
-                type="number"
-                min="1"
-                step="1"
-                required
-                placeholder="Ej: 10"
-                value={cantidad}
-                onChange={(e) => setCantidad(e.target.value)}
-                className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm font-mono font-bold outline-none focus:border-emerald-500"
-              />
-            </div>
           </div>
 
-          {/* Fecha */}
+          {/* Fecha de ingreso */}
           <div className="space-y-1.5">
             <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Fecha de Ingreso</label>
             <input
@@ -2881,19 +3119,22 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
             />
           </div>
 
-          {/* Resumen dinámico */}
+          {/* Resumen dinámico en vivo */}
           <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl space-y-1.5">
-            <div className="flex justify-between items-center text-xs">
-              <span className="text-gray-300 font-medium">Costo unitario nuevo:</span>
-              <span className="text-emerald-400 font-mono font-black text-sm">
-                ${costoUnitario.toLocaleString('es-AR')} / unidad
-              </span>
-            </div>
-            <p className="text-[10px] text-emerald-300/80">
-              ⚡ Sin merma (costo directo). Pasa a ser el costo vigente para todo el inventario de este producto.
-            </p>
+            {costoUnitario > 0 ? (
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-gray-300 font-medium">Costo unitario nuevo:</span>
+                <span className="text-emerald-400 font-mono font-black text-sm">
+                  ${costoUnitario.toLocaleString('es-AR')} / unidad
+                </span>
+              </div>
+            ) : (
+              <p className="text-[10px] text-gray-400">
+                💡 Podés ingresar el costo pagado ahora o cargarlo después en el Panel de Costos.
+              </p>
+            )}
             <div className="flex justify-between items-center text-xs pt-1.5 border-t border-emerald-500/20">
-              <span className="text-gray-300 font-medium">Stock disponible:</span>
+              <span className="text-gray-300 font-medium">Stock resultante:</span>
               <span className="text-white font-mono font-bold">
                 {stockActual} + <span className="text-emerald-400">{cantNum}</span> = {stockFinal} unidades
               </span>
@@ -2910,10 +3151,10 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
             </button>
             <button
               type="submit"
-              disabled={cantNum <= 0}
+              disabled={cantNum <= 0 || !nombreFinal}
               className="flex-[2] py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-black uppercase tracking-wider rounded-xl shadow-lg border-b-2 border-emerald-800 transition-all cursor-pointer"
             >
-              Confirmar y Cargar al Stock
+              Confirmar y Cargar (+{cantNum} Uds)
             </button>
           </div>
         </form>

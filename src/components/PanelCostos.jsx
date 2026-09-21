@@ -14,7 +14,8 @@ const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
 import { 
   getTipoByNombre, getUnidadByNombre, pluralizar, 
-  getCategoriaPrincipal, CATEGORIAS_PRINCIPALES, SUBCATEGORIAS_ALMACEN 
+  getCategoriaPrincipal, CATEGORIAS_PRINCIPALES, SUBCATEGORIAS_ALMACEN,
+  ALMACEN_PRESETS, getSubcategoriaAlmacen
 } from '../data/productUtils';
 
 const PRODUCTOS_INICIALES = [
@@ -256,6 +257,8 @@ export default function PanelCostos() {
           activo: row[5] === 'TRUE' || row[5] === 'true' || row[5] === '1',
           ultimaActualizacion: row[6] || '',
           categoria: tipo, 
+          categoriaPrincipal: getCategoriaPrincipal(nombre),
+          subcategoria: getCategoriaPrincipal(nombre) === 'Almacén' ? getSubcategoriaAlmacen(nombre) : '',
           unidad: getUnidadByNombre(nombre)
         };
       });
@@ -264,14 +267,41 @@ export default function PanelCostos() {
       mapped = mapped.filter(p => typeof p.nombre === 'string' && p.nombre.toLowerCase().trim() !== 'huevos');
 
       const huevosNuevos = [
-        { id: 9001, nombre: 'Huevos Nº1', categoria: 'otros', cantidadCajon: 12, unidad: 'maple x30 uds', precioCajon: 54000, margen: 70, precioMaxManual: 6500, activo: true, fila: null },
-        { id: 9002, nombre: 'Huevos Nº2', categoria: 'otros', cantidadCajon: 12, unidad: 'maple x30 uds', precioCajon: 0, margen: 70, precioMaxManual: 0, activo: false, fila: null },
-        { id: 9003, nombre: 'Huevos Súper', categoria: 'otros', cantidadCajon: 12, unidad: 'maple x30 uds', precioCajon: 0, margen: 70, precioMaxManual: 0, activo: false, fila: null }
+        { id: 9001, nombre: 'Huevos Nº1', categoria: 'otros', categoriaPrincipal: 'Extras', cantidadCajon: 12, unidad: 'maple x30 uds', precioCajon: 54000, margen: 70, precioMaxManual: 6500, activo: true, fila: null },
+        { id: 9002, nombre: 'Huevos Nº2', categoria: 'otros', categoriaPrincipal: 'Extras', cantidadCajon: 12, unidad: 'maple x30 uds', precioCajon: 0, margen: 70, precioMaxManual: 0, activo: false, fila: null },
+        { id: 9003, nombre: 'Huevos Súper', categoria: 'otros', categoriaPrincipal: 'Extras', cantidadCajon: 12, unidad: 'maple x30 uds', precioCajon: 0, margen: 70, precioMaxManual: 0, activo: false, fila: null }
       ];
 
       huevosNuevos.forEach(nuevo => {
         if (!mapped.some(p => p.nombre === nuevo.nombre)) {
           mapped.push(nuevo);
+        }
+      });
+
+      // Cargar productos de almacén (custom y presets)
+      let customSaved = [];
+      try {
+        const cs = localStorage.getItem('huerta_custom_almacen_prods_v1');
+        if (cs) customSaved = JSON.parse(cs);
+      } catch(e) {}
+
+      const allAlmacen = [...customSaved, ...ALMACEN_PRESETS];
+      allAlmacen.forEach(alm => {
+        if (!mapped.some(p => p.nombre?.toLowerCase().trim() === alm.nombre?.toLowerCase().trim())) {
+          mapped.push({
+            id: alm.id || Date.now() + Math.random(),
+            nombre: alm.nombre,
+            categoria: 'otros',
+            categoriaPrincipal: 'Almacén',
+            subcategoria: alm.subcategoria || getSubcategoriaAlmacen(alm.nombre),
+            cantidadCajon: 1,
+            unidad: 'unidad',
+            precioCajon: alm.precioCajon || 0,
+            margen: 60,
+            precioMaxManual: null,
+            activo: true,
+            fila: null
+          });
         }
       });
 
