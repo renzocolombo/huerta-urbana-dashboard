@@ -12,7 +12,10 @@ const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL;
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 
-import { getTipoByNombre, getUnidadByNombre, pluralizar } from '../data/productUtils';
+import { 
+  getTipoByNombre, getUnidadByNombre, pluralizar, 
+  getCategoriaPrincipal, CATEGORIAS_PRINCIPALES, SUBCATEGORIAS_ALMACEN 
+} from '../data/productUtils';
 
 const PRODUCTOS_INICIALES = [
   { id: 1, nombre: 'Papa', categoria: 'duro', cantidadCajon: 20, unidad: 'kg', precioCajon: 12000, margen: 60, activo: true },
@@ -187,6 +190,10 @@ export default function PanelCostos() {
     return saved ? JSON.parse(saved) : "El pedido mínimo es de $35.000";
   });
 
+  // Filtros de categoría principal y subcategoría para Almacén
+  const [categoriaFiltro, setCategoriaFiltro] = useState('Todas');
+  const [subcategoriaAlmacen, setSubcategoriaAlmacen] = useState('Todas');
+
   const [cargando, setCargando] = useState(true);
   const [publicando, setPublicando] = useState(false);
   const [error, setError] = useState(null);
@@ -325,11 +332,21 @@ export default function PanelCostos() {
     nombre: '', descripcion: '', productos: [], descuento: 0, precioManual: '', activo: true
   });
 
-  // Lógica de cálculo de precios
+  // Lógica de cálculo de precios con merma de 1kg para productos pesados
   const productosCalculados = useMemo(() => {
     return productos.map(p => {
-      const costoUnitario = p.precioCajon / p.cantidadCajon;
-      const precioConMargen = costoUnitario * (1 + p.margen / 100);
+      const unidadNorm = (p.unidad || getUnidadByNombre(p.nombre)).toLowerCase();
+      const esPesado = unidadNorm === 'kg';
+      
+      // Regla de merma: Para productos pesados (Verduras, Frutas, Carnes por kg):
+      // Restar automáticamente 1kg de merma antes de calcular el costo por kg.
+      // Para productos por unidad: costo total dividido cantidad de unidades (sin merma).
+      const cantidadEfectiva = esPesado 
+        ? Math.max(0.1, Number(p.cantidadCajon || 1) - 1) 
+        : Math.max(1, Number(p.cantidadCajon || 1));
+      
+      const costoUnitario = Number(p.precioCajon || 0) / cantidadEfectiva;
+      const precioConMargen = costoUnitario * (1 + (Number(p.margen) || 0) / 100);
       
       let precioFinal = precioConMargen;
       let alcanzadoTope = false;
@@ -346,8 +363,21 @@ export default function PanelCostos() {
 
       const margenReal = precioFinal > 0 ? ((precioFinal - costoUnitario) / precioFinal) * 100 : 0;
       const gananciaUnidad = precioFinal - costoUnitario;
+      const categoriaPrincipal = p.categoriaPrincipal || getCategoriaPrincipal(p.nombre);
 
-      return { ...p, costoUnitario, precioConMargen, precioFinal, margenReal, gananciaUnidad, alcanzadoTope };
+      return { 
+        ...p, 
+        unidad: unidadNorm,
+        esPesado,
+        cantidadEfectiva,
+        categoriaPrincipal,
+        costoUnitario, 
+        precioConMargen, 
+        precioFinal, 
+        margenReal, 
+        gananciaUnidad, 
+        alcanzadoTope 
+      };
     });
   }, [productos]);
 
@@ -627,19 +657,75 @@ export default function PanelCostos() {
 
       <div className="bg-[#1f2937] border border-gray-800 rounded-3xl overflow-hidden shadow-xl">
         <div className="p-6 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
-          <h3 className="text-lg font-bold text-white flex items-center gap-2">
-            <Package size={20} className="text-green-500" /> PRODUCTOS INDIVIDUALES
-          </h3>
-          <button onClick={agregarProducto} className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white text-xs px-4 py-2 rounded-xl transition-all">
+          <div>
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Package size={20} className="text-green-500" /> PRODUCTOS INDIVIDUALES
+            </h3>
+            <p className="text-gray-400 text-xs mt-0.5">
+              Costos vigentes calculados con merma automática de 1kg para pesados, y costo directo para unidades.
+            </p>
+          </div>
+          <button onClick={agregarProducto} className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-green-950/40 cursor-pointer">
             <Plus size={16} /> Agregar nuevo
           </button>
         </div>
+
+        {/* Pestañas de Filtro por Categoría Principal */}
+        <div className="flex flex-wrap gap-2 px-6 pt-4 pb-3 bg-gray-900/40 border-b border-gray-800">
+          {['Todas', ...CATEGORIAS_PRINCIPALES].map(cat => {
+            const activo = categoriaFiltro === cat;
+            return (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => { setCategoriaFiltro(cat); setSubcategoriaAlmacen('Todas'); }}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  activo 
+                    ? 'bg-green-600 text-white shadow-lg shadow-green-900/40' 
+                    : 'bg-black/30 text-gray-400 hover:text-white hover:bg-white/5 border border-white/5'
+                }`}
+              >
+                {cat === 'Verduras' && '🥬 '}
+                {cat === 'Frutas' && '🍎 '}
+                {cat === 'Almacén' && '🥫 '}
+                {cat === 'Extras' && '🥚 '}
+                {cat === 'Carnes' && '🥩 '}
+                {cat}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Subcategorías si Almacén está seleccionado */}
+        {categoriaFiltro === 'Almacén' && (
+          <div className="flex flex-wrap items-center gap-1.5 px-6 py-2.5 bg-amber-950/20 border-b border-amber-500/20 text-xs">
+            <span className="text-[10px] uppercase tracking-wider font-bold text-amber-400 mr-2">Subcategoría:</span>
+            {['Todas', ...SUBCATEGORIAS_ALMACEN].map(sub => {
+              const activo = subcategoriaAlmacen === sub;
+              return (
+                <button
+                  key={sub}
+                  type="button"
+                  onClick={() => setSubcategoriaAlmacen(sub)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all cursor-pointer ${
+                    activo 
+                      ? 'bg-amber-500 text-black font-bold' 
+                      : 'bg-black/40 text-gray-400 hover:text-white border border-white/5'
+                  }`}
+                >
+                  {sub}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full text-xs text-left">
             <thead className="bg-[#111827] text-gray-500 uppercase tracking-widest font-bold">
               <tr>
                 <th className="px-6 py-4">Producto</th>
-                <th className="px-6 py-4">Cajón / Kilos</th>
+                <th className="px-6 py-4">Cajón / Kilos / Uds</th>
                 <th className="px-6 py-4">Costo U.</th>
                 <th className="px-6 py-4">Margen %</th>
                 <th className="px-6 py-4">Precio (+M)</th>
@@ -652,63 +738,97 @@ export default function PanelCostos() {
             </thead>
             <tbody className="divide-y divide-gray-800">
               {[
-                { id: 'hoja verde', label: '🌿 HOJA VERDE', color: 'text-green-500' },
-                { id: 'blando', label: '🍅 BLANDO', color: 'text-red-500' },
-                { id: 'duro', label: '🥔 DURO', color: 'text-amber-500' },
-                { id: 'otros', label: '🥚 OTROS', color: 'text-purple-500' }
-              ].map(cat => {
-                const catItems = productosCalculados.filter(p => p.categoria === cat.id);
+                { id: 'Verduras', label: '🥬 VERDURAS', color: 'text-green-400' },
+                { id: 'Frutas', label: '🍎 FRUTAS', color: 'text-red-400' },
+                { id: 'Almacén', label: '🥫 ALMACÉN', color: 'text-amber-400' },
+                { id: 'Extras', label: '🥚 EXTRAS', color: 'text-purple-400' },
+                { id: 'Carnes', label: '🥩 CARNES', color: 'text-rose-400' }
+              ]
+              .filter(g => categoriaFiltro === 'Todas' || g.id === categoriaFiltro)
+              .map(cat => {
+                const catItems = productosCalculados.filter(p => {
+                  const pCat = p.categoriaPrincipal || getCategoriaPrincipal(p.nombre);
+                  if (pCat !== cat.id) return false;
+                  if (categoriaFiltro === 'Almacén' && subcategoriaAlmacen !== 'Todas' && p.subcategoria !== subcategoriaAlmacen) {
+                    return false;
+                  }
+                  return true;
+                });
                 if (catItems.length === 0) return null;
                 
                 return (
                   <Fragment key={cat.id}>
                     <tr className="bg-gray-900/80">
-                      <td colSpan="10" className="px-6 py-2 border-y border-gray-800">
-                        <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${cat.color}`}>{cat.label}</span>
+                      <td colSpan="10" className="px-6 py-2.5 border-y border-gray-800">
+                        <div className="flex items-center justify-between">
+                          <span className={`text-[11px] font-black uppercase tracking-[0.2em] ${cat.color}`}>{cat.label}</span>
+                          <span className="text-[10px] text-gray-500 font-mono">{catItems.length} {catItems.length === 1 ? 'producto' : 'productos'}</span>
+                        </div>
                       </td>
                     </tr>
                     {catItems.map(p => (
                       <tr key={p.id} className={`hover:bg-gray-800/40 transition-colors ${!p.activo ? 'opacity-40' : ''}`}>
                         <td className="px-6 py-4">
                           <p className="font-bold text-white text-sm">{p.nombre}</p>
-                          <p className="text-[10px] text-gray-600 font-medium">Fila: {p.fila || '-'}</p>
+                          <p className="text-[10px] text-gray-500 font-medium">
+                            {p.subcategoria ? `${p.subcategoria} · ` : ''}Fila: {p.fila || '-'}
+                          </p>
                         </td>
                         <td className="px-6 py-4 text-gray-400">
-                          <input 
-                            type="number" 
-                            className="bg-gray-900 border border-gray-800 rounded-lg w-20 px-2 py-1 mb-1 focus:border-green-500 outline-none text-white block"
-                            value={p.precioCajon}
-                            onChange={(e) => actualizarProducto(p.id, 'precioCajon', Number(e.target.value))}
-                          />
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className="text-gray-500 font-mono text-[10px]">$</span>
+                            <input 
+                              type="number" 
+                              className="bg-gray-900 border border-gray-800 rounded-lg w-20 px-2 py-1 focus:border-green-500 outline-none text-white block font-mono font-bold"
+                              value={p.precioCajon}
+                              onChange={(e) => actualizarProducto(p.id, 'precioCajon', Number(e.target.value))}
+                              title="Costo total pagado por el cajón o lote"
+                            />
+                          </div>
                           <div className="flex items-center gap-1 mt-1">
                             <input 
                               type="number" 
-                              disabled
-                              className="bg-gray-900/50 border border-gray-800 rounded-lg w-12 px-1 text-gray-500"
+                              min="0.1"
+                              step="any"
+                              className="bg-gray-900 border border-gray-800 rounded-lg w-14 px-1.5 py-0.5 text-white font-mono text-xs focus:border-green-500 outline-none"
                               value={p.cantidadCajon}
+                              onChange={(e) => actualizarProducto(p.id, 'cantidadCajon', Number(e.target.value) || 1)}
+                              title={p.esPesado ? "Kilos brutos comprados (se resta 1kg de merma automáticamente)" : "Cantidad de unidades compradas"}
                             />
-                            <span className="text-[10px] text-gray-500 uppercase">{p.unidad}</span>
+                            <span className="text-[10px] text-gray-500 uppercase font-mono">{p.unidad}</span>
+                            {p.esPesado && (
+                              <span 
+                                className="text-[9px] text-amber-400 font-mono px-1 py-0.2 rounded bg-amber-400/10 border border-amber-400/20" 
+                                title={`Costo calculado sobre ${(Math.max(0.1, p.cantidadCajon - 1)).toFixed(1)} kg netos (1kg de merma descontado)`}
+                              >
+                                -1kg merma
+                              </span>
+                            )}
                           </div>
                         </td>
-                        <td className="px-6 py-4 font-mono text-gray-400">{$$(p.costoUnitario.toFixed(0))}</td>
+                        <td className="px-6 py-4 font-mono text-gray-300 font-bold">
+                          {$$(p.costoUnitario.toFixed(0))}
+                          <span className="text-[9px] text-gray-500 block font-normal">/{p.unidad}</span>
+                        </td>
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-1">
                             <input 
                               type="number" 
-                              className="bg-gray-900 border border-gray-800 rounded-lg w-10 px-1 focus:border-green-500 outline-none text-white text-right"
+                              className="bg-gray-900 border border-gray-800 rounded-lg w-12 px-1 py-1 focus:border-green-500 outline-none text-white text-right font-mono"
                               value={p.margen}
                               onChange={(e) => actualizarProducto(p.id, 'margen', Number(e.target.value))}
                             />
-                            <span className="text-gray-600">%</span>
+                            <span className="text-gray-500">%</span>
                           </div>
                         </td>
-                        <td className="px-6 py-4 font-mono text-blue-400">{$$(p.precioConMargen.toFixed(0))}</td>
+                        <td className="px-6 py-4 font-mono text-blue-400 font-bold">{$$(p.precioConMargen.toFixed(0))}</td>
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-1">
                             <Lock size={10} className="text-gray-600" />
                             <input 
                               type="number" 
-                              className="bg-gray-900 border border-gray-800 rounded w-16 px-1 focus:border-amber-500 outline-none"
+                              className="bg-gray-900 border border-gray-800 rounded w-16 px-1.5 py-1 focus:border-amber-500 outline-none font-mono text-xs"
+                              placeholder="Auto"
                               value={p.precioMaxManual || ''}
                               onChange={(e) => actualizarProducto(p.id, 'precioMaxManual', e.target.value ? Number(e.target.value) : null)}
                             />
@@ -842,41 +962,118 @@ export default function PanelCostos() {
                 />
               </div>
 
-              <div className="grid grid-cols-1 gap-5">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Categoría</label>
-                  <div className="flex gap-2">
-                    {['hoja verde', 'blando', 'duro', 'otros'].map(cat => (
-                      <button 
-                        key={cat}
-                        onClick={() => setTempProd({...tempProd, categoria: cat})}
-                        className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase tracking-tight transition-all border ${tempProd.categoria === cat ? 'bg-green-600 border-green-500 text-white' : 'bg-gray-900 border-gray-800 text-gray-500'}`}
+              {/* Categoría Principal */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Categoría Principal</label>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {CATEGORIAS_PRINCIPALES.map(cat => (
+                    <button 
+                      key={cat}
+                      type="button"
+                      onClick={() => {
+                        const esUnidadDefault = cat === 'Almacén' || cat === 'Extras';
+                        setTempProd({
+                          ...tempProd, 
+                          categoriaPrincipal: cat,
+                          subcategoria: cat === 'Almacén' ? (tempProd.subcategoria || 'Almacén seco') : '',
+                          unidad: esUnidadDefault ? 'unidad' : 'kg'
+                        });
+                      }}
+                      className={`py-2.5 rounded-xl text-[10px] font-black uppercase tracking-tight transition-all border cursor-pointer ${
+                        tempProd.categoriaPrincipal === cat 
+                          ? 'bg-green-600 border-green-500 text-white shadow-md' 
+                          : 'bg-gray-900 border-gray-800 text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Subcategoría de Almacén */}
+              {tempProd.categoriaPrincipal === 'Almacén' && (
+                <div className="space-y-2 p-3 rounded-2xl bg-amber-950/20 border border-amber-500/20 animate-in fade-in">
+                  <label className="text-[10px] font-black text-amber-400 uppercase tracking-widest">Subcategoría de Almacén</label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {SUBCATEGORIAS_ALMACEN.map(sub => (
+                      <button
+                        key={sub}
+                        type="button"
+                        onClick={() => setTempProd({ ...tempProd, subcategoria: sub })}
+                        className={`py-2 px-1 rounded-xl text-[10px] font-bold transition-all border cursor-pointer ${
+                          tempProd.subcategoria === sub
+                            ? 'bg-amber-500 border-amber-400 text-black font-black'
+                            : 'bg-black/40 border-white/5 text-gray-400 hover:text-white'
+                        }`}
                       >
-                        {cat}
+                        {sub}
                       </button>
                     ))}
                   </div>
                 </div>
+              )}
+
+              {/* Unidad de Medida */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Unidad de Venta / Stock</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { id: 'kg', label: 'Por Kilo (kg) — Flujo Pesado con 1kg merma' },
+                    { id: 'unidad', label: 'Por Unidad (unidad) — Carga directa sin merma' }
+                  ].map(u => (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => setTempProd({ ...tempProd, unidad: u.id })}
+                      className={`p-2.5 rounded-xl text-left text-[11px] font-bold border transition-all cursor-pointer ${
+                        tempProd.unidad === u.id
+                          ? 'bg-emerald-600/20 border-emerald-500 text-emerald-300'
+                          : 'bg-gray-900 border-gray-800 text-gray-500 hover:text-gray-300'
+                      }`}
+                    >
+                      {u.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
+              {/* Kilos / Cantidad y Costo Total */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Kilos por Cajón</label>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                    {tempProd.unidad === 'kg' ? 'Kilos Brutos Cajón' : 'Cantidad de Unidades'}
+                  </label>
                   <input 
                     type="number" 
-                    className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all"
+                    min="0.1"
+                    step="any"
+                    className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all font-mono"
                     value={tempProd.cantidadCajon}
-                    onChange={(e) => setTempProd({...tempProd, cantidadCajon: Number(e.target.value)})}
+                    onChange={(e) => setTempProd({...tempProd, cantidadCajon: Number(e.target.value) || 1})}
                   />
+                  {tempProd.unidad === 'kg' ? (
+                    <p className="text-[10px] text-amber-400">Se resta 1kg de merma para calcular el costo ({Math.max(0.1, (tempProd.cantidadCajon || 1) - 1).toFixed(1)} kg netos).</p>
+                  ) : (
+                    <p className="text-[10px] text-gray-500">Costo directo = total ÷ cantidad.</p>
+                  )}
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Precio Cajón ($)</label>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                    {tempProd.unidad === 'kg' ? 'Precio Cajón / Lote ($)' : 'Costo Total Pagado ($)'}
+                  </label>
                   <input 
                     type="number" 
-                    className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all"
+                    min="0"
+                    className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all font-mono font-bold"
                     value={tempProd.precioCajon}
-                    onChange={(e) => setTempProd({...tempProd, precioCajon: Number(e.target.value)})}
+                    onChange={(e) => setTempProd({...tempProd, precioCajon: Number(e.target.value) || 0})}
                   />
+                  <p className="text-[10px] text-emerald-400 font-mono">
+                    Costo U.: ${tempProd.precioCajon && tempProd.cantidadCajon 
+                      ? Math.round(tempProd.precioCajon / (tempProd.unidad === 'kg' ? Math.max(0.1, tempProd.cantidadCajon - 1) : Math.max(1, tempProd.cantidadCajon)))
+                      : 0} / {tempProd.unidad}
+                  </p>
                 </div>
               </div>
 
@@ -885,7 +1082,7 @@ export default function PanelCostos() {
                   <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Margen (%)</label>
                   <input 
                     type="number" 
-                    className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all font-bold text-green-500"
+                    className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all font-bold text-green-500 font-mono"
                     value={tempProd.margen}
                     onChange={(e) => setTempProd({...tempProd, margen: Number(e.target.value)})}
                   />
@@ -894,7 +1091,7 @@ export default function PanelCostos() {
                   <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Tope Máximo (Opcional)</label>
                   <input 
                     type="number" 
-                    className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-amber-500 outline-none transition-all"
+                    className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-amber-500 outline-none transition-all font-mono"
                     placeholder="Desactivado"
                     value={tempProd.precioMaxManual}
                     onChange={(e) => setTempProd({...tempProd, precioMaxManual: e.target.value === '' ? '' : Number(e.target.value)})}

@@ -4,8 +4,20 @@ import {
   AlertTriangle, TrendingUp, Package, Plus, History, 
   Check, Info, Box, Edit2, RotateCcw, X, Save,
   AlertCircle, Loader2, Settings, ChevronDown, ChevronUp,
-  ScanBarcode, Trash2, Zap, ClipboardList, Scale, Printer, CheckCircle2, Radio
+  ScanBarcode, Trash2, Zap, ClipboardList, Scale, Printer, CheckCircle2, Radio,
+  Tag, ShoppingBag, Layers, Search, Sparkles
 } from 'lucide-react';
+import { 
+  CATEGORIAS_PRINCIPALES, 
+  SUBCATEGORIAS_ALMACEN, 
+  getCategoriaPrincipal, 
+  getUnidadByNombre, 
+  getTipoByNombre,
+  getEanMapping,
+  asociarEanAProducto,
+  esCodigoEan,
+  getSubcategoriaAlmacen
+} from '../data/productUtils';
 
 // Configuración de entorno
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
@@ -19,7 +31,8 @@ const PROCESSED_CODES_KEY = 'huerta_codigos_procesados_v1';
 const DEFAULTS_BY_TYPE = {
   'hoja verde': { totalDays: 4, alertDays: 2, icon: '🌿', labels: { small: '250g', large: '500g' } },
   'blando': { totalDays: 7, alertDays: 4, icon: '🍑', labels: { small: '500g', large: '1kg' } },
-  'duro': { totalDays: 15, alertDays: 11, icon: '🥔', labels: { small: '500g', large: '1kg' } }
+  'duro': { totalDays: 15, alertDays: 11, icon: '🥔', labels: { small: '500g', large: '1kg' } },
+  'otros': { totalDays: 30, alertDays: 25, icon: '📦', labels: { small: '1ud', large: '1ud' } }
 };
 
 const PRODUCT_DATABASE = {
@@ -32,14 +45,6 @@ const PRODUCT_DATABASE = {
   ]
 };
 
-function getTipoByNombre(nombre) {
-  const n = nombre.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (PRODUCT_DATABASE['hoja verde'].some(p => n.includes(p))) return 'hoja verde';
-  if (PRODUCT_DATABASE['blando'].some(p => n.includes(p))) return 'blando';
-  if (PRODUCT_DATABASE['duro'].some(p => n.includes(p))) return 'duro';
-  return 'hoja verde'; // Default
-}
-
 // ─── Parseo de código de barras ────────────────────────────────────────────
 // Formato Brother TD-4410D: NOMBRE-PESO  (ej: PAPA-1.120, ESPINACA-0.250)
 // El separador es el ÚLTIMO guión, para soportar nombres compuestos:
@@ -51,6 +56,34 @@ function parsearCodigoBarras(raw) {
   let code = String(raw).replace(/[\r\n\x00-\x1F]/g, '').trim().replace(/^\][a-zA-Z0-9]{2,3}/, '').trim();
   code = code.replace(/^\*+|\*+$/g, '').trim(); // Quitar asteriscos de Code39 si los tuviera
   if (!code) return null;
+
+  // 0. Código de barras EAN estándar de fábrica (Almacén, 8 a 14 dígitos numéricos)
+  if (esCodigoEan(code)) {
+    const map = getEanMapping();
+    const mapped = map[code.toUpperCase()];
+    if (mapped) {
+      return {
+        nombre: mapped.nombre,
+        peso: 1,
+        tagId: null,
+        uniqueCode: code.toUpperCase(),
+        rawCode: code,
+        esEan: true,
+        eanInfo: mapped,
+        esUnidad: true
+      };
+    }
+    return {
+      nombre: '',
+      peso: 1,
+      tagId: null,
+      uniqueCode: code.toUpperCase(),
+      rawCode: code,
+      esEan: true,
+      eanNoMapeado: true,
+      esUnidad: true
+    };
+  }
 
   // 1. Formato Balanza Systel / Kretz / Toledo (EAN-13 estándar de balanza de retail)
   // Normalmente empieza con 20 o 02, seguido de 4-5 dígitos de PLU y 5 dígitos de peso en gramos
@@ -144,13 +177,21 @@ function determinarSlot(tipo, pesoKg) {
 }
 
 export default function ControlStock() {
-  const { stockData, setStockData, productosCostos: contextMaster, stockData: contextStock } = useGoogleSheets();
+  const { stockData, setStockData, productosCostos: contextMaster, setProductosCostos, stockData: contextStock } = useGoogleSheets();
   const [productosMaster, setProductosMaster] = useState([]);
   const [showFormId, setShowFormId] = useState(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState(null);
   const [expandedCategory, setExpandedCategory] = useState(null);
   const isCargando = useRef(false);
+
+  // ── Filtros por categoría principal y subcategoría de Almacén ─────────────
+  const [categoriaFiltro, setCategoriaFiltro] = useState('Todas');
+  const [subcategoriaAlmacen, setSubcategoriaAlmacen] = useState('Bebidas');
+
+  // ── Modales de carga por unidad y asociación EAN ────────────────────────
+  const [modalCargaUnidad, setModalCargaUnidad] = useState(null); // { open, productoId, nombre, unidad }
+  const [modalEanAsociar, setModalEanAsociar] = useState(null);   // { open, ean, defaultNombre }
 
   // ── Sub-pestaña interna del bloque de escaneo ────────────────────────────
   const [stockSubTab, setStockSubTab] = useState('escanear'); // 'escanear' | 'pesar'
@@ -269,6 +310,64 @@ export default function ControlStock() {
     const activeScanMode = scanModeRef.current;
     const current = stockDataRef.current || {};
     const uniqueCode = (resultado?.uniqueCode || rawCodeClean).toUpperCase();
+
+    // ── 0. CÓDIGO EAN DE FÁBRICA (Almacén) ─────────────────────────────────
+    if (resultado?.esEan) {
+      if (resultado.eanNoMapeado) {
+        setModalEanAsociar({ open: true, ean: uniqueCode });
+        return;
+      }
+      const eanInfo = resultado.eanInfo;
+      const matchedId = (eanInfo?.productoId && current[eanInfo.productoId])
+        ? eanInfo.productoId
+        : Object.keys(current).find(id => norm(current[id]?.nombre) === norm(eanInfo?.nombre));
+      
+      const prod = matchedId ? current[matchedId] : null;
+      if (!prod) {
+        setModalEanAsociar({ open: true, ean: uniqueCode, defaultNombre: eanInfo?.nombre });
+        return;
+      }
+
+      if (activeScanMode === 'carga') {
+        setCargaPendiente(prev => [
+          ...prev,
+          {
+            id: Date.now().toString() + Math.random().toString(),
+            matchedId,
+            nombre: prod.nombre,
+            prod,
+            slot: 'unidad',
+            peso: 1,
+            uniqueCode,
+            esUnidad: true
+          }
+        ]);
+        setLastScan({ ok: true, productoNombre: prod.nombre, peso: 1, slot: '1 unidad', ts: Date.now(), accion: 'Pendiente' });
+        setTimeout(() => setLastScan(null), 1500);
+        return;
+      } else {
+        // Modo gestión para unidad
+        const stockDisponible = Number(prod.stock?.unidades ?? prod.stock?.['1kg']) || 0;
+        setGestionPending({
+          matchedId,
+          prod,
+          slot: 'unidad',
+          peso: 1,
+          feedbackSlotLabel: '1 unidad',
+          rawCode: rawCodeClean,
+          uniqueCode,
+          nombre: prod.nombre,
+          stockDisponible,
+          sinStock: stockDisponible <= 0,
+          yaProcesado: false,
+          regExistente: null,
+          esUnidad: true
+        });
+        setLastScan(null);
+        return;
+      }
+    }
+
     const reg = codigosProcesadosRef.current ? codigosProcesadosRef.current[uniqueCode] : null;
 
     const nombreBuscado = (reg ? reg.nombre : (resultado?.nombre || rawCodeClean)).toLowerCase();
@@ -527,11 +626,16 @@ export default function ControlStock() {
       if (!acc[item.matchedId]) {
         acc[item.matchedId] = {
           nombre: item.nombre,
-          slots: { '500g': { bolsas: 0, pesoTotal: 0 }, '1kg': { bolsas: 0, pesoTotal: 0 } }
+          slots: { '500g': { bolsas: 0, pesoTotal: 0 }, '1kg': { bolsas: 0, pesoTotal: 0 }, 'unidad': { bolsas: 0, pesoTotal: 0 } },
+          esUnidad: item.esUnidad || item.slot === 'unidad'
         };
       }
-      acc[item.matchedId].slots[item.slot].bolsas += 1;
-      acc[item.matchedId].slots[item.slot].pesoTotal += item.peso;
+      const slotKey = item.slot === 'unidad' ? 'unidad' : item.slot;
+      if (!acc[item.matchedId].slots[slotKey]) {
+        acc[item.matchedId].slots[slotKey] = { bolsas: 0, pesoTotal: 0 };
+      }
+      acc[item.matchedId].slots[slotKey].bolsas += 1;
+      acc[item.matchedId].slots[slotKey].pesoTotal += item.peso;
       return acc;
     }, {});
 
@@ -555,20 +659,32 @@ export default function ControlStock() {
     Object.entries(grouped).forEach(([id, item]) => {
       if (!newData[id]) return;
       const prod = newData[id];
+      const isItemUnidad = item.esUnidad || prod.esUnidad || prod.unidad === 'unidad';
+      const unidadBolsas = item.slots['unidad']?.bolsas || 0;
+      const stock1k = (prod.stock['1kg'] || 0) + item.slots['1kg'].bolsas + (isItemUnidad ? unidadBolsas : 0);
+      const stock500 = isItemUnidad ? 0 : (prod.stock['500g'] || 0) + item.slots['500g'].bolsas;
+
       const newStock = {
-        '500g': prod.stock['500g'] + item.slots['500g'].bolsas,
-        '1kg':  prod.stock['1kg']  + item.slots['1kg'].bolsas,
+        '500g': stock500,
+        '1kg':  stock1k,
+        unidades: isItemUnidad ? stock1k : (prod.stock.unidades || stock1k)
       };
       const newOriginalLoad = {
         '500g': Math.max(prod.originalLoad['500g'] || 0, newStock['500g']),
         '1kg':  Math.max(prod.originalLoad['1kg']  || 0, newStock['1kg']),
+        unidades: Math.max(Number(prod.originalLoad?.unidades ?? prod.originalLoad?.['1kg']) || 0, newStock.unidades)
       };
       newData[id] = { ...prod, stock: newStock, originalLoad: newOriginalLoad, ultimoBandejeado: today };
       syncWithSheet(newData[id]);
 
-      const totalBolsas = item.slots['500g'].bolsas + item.slots['1kg'].bolsas;
-      const pesoTotal = Math.round((item.slots['500g'].pesoTotal + item.slots['1kg'].pesoTotal) * 1000) / 1000;
-      logEntries.push({ ok: true, productoNombre: item.nombre, peso: pesoTotal, slot: `${totalBolsas} bolsa${totalBolsas !== 1 ? 's' : ''}`, ts: Date.now(), accion: 'Carga' });
+      if (isItemUnidad) {
+        const totalUds = unidadBolsas + item.slots['1kg'].bolsas;
+        logEntries.push({ ok: true, productoNombre: item.nombre, peso: totalUds, slot: `${totalUds} ud${totalUds !== 1 ? 's' : ''}`, ts: Date.now(), accion: 'Carga' });
+      } else {
+        const totalBolsas = item.slots['500g'].bolsas + item.slots['1kg'].bolsas;
+        const pesoTotal = Math.round((item.slots['500g'].pesoTotal + item.slots['1kg'].pesoTotal) * 1000) / 1000;
+        logEntries.push({ ok: true, productoNombre: item.nombre, peso: pesoTotal, slot: `${totalBolsas} bolsa${totalBolsas !== 1 ? 's' : ''}`, ts: Date.now(), accion: 'Carga' });
+      }
     });
 
     setCodigosProcesados(prev => ({
@@ -610,7 +726,10 @@ export default function ControlStock() {
     }
 
     const prodActual = current[matchedId];
-    const stockActual = prodActual?.stock?.[slot] || 0;
+    const isUnidadGestion = gestionPending?.esUnidad || prodActual.unidad === 'unidad' || slot === 'unidad';
+    const stockActual = isUnidadGestion 
+      ? (Number(prodActual?.stock?.unidades ?? prodActual?.stock?.['1kg']) || 0)
+      : (prodActual?.stock?.[slot] || 0);
     const now = new Date();
     const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
     const regCode = uniqueCode || rawCode?.toUpperCase() || `${prod.nombre}-${Date.now()}`;
@@ -645,7 +764,8 @@ export default function ControlStock() {
     // Actualizar stock en memoria y en Sheet
     const newStock = {
       ...prodActual.stock,
-      [slot]: nuevoStockSlot
+      [slot]: nuevoStockSlot,
+      ...(isUnidadGestion ? { '1kg': nuevoStockSlot, unidades: nuevoStockSlot } : {})
     };
     const newData = { ...current };
     newData[matchedId] = { ...prodActual, stock: newStock };
@@ -836,30 +956,63 @@ export default function ControlStock() {
     }
 
     try {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/ControlStock?key=${API_KEY}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      
-      if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
-      const rows = data.values;
-      
-      if (!rows || rows.length < 1) {
-        setCargando(false);
-        return;
+      let rows = null;
+      if (API_KEY && SHEET_ID) {
+        try {
+          const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/ControlStock?key=${API_KEY}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.values && data.values.length > 0) rows = data.values;
+          }
+        } catch (e) {
+          console.warn('[CONTROL-STOCK] Error v4, activando fallback gviz...', e);
+        }
       }
-      
-      const headers = rows[0].map(h => h.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ /g, '_'));
-      const parsedRows = rows.slice(1).map((row, index) => {
-        const obj = { fila: index + 2 };
-        headers.forEach((h, i) => { obj[h] = row[i] || ''; });
-        return obj;
-      });
-      
+
+      // Fallback gviz (Google Visualization API)
+      if (!rows && SHEET_ID) {
+        try {
+          const gvizUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=ControlStock`;
+          const gvizRes = await fetch(gvizUrl);
+          if (gvizRes.ok) {
+            const text = await gvizRes.text();
+            const start = text.indexOf('{');
+            const end = text.lastIndexOf('}');
+            if (start !== -1 && end !== -1) {
+              const json = JSON.parse(text.substring(start, end + 1));
+              if (json.status === 'ok' && json.table) {
+                const headers = (json.table.cols || []).map(c => c.label || '');
+                const rRows = (json.table.rows || []).map(r => 
+                  (r.c || []).map(cell => (cell ? (cell.v !== null && cell.v !== undefined ? cell.v : cell.f || '') : ''))
+                );
+                rows = [headers, ...rRows];
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[CONTROL-STOCK] Error gviz:', e);
+        }
+      }
+
+      const parsedRows = (rows && rows.length > 1)
+        ? (() => {
+            const headers = rows[0].map(h => String(h || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ /g, '_'));
+            return rows.slice(1).map((row, index) => {
+              const obj = { fila: index + 2 };
+              headers.forEach((h, i) => { obj[h] = row[i] || ''; });
+              return obj;
+            });
+          })()
+        : [];
+
       const initial = inicializarStockLocal(master, parsedRows);
       setStockData(initial);
     } catch (err) {
-      console.error('[CONTROL-STOCK] Error crítico:', err);
-      setError('No se pudo leer el stock. Revisa la conexión.');
+      console.error('[CONTROL-STOCK] Error al leer stock:', err);
+      // Fallback seguro: no bloquear la app
+      const initial = inicializarStockLocal(master, []);
+      setStockData(initial);
     } finally {
       setCargando(false);
       isCargando.current = false;
@@ -878,6 +1031,12 @@ export default function ControlStock() {
       
       // Clasificación automática
       const autoTipo = getTipoByNombre(p.nombre);
+      const autoCat = getCategoriaPrincipal(p.nombre);
+      const autoUnidad = getUnidadByNombre(p.nombre);
+      const unidad = p.unidad || autoUnidad;
+      const esUnidad = unidad === 'unidad';
+      const catPrincipal = p.categoria || remoteInfo?.categoria || autoCat;
+      const subCat = p.subcategoria || remoteInfo?.subcategoria || (catPrincipal === 'Almacén' ? getSubcategoriaAlmacen(p.nombre) : '');
 
       if (remoteInfo) {
         // Mapeo robusto: acepta tanto nombres de propiedades como índices si fuera necesario
@@ -885,29 +1044,34 @@ export default function ControlStock() {
         const stock_1k = Number(remoteInfo.stock_1kg || remoteInfo[4] || 0);
         const orig_500 = Number(remoteInfo.original_load_500g || remoteInfo.stock_500g || remoteInfo[3] || 0);
         const orig_1k = Number(remoteInfo.original_load_1kg || remoteInfo.stock_1kg || remoteInfo[4] || 0);
+        const stock_unidades = remoteInfo.stock_unidades !== undefined ? Number(remoteInfo.stock_unidades) : stock_1k;
 
         newStockData[p.id] = {
           nombre: p.nombre,
           fila: remoteInfo.fila || remoteInfo.fila_index,
-          stock: { '500g': stock_500, '1kg': stock_1k },
-          originalLoad: { '500g': orig_500, '1kg': orig_1k },
+          stock: { '500g': stock_500, '1kg': stock_1k, unidades: esUnidad ? stock_unidades : stock_1k },
+          originalLoad: { '500g': orig_500, '1kg': orig_1k, unidades: esUnidad ? stock_unidades : orig_1k },
           ultimoBandejeado: remoteInfo.ultimo_bandejeado || remoteInfo[5] || null,
           tipo: remoteInfo.tipo || remoteInfo[1] || autoTipo,
-          totalDays: Number(remoteInfo.total_days || remoteInfo.dias_alerta || remoteInfo[2] || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.totalDays || 4),
-          urgentDays: Number(remoteInfo.urgent_days || (remoteInfo.dias_alerta ? 2 : null) || DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo]?.alertDays || 2)
+          categoriaPrincipal: catPrincipal,
+          subcategoria: subCat,
+          unidad,
+          esUnidad,
+          totalDays: Number(remoteInfo.total_days || remoteInfo.dias_alerta || remoteInfo[2] || (DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo] || DEFAULTS_BY_TYPE['duro']).totalDays),
+          urgentDays: Number(remoteInfo.urgent_days || (remoteInfo.dias_alerta ? 2 : null) || (DEFAULTS_BY_TYPE[remoteInfo.tipo || autoTipo] || DEFAULTS_BY_TYPE['duro']).alertDays)
         };
       } else if (p.fila) {
          // Si venía de remoteData pero no tiene match (raro)
-         const def = DEFAULTS_BY_TYPE[autoTipo];
+         const def = DEFAULTS_BY_TYPE[autoTipo] || DEFAULTS_BY_TYPE['duro'];
          newStockData[p.id] = {
-           nombre: p.nombre, fila: p.fila, stock: { '500g': 0, '1kg': 0 }, originalLoad: { '500g': 0, '1kg': 0 },
-           ultimoBandejeado: null, tipo: autoTipo, totalDays: def.totalDays, urgentDays: def.alertDays
+           nombre: p.nombre, fila: p.fila, stock: { '500g': 0, '1kg': 0, unidades: 0 }, originalLoad: { '500g': 0, '1kg': 0, unidades: 0 },
+           ultimoBandejeado: null, tipo: autoTipo, categoriaPrincipal: catPrincipal, subcategoria: subCat, unidad, esUnidad, totalDays: def.totalDays, urgentDays: def.alertDays
          };
       } else {
-        const def = DEFAULTS_BY_TYPE[autoTipo];
+        const def = DEFAULTS_BY_TYPE[autoTipo] || DEFAULTS_BY_TYPE['duro'];
         newStockData[p.id] = {
-          nombre: p.nombre, fila: null, stock: { '500g': 0, '1kg': 0 }, originalLoad: { '500g': 0, '1kg': 0 },
-          ultimoBandejeado: null, tipo: autoTipo, totalDays: def.totalDays, urgentDays: def.alertDays
+          nombre: p.nombre, fila: null, stock: { '500g': 0, '1kg': 0, unidades: 0 }, originalLoad: { '500g': 0, '1kg': 0, unidades: 0 },
+          ultimoBandejeado: null, tipo: autoTipo, categoriaPrincipal: catPrincipal, subcategoria: subCat, unidad, esUnidad, totalDays: def.totalDays, urgentDays: def.alertDays
         };
       }
     });
@@ -924,8 +1088,17 @@ export default function ControlStock() {
       const item = stockData[id];
       if (!item) return null;
 
-      const totalStock = Object.values(item.stock || {}).reduce((s, c) => s + c, 0);
-      const totalOriginal = Object.values(item.originalLoad || {}).reduce((s, c) => s + c, 0);
+      const catPrincipal = item.categoriaPrincipal || getCategoriaPrincipal(item.nombre);
+      const subCat = item.subcategoria || (catPrincipal === 'Almacén' ? getSubcategoriaAlmacen(item.nombre) : '');
+      const unidad = item.unidad || getUnidadByNombre(item.nombre);
+      const esUnidad = item.esUnidad || unidad === 'unidad';
+
+      const totalStock = esUnidad
+        ? (Number(item.stock?.unidades ?? item.stock?.['1kg']) || 0)
+        : Object.values(item.stock || {}).reduce((s, c) => s + c, 0);
+      const totalOriginal = esUnidad
+        ? (Number(item.originalLoad?.unidades ?? item.originalLoad?.['1kg']) || 0)
+        : Object.values(item.originalLoad || {}).reduce((s, c) => s + c, 0);
       
       let diasTranscurridos = null;
       let diasRestantes = null;
@@ -954,13 +1127,152 @@ export default function ControlStock() {
         else if (diasRestantes <= (item.totalDays / 2)) statusColor = 'yellow';
       }
 
-      return { id: Number(id), ...item, totalStock, totalOriginal, diasTranscurridos, diasRestantes, category, statusColor };
+      return {
+        id: Number(id),
+        ...item,
+        categoriaPrincipal: catPrincipal,
+        subcategoria: subCat,
+        unidad,
+        esUnidad,
+        totalStock,
+        totalOriginal,
+        diasTranscurridos,
+        diasRestantes,
+        category,
+        statusColor
+      };
     }).filter(Boolean);
 
-    console.log('[CONTROL-STOCK] processedData output:', res);
-    console.log('[CONTROL-STOCK] Total productos finales:', res.length);
     return res;
   }, [stockData]);
+
+  // ── Handler de Carga Simplificada por Unidad (Ajo, Choclo, Almacén) ─────────
+  const handleConfirmCargaUnidad = ({ productoId, nombre, costoTotal, cantidad, costoUnitario, fecha }) => {
+    const current = stockDataRef.current || {};
+    const prod = current[productoId];
+    if (!prod) return;
+
+    const stockActual = Number(prod.stock?.unidades ?? prod.stock?.['1kg']) || 0;
+    const nuevoStock = stockActual + cantidad;
+    const origActual = Number(prod.originalLoad?.unidades ?? prod.originalLoad?.['1kg']) || 0;
+    const nuevoOrig = Math.max(origActual, nuevoStock);
+
+    const updatedProd = {
+      ...prod,
+      stock: {
+        '500g': 0,
+        '1kg': nuevoStock,
+        unidades: nuevoStock
+      },
+      originalLoad: {
+        '500g': 0,
+        '1kg': nuevoOrig,
+        unidades: nuevoOrig
+      },
+      ultimoBandejeado: fecha
+    };
+
+    const newData = { ...current, [productoId]: updatedProd };
+    setStockData(newData);
+    syncWithSheet(updatedProd);
+
+    // Actualizar costo unitario vigente en catálogo de costos
+    if (contextMaster && Array.isArray(contextMaster) && costoUnitario > 0) {
+      const updatedCostos = contextMaster.map(item => {
+        if (item.id === productoId || norm(item.nombre) === norm(nombre)) {
+          return {
+            ...item,
+            costo_kilo: costoUnitario,
+            costo_cajon: costoTotal,
+            kilos_cajon: cantidad,
+            costoUnitario: costoUnitario,
+            precioCajon: costoTotal,
+            cantidadCajon: cantidad,
+            unidad: 'unidad'
+          };
+        }
+        return item;
+      });
+      if (typeof setProductosCostos === 'function') {
+        setProductosCostos(updatedCostos);
+      }
+      try {
+        localStorage.setItem(COSTOS_KEY, JSON.stringify(updatedCostos));
+      } catch (e) {}
+    }
+
+    setLastScan({
+      ok: true,
+      productoNombre: prod.nombre,
+      peso: cantidad,
+      slot: `${cantidad} ud${cantidad !== 1 ? 's' : ''}`,
+      ts: Date.now(),
+      accion: 'Carga',
+      stockRestante: nuevoStock
+    });
+    setScanLog(prev => [{
+      ok: true,
+      productoNombre: prod.nombre,
+      peso: cantidad,
+      slot: `${cantidad} ud${cantidad !== 1 ? 's' : ''}`,
+      ts: Date.now(),
+      accion: 'Carga',
+      stockRestante: nuevoStock
+    }, ...prev].slice(0, 8));
+  };
+
+  // ── Handler de Asociación de Código EAN ─────────────────────────────────────
+  const handleConfirmAsociarEan = ({ ean, productoId, nombre, subcategoria, unidad }) => {
+    asociarEanAProducto(ean, { productoId, nombre, subcategoria, unidad });
+
+    const current = stockDataRef.current || {};
+    let matchedId = productoId && current[productoId] ? productoId : null;
+    if (!matchedId) {
+      matchedId = Object.keys(current).find(id => norm(current[id]?.nombre) === norm(nombre));
+    }
+
+    if (matchedId && current[matchedId]) {
+      const prod = current[matchedId];
+      const stockActual = Number(prod.stock?.unidades ?? prod.stock?.['1kg']) || 0;
+      const nuevoStock = stockActual + 1;
+      const updatedProd = {
+        ...prod,
+        subcategoria: subcategoria || prod.subcategoria,
+        stock: {
+          ...prod.stock,
+          '1kg': nuevoStock,
+          unidades: nuevoStock
+        },
+        originalLoad: {
+          ...prod.originalLoad,
+          '1kg': Math.max(Number(prod.originalLoad?.unidades ?? prod.originalLoad?.['1kg']) || 0, nuevoStock),
+          unidades: Math.max(Number(prod.originalLoad?.unidades ?? prod.originalLoad?.['1kg']) || 0, nuevoStock)
+        }
+      };
+      const newData = { ...current, [matchedId]: updatedProd };
+      setStockData(newData);
+      syncWithSheet(updatedProd);
+
+      setLastScan({
+        ok: true,
+        productoNombre: prod.nombre,
+        peso: 1,
+        slot: '1 unidad',
+        ts: Date.now(),
+        accion: 'Carga',
+        stockRestante: nuevoStock
+      });
+      setScanLog(prev => [{
+        ok: true,
+        productoNombre: prod.nombre,
+        peso: 1,
+        slot: '1 unidad',
+        ts: Date.now(),
+        accion: 'Carga',
+        stockRestante: nuevoStock
+      }, ...prev].slice(0, 8));
+    }
+  };
 
 
   const updateProductData = (pid, patch) => {
@@ -1782,13 +2094,109 @@ export default function ControlStock() {
       )}{/* fin sub-pestaña escanear */}
       {/* ════════════════════════════════════════════════════════════════════ */}
 
-      <div className="flex justify-between items-end">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
         <div>
           <h2 className="text-xl font-bold text-white tracking-tight">Control de Stock</h2>
           <p className="text-gray-500 text-[10px] uppercase font-bold tracking-widest mt-1">Sincronizado vía Cloud API</p>
         </div>
-        <button onClick={cargarStockDesdeSheet} className="text-gray-500 hover:text-white transition-colors p-2.5 rounded-xl bg-white/5 cursor-pointer"><RotateCcw size={16} /></button>
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <button
+            type="button"
+            onClick={() => setModalCargaUnidad({ open: true, productoId: null, nombre: '', unidad: 'unidad' })}
+            className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider shadow-lg shadow-emerald-900/40 border-b-2 border-emerald-800 transition-all cursor-pointer"
+          >
+            <Plus size={14} />
+            <span>Cargar Unidades (Almacén / Ajo / Choclo)</span>
+          </button>
+          <button onClick={cargarStockDesdeSheet} className="text-gray-500 hover:text-white transition-colors p-2.5 rounded-xl bg-white/5 cursor-pointer" title="Refrescar"><RotateCcw size={16} /></button>
+        </div>
       </div>
+
+      {/* ── BARRA DE CATEGORÍAS PRINCIPALES ────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-black/40 border border-white/10 rounded-2xl">
+        {[
+          { id: 'Todas', label: 'Todas', icon: '📦' },
+          { id: 'Verduras', label: 'Verduras', icon: '🥬' },
+          { id: 'Frutas', label: 'Frutas', icon: '🍎' },
+          { id: 'Almacén', label: 'Almacén', icon: '🥫' },
+          { id: 'Extras', label: 'Extras', icon: '🥚' },
+          { id: 'Carnes', label: 'Carnes', icon: '🥩' }
+        ].map(tab => {
+          const count = tab.id === 'Todas' 
+            ? processedData.length 
+            : processedData.filter(p => p.categoriaPrincipal === tab.id).length;
+          const isActive = categoriaFiltro === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setCategoriaFiltro(tab.id)}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                isActive
+                  ? 'bg-emerald-600 text-white font-black shadow-lg shadow-emerald-900/40 border border-emerald-400/30'
+                  : 'text-gray-400 hover:text-white hover:bg-white/5 border border-transparent'
+              }`}
+            >
+              <span>{tab.icon}</span>
+              <span>{tab.label}</span>
+              <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${isActive ? 'bg-black/30 text-white font-bold' : 'bg-white/5 text-gray-500'}`}>
+                {count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── SELECTOR PERSISTENTE DE SUBCATEGORÍAS DE ALMACÉN ────────────── */}
+      {categoriaFiltro === 'Almacén' && (
+        <div className="p-4 bg-gradient-to-r from-purple-950/30 via-black/40 to-blue-950/30 border border-purple-500/20 rounded-2xl space-y-3 animate-in fade-in duration-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">🥫</span>
+              <div>
+                <h4 className="text-xs font-black text-white uppercase tracking-widest">Subcategorías de Almacén</h4>
+                <p className="text-[10px] text-gray-400">Selector fijo para cargar productos sucesivos sin desplazamiento</p>
+              </div>
+            </div>
+            <span className="text-[10px] font-mono font-bold text-purple-300 bg-purple-500/20 border border-purple-500/30 px-2.5 py-1 rounded-lg">
+              Activa: {subcategoriaAlmacen}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {[
+              { id: 'Bebidas', label: 'Bebidas', icon: '🥤' },
+              { id: 'Almacén seco', label: 'Almacén seco', icon: '🍝' },
+              { id: 'Limpieza', label: 'Limpieza', icon: '🧼' },
+              { id: 'Lácteos', label: 'Lácteos', icon: '🧀' },
+              { id: 'Golosinas', label: 'Golosinas', icon: '🍫' },
+              { id: 'Todas', label: 'Ver Todas', icon: '📋' }
+            ].map(sub => {
+              const isSelected = subcategoriaAlmacen === sub.id;
+              const subCount = sub.id === 'Todas'
+                ? processedData.filter(p => p.categoriaPrincipal === 'Almacén').length
+                : processedData.filter(p => p.categoriaPrincipal === 'Almacén' && p.subcategoria === sub.id).length;
+              return (
+                <button
+                  key={sub.id}
+                  type="button"
+                  onClick={() => setSubcategoriaAlmacen(sub.id)}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-purple-600 text-white font-black shadow-lg shadow-purple-900/50 border border-purple-400/40'
+                      : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10 border border-white/5'
+                  }`}
+                >
+                  <span>{sub.icon}</span>
+                  <span>{sub.label}</span>
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-black/40 text-purple-200">
+                    {subCount}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-col gap-3">
         <StatusAccordion title="URGENTE VENDER" icon="🔴" items={processedData.filter(d => d.category === 'urgente')} isOpen={expandedCategory === 'urgente'} onToggle={() => toggleCategory('urgente')} color="red" type="urgente" />
@@ -1803,23 +2211,120 @@ export default function ControlStock() {
         />
       </div>
 
+      {/* ── LISTADO DE PRODUCTOS SEGÚN CATEGORÍA SELECCIONADA ───────────── */}
       <div className="space-y-10 pt-10 border-t border-white/5">
-        {[
-          { id: 'hoja verde', label: '🌿 HOJA VERDE', color: 'text-green-500' },
-          { id: 'blando', label: '🍅 BLANDO', color: 'text-red-500' },
-          { id: 'duro', label: '🥔 DURO', color: 'text-amber-500' }
-        ].map(cat => {
-          const catItems = processedData.filter(p => p.tipo === cat.id);
-          if (catItems.length === 0) return null;
-          
+        {(() => {
+          let itemsToDisplay = processedData;
+          if (categoriaFiltro !== 'Todas') {
+            itemsToDisplay = itemsToDisplay.filter(p => p.categoriaPrincipal === categoriaFiltro);
+            if (categoriaFiltro === 'Almacén' && subcategoriaAlmacen !== 'Todas') {
+              itemsToDisplay = itemsToDisplay.filter(p => p.subcategoria === subcategoriaAlmacen);
+            }
+          }
+
+          if (itemsToDisplay.length === 0) {
+            return (
+              <div className="py-12 text-center bg-black/20 border border-white/5 rounded-3xl p-6 space-y-3">
+                <span className="text-3xl">📦</span>
+                <h4 className="text-white font-bold text-sm uppercase tracking-wider">
+                  No hay productos en {categoriaFiltro === 'Almacén' ? `Almacén (${subcategoriaAlmacen})` : categoriaFiltro}
+                </h4>
+                <p className="text-gray-400 text-xs max-w-sm mx-auto">
+                  Podés incorporar productos a esta categoría con el botón de Carga Rápida o desde el Panel de Costos.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setModalCargaUnidad({ open: true, productoId: null, nombre: '', unidad: 'unidad' })}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-wider px-4 py-2.5 rounded-xl transition-all inline-flex items-center gap-2 cursor-pointer"
+                >
+                  <Plus size={14} />
+                  <span>Cargar Producto Nuevo</span>
+                </button>
+              </div>
+            );
+          }
+
+          if (categoriaFiltro === 'Todas') {
+            const catConfig = [
+              { id: 'Verduras', label: '🥬 VERDURAS', color: 'text-green-500' },
+              { id: 'Frutas', label: '🍎 FRUTAS', color: 'text-red-500' },
+              { id: 'Almacén', label: '🥫 ALMACÉN', color: 'text-purple-400' },
+              { id: 'Extras', label: '🥚 EXTRAS', color: 'text-amber-500' },
+              { id: 'Carnes', label: '🥩 CARNES', color: 'text-rose-500' },
+            ];
+
+            return catConfig.map(cat => {
+              const catItems = itemsToDisplay.filter(p => p.categoriaPrincipal === cat.id);
+              if (catItems.length === 0) return null;
+
+              return (
+                <div key={cat.id} className="space-y-4">
+                  <h3 className={`text-[11px] font-black ${cat.color} uppercase tracking-[0.3em] font-mono flex items-center gap-2`}>
+                    {cat.label}
+                    <span className="text-[10px] font-normal text-gray-500 font-sans">({catItems.length})</span>
+                    <span className="h-[1px] flex-1 bg-white/5"></span>
+                  </h3>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-[12px]">
+                    {catItems.map(p => (
+                      <ProductCard 
+                        key={p.id} 
+                        product={p} 
+                        onUpdate={(patch) => updateProductData(p.id, patch)}
+                        isAdding={showFormId === p.id}
+                        onToggleAdd={() => setShowFormId(showFormId === p.id ? null : p.id)}
+                        onSaveAdd={(data) => guardarCarga(p.id, data)}
+                        onOpenCargaUnidades={(prod) => setModalCargaUnidad({ open: true, productoId: prod.id, nombre: prod.nombre, unidad: prod.unidad })}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            });
+          }
+
+          if (categoriaFiltro === 'Verduras') {
+            return [
+              { id: 'hoja verde', label: '🌿 HOJA VERDE', color: 'text-green-500' },
+              { id: 'blando', label: '🍅 BLANDO', color: 'text-red-500' },
+              { id: 'duro', label: '🥔 DURO', color: 'text-amber-500' }
+            ].map(cat => {
+              const catItems = itemsToDisplay.filter(p => p.tipo === cat.id);
+              if (catItems.length === 0) return null;
+
+              return (
+                <div key={cat.id} className="space-y-4">
+                  <h3 className={`text-[11px] font-black ${cat.color} uppercase tracking-[0.3em] font-mono flex items-center gap-2`}>
+                    {cat.label}
+                    <span className="text-[10px] font-normal text-gray-500 font-sans">({catItems.length})</span>
+                    <span className="h-[1px] flex-1 bg-white/5"></span>
+                  </h3>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-[12px]">
+                    {catItems.map(p => (
+                      <ProductCard 
+                        key={p.id} 
+                        product={p} 
+                        onUpdate={(patch) => updateProductData(p.id, patch)}
+                        isAdding={showFormId === p.id}
+                        onToggleAdd={() => setShowFormId(showFormId === p.id ? null : p.id)}
+                        onSaveAdd={(data) => guardarCarga(p.id, data)}
+                        onOpenCargaUnidades={(prod) => setModalCargaUnidad({ open: true, productoId: prod.id, nombre: prod.nombre, unidad: prod.unidad })}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            });
+          }
+
           return (
-            <div key={cat.id} className="space-y-4">
-              <h3 className={`text-[11px] font-black ${cat.color} uppercase tracking-[0.3em] font-mono flex items-center gap-2`}>
-                {cat.label}
+            <div className="space-y-4">
+              <h3 className="text-[11px] font-black text-white uppercase tracking-[0.3em] font-mono flex items-center gap-2">
+                {categoriaFiltro === 'Almacén' ? `🥫 ALMACÉN — ${subcategoriaAlmacen.toUpperCase()}` : categoriaFiltro.toUpperCase()}
+                <span className="text-[10px] font-normal text-gray-500 font-sans">({itemsToDisplay.length})</span>
                 <span className="h-[1px] flex-1 bg-white/5"></span>
               </h3>
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-[12px]">
-                {catItems.map(p => (
+                {itemsToDisplay.map(p => (
                   <ProductCard 
                     key={p.id} 
                     product={p} 
@@ -1827,13 +2332,36 @@ export default function ControlStock() {
                     isAdding={showFormId === p.id}
                     onToggleAdd={() => setShowFormId(showFormId === p.id ? null : p.id)}
                     onSaveAdd={(data) => guardarCarga(p.id, data)}
+                    onOpenCargaUnidades={(prod) => setModalCargaUnidad({ open: true, productoId: prod.id, nombre: prod.nombre, unidad: prod.unidad })}
                   />
                 ))}
               </div>
             </div>
           );
-        })}
+        })()}
       </div>
+
+      {/* ── MODAL: CARGA RÁPIDA POR UNIDAD (Choclo, Ajo, Almacén) ──────── */}
+      {modalCargaUnidad?.open && (
+        <ModalCargaUnidad
+          isOpen={modalCargaUnidad.open}
+          onClose={() => setModalCargaUnidad(null)}
+          initialProduct={modalCargaUnidad.productoId ? stockData[modalCargaUnidad.productoId] : null}
+          stockData={stockData}
+          onConfirmCarga={handleConfirmCargaUnidad}
+        />
+      )}
+
+      {/* ── MODAL: ASOCIAR CÓDIGO EAN A PRODUCTO DE ALMACÉN ─────────────── */}
+      {modalEanAsociar?.open && (
+        <ModalEanAsociar
+          isOpen={modalEanAsociar.open}
+          onClose={() => setModalEanAsociar(null)}
+          ean={modalEanAsociar.ean}
+          stockData={stockData}
+          onConfirmAsociar={handleConfirmAsociarEan}
+        />
+      )}
     </div>
   );
 }
@@ -1867,19 +2395,30 @@ function StatusAccordion({ title, icon, items, isOpen, onToggle, color, type }) 
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-[12px] pt-4">
               {items.map(p => {
                 const labels = DEFAULTS_BY_TYPE[p.tipo]?.labels || { small: '500g', large: '1kg' };
+                const esUnidad = p.esUnidad || p.unidad === 'unidad';
                 return (
                   <div key={p.id} className="bg-black/30 border border-white/5 rounded-2xl p-4 flex flex-col justify-between hover:bg-black/40 transition-all">
                     <div className="flex justify-between items-start mb-2">
                       <span className="text-white font-bold text-xs truncate pr-2">{p.nombre}</span>
                     </div>
-                    <div className="flex gap-1 mb-2">
-                      <div className="flex-1 bg-white/5 rounded-lg py-1 text-center">
-                         <span className="text-[9px] font-black text-white">{p.stock['1kg']} <span className="text-[7px] opacity-40 uppercase">{labels.large.replace('g','')}</span></span>
+                    {esUnidad ? (
+                      <div className="flex gap-1 mb-2">
+                        <div className="flex-1 bg-white/5 rounded-lg py-1.5 text-center">
+                          <span className="text-[10px] font-black text-emerald-400 font-mono">
+                            {p.totalStock} <span className="text-[7px] text-gray-400 uppercase">UDS</span>
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex-1 bg-white/5 rounded-lg py-1 text-center">
-                         <span className="text-[9px] font-black text-white">{p.stock['500g']} <span className="text-[7px] opacity-40 uppercase">{labels.small.replace('g','')}</span></span>
+                    ) : (
+                      <div className="flex gap-1 mb-2">
+                        <div className="flex-1 bg-white/5 rounded-lg py-1 text-center">
+                           <span className="text-[9px] font-black text-white">{p.stock['1kg']} <span className="text-[7px] opacity-40 uppercase">{labels.large.replace('g','')}</span></span>
+                        </div>
+                        <div className="flex-1 bg-white/5 rounded-lg py-1 text-center">
+                           <span className="text-[9px] font-black text-white">{p.stock['500g']} <span className="text-[7px] opacity-40 uppercase">{labels.small.replace('g','')}</span></span>
+                        </div>
                       </div>
-                    </div>
+                    )}
                     <span className="text-[9px] font-mono opacity-50 text-right">
                       {type === 'urgente' ? `${p.diasTranscurridos}d` : `${p.totalStock}u`}
                     </span>
@@ -1998,7 +2537,7 @@ function LiquidacionAccordion({ items, isOpen, onToggle, onDeleteItem, onClearAl
   );
 }
 
-function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
+function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd, onOpenCargaUnidades }) {
   const [editing, setEditing] = useState(false);
   // Estado local para edición de ajustes antes de guardar
   const [localSettings, setLocalSettings] = useState({ tipo: product.tipo, totalDays: product.totalDays, urgentDays: product.urgentDays });
@@ -2012,8 +2551,18 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
     setEditing(false);
   };
 
+  const esUnidad = product.esUnidad || product.unidad === 'unidad';
+  const catIcons = {
+    'Verduras': '🥬',
+    'Frutas': '🍎',
+    'Almacén': '🥫',
+    'Extras': '🥚',
+    'Carnes': '🥩'
+  };
   const typeConfig = DEFAULTS_BY_TYPE[product.tipo] || DEFAULTS_BY_TYPE['hoja verde'];
-  const icon = typeConfig.icon;
+  const icon = product.categoriaPrincipal && catIcons[product.categoriaPrincipal] 
+    ? catIcons[product.categoriaPrincipal] 
+    : typeConfig.icon;
   const labels = typeConfig.labels;
   
   const cardStyles = { 
@@ -2042,12 +2591,24 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
         <div className="space-y-3">
           <div className="flex items-center gap-2">
              <span className="text-base">📦</span>
-             <p className="text-[12px] font-bold">
-               {product.totalStock} {product.totalStock === 1 ? 'bandeja' : 'bandejas'} 
-               <span className="opacity-60 ml-1 font-medium">
-                 ({product.stock['500g']}x{labels.small} | {product.stock['1kg']}x{labels.large})
-               </span>
-             </p>
+             {esUnidad ? (
+               <p className="text-[12px] font-bold text-white flex items-center gap-1.5 flex-wrap">
+                 <span className="text-emerald-400 font-mono font-black text-sm">{product.totalStock}</span>
+                 <span>{product.totalStock === 1 ? 'unidad en stock' : 'unidades en stock'}</span>
+                 {product.subcategoria && (
+                   <span className="text-[9px] font-mono font-bold text-purple-300 bg-purple-500/20 border border-purple-500/30 px-2 py-0.5 rounded-full">
+                     {product.subcategoria}
+                   </span>
+                 )}
+               </p>
+             ) : (
+               <p className="text-[12px] font-bold">
+                 {product.totalStock} {product.totalStock === 1 ? 'bandeja' : 'bandejas'} 
+                 <span className="opacity-60 ml-1 font-medium">
+                   ({product.stock['500g']}x{labels.small} | {product.stock['1kg']}x{labels.large})
+                 </span>
+               </p>
+             )}
           </div>
           
           <div className="flex items-center gap-2 opacity-80">
@@ -2089,10 +2650,19 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd }) {
 
         {!isAdding ? (
           <div className="flex justify-between items-center gap-3">
-            <button onClick={onToggleAdd} className="flex-1 bg-green-600 hover:bg-green-500 text-white font-black text-[11px] py-3.5 rounded-xl shadow-lg border-b-4 border-green-800 active:border-b-0 active:translate-y-1 transition-all flex items-center justify-center gap-2 uppercase tracking-[0.1em]">
-              <Plus size={16} /> Cargar
+            <button 
+              onClick={() => {
+                if (esUnidad && onOpenCargaUnidades) {
+                  onOpenCargaUnidades(product);
+                } else {
+                  onToggleAdd();
+                }
+              }} 
+              className={`flex-1 ${esUnidad ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-800' : 'bg-green-600 hover:bg-green-500 border-green-800'} text-white font-black text-[11px] py-3.5 rounded-xl shadow-lg border-b-4 active:border-b-0 active:translate-y-1 transition-all flex items-center justify-center gap-2 uppercase tracking-[0.1em] cursor-pointer`}
+            >
+              <Plus size={16} /> {esUnidad ? 'Cargar Uds' : 'Cargar'}
             </button>
-            <button onClick={() => setEditing(true)} className="p-3.5 bg-white/5 rounded-xl text-gray-400 hover:text-white hover:bg-white/10 transition-all">
+            <button onClick={() => setEditing(true)} className="p-3.5 bg-white/5 rounded-xl text-gray-400 hover:text-white hover:bg-white/10 transition-all cursor-pointer">
               <Settings size={18}/>
             </button>
           </div>
@@ -2185,6 +2755,343 @@ function AddStockInline({ nombre, labels, currentStock, onCancel, onSave }) {
       <div className="flex gap-1.5 mt-3">
         <button onClick={onCancel} className="flex-1 h-9 bg-gray-800 text-gray-400 font-black text-[10px] uppercase tracking-tighter rounded-xl">Salir</button>
         <button onClick={() => onSave(data)} className="flex-[2] h-9 bg-green-600 text-white font-black text-[10px] uppercase tracking-widest rounded-xl border-b-2 border-green-800 shadow-md">Guardar</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Modal de Carga Rápida Simplificada por Unidad (Ajo, Choclo, Almacén) ───────
+function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfirmCarga }) {
+  const [selectedId, setSelectedId] = useState(initialProduct?.id || '');
+  const [costoTotal, setCostoTotal] = useState('');
+  const [cantidad, setCantidad] = useState('');
+  const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
+
+  useEffect(() => {
+    if (initialProduct?.id) {
+      setSelectedId(initialProduct.id);
+    } else if (!selectedId && stockData) {
+      const prodsList = Object.values(stockData);
+      const firstUnit = prodsList.find(p => p.esUnidad || p.unidad === 'unidad' || p.categoriaPrincipal === 'Almacén');
+      if (firstUnit) setSelectedId(firstUnit.id);
+      else if (prodsList.length > 0) setSelectedId(prodsList[0].id);
+    }
+  }, [initialProduct, stockData]);
+
+  if (!isOpen) return null;
+
+  const prod = stockData?.[selectedId];
+  const stockActual = prod ? (Number(prod.stock?.unidades ?? prod.stock?.['1kg']) || 0) : 0;
+  const cantNum = Math.max(0, parseInt(cantidad, 10) || 0);
+  const costoNum = Math.max(0, parseFloat(costoTotal) || 0);
+  const costoUnitario = cantNum > 0 ? Math.round(costoNum / cantNum) : 0;
+  const stockFinal = stockActual + cantNum;
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!prod || cantNum <= 0) return;
+    onConfirmCarga({
+      productoId: prod.id,
+      nombre: prod.nombre,
+      costoTotal: costoNum,
+      cantidad: cantNum,
+      costoUnitario,
+      fecha
+    });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+      <div className="bg-gray-900 border border-emerald-500/30 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-in zoom-in-95">
+        <div className="flex items-center justify-between pb-3 border-b border-white/10">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <Zap size={18} />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-white uppercase tracking-wider">Carga Rápida por Unidad</h3>
+              <p className="text-[10px] text-gray-400">1 solo paso directo a stock y costo sin merma</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 text-gray-500 hover:text-white rounded-xl bg-white/5 transition-colors cursor-pointer">
+            <X size={16} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Selector de producto */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Producto</label>
+            <select
+              value={selectedId}
+              onChange={(e) => setSelectedId(e.target.value)}
+              className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-white text-xs font-bold outline-none focus:border-emerald-500"
+            >
+              {Object.values(stockData || {})
+                .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''))
+                .map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.nombre} ({p.categoriaPrincipal || 'Verduras'} · {p.unidad || 'unidad'})
+                  </option>
+                ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {/* Costo total */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Costo Total ($)</label>
+              <input
+                type="number"
+                min="0"
+                step="any"
+                required
+                placeholder="Ej: 12000"
+                value={costoTotal}
+                onChange={(e) => setCostoTotal(e.target.value)}
+                className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm font-mono font-bold outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            {/* Cantidad de unidades */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Cantidad (Uds)</label>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                required
+                placeholder="Ej: 10"
+                value={cantidad}
+                onChange={(e) => setCantidad(e.target.value)}
+                className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm font-mono font-bold outline-none focus:border-emerald-500"
+              />
+            </div>
+          </div>
+
+          {/* Fecha */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Fecha de Ingreso</label>
+            <input
+              type="date"
+              value={fecha}
+              onChange={(e) => setFecha(e.target.value)}
+              className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2 text-white text-xs font-mono outline-none focus:border-emerald-500"
+            />
+          </div>
+
+          {/* Resumen dinámico */}
+          <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl space-y-1.5">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-gray-300 font-medium">Costo unitario nuevo:</span>
+              <span className="text-emerald-400 font-mono font-black text-sm">
+                ${costoUnitario.toLocaleString('es-AR')} / unidad
+              </span>
+            </div>
+            <p className="text-[10px] text-emerald-300/80">
+              ⚡ Sin merma (costo directo). Pasa a ser el costo vigente para todo el inventario de este producto.
+            </p>
+            <div className="flex justify-between items-center text-xs pt-1.5 border-t border-emerald-500/20">
+              <span className="text-gray-300 font-medium">Stock disponible:</span>
+              <span className="text-white font-mono font-bold">
+                {stockActual} + <span className="text-emerald-400">{cantNum}</span> = {stockFinal} unidades
+              </span>
+            </div>
+          </div>
+
+          <div className="flex gap-2.5 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-gray-300 text-xs font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={cantNum <= 0}
+              className="flex-[2] py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-black uppercase tracking-wider rounded-xl shadow-lg border-b-2 border-emerald-800 transition-all cursor-pointer"
+            >
+              Confirmar y Cargar al Stock
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ── Modal de Asociación de Código EAN de Fábrica (Almacén) ────────────────────
+function ModalEanAsociar({ isOpen, onClose, ean, stockData, onConfirmAsociar }) {
+  const [selectedProdId, setSelectedProdId] = useState('');
+  const [nuevoNombre, setNuevoNombre] = useState('');
+  const [subcategoria, setSubcategoria] = useState('Almacén seco');
+  const [modoCrear, setModoCrear] = useState(false);
+
+  useEffect(() => {
+    if (isOpen && stockData) {
+      const almacenProds = Object.values(stockData).filter(p => p.categoriaPrincipal === 'Almacén');
+      if (almacenProds.length > 0) {
+        setSelectedProdId(almacenProds[0].id);
+        setSubcategoria(almacenProds[0].subcategoria || 'Almacén seco');
+      } else {
+        const first = Object.values(stockData)[0];
+        if (first) setSelectedProdId(first.id);
+      }
+    }
+  }, [isOpen, stockData]);
+
+  if (!isOpen) return null;
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    let prodNombre = '';
+    let prodId = selectedProdId;
+
+    if (modoCrear) {
+      if (!nuevoNombre.trim()) return;
+      prodNombre = nuevoNombre.trim();
+      prodId = null;
+    } else {
+      const prod = stockData?.[selectedProdId];
+      if (!prod) return;
+      prodNombre = prod.nombre;
+    }
+
+    onConfirmAsociar({
+      ean,
+      productoId: prodId,
+      nombre: prodNombre,
+      subcategoria,
+      unidad: 'unidad'
+    });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+      <div className="bg-gray-900 border border-purple-500/30 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-in zoom-in-95">
+        <div className="flex items-center justify-between pb-3 border-b border-white/10">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20">
+              <ScanBarcode size={18} />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-white uppercase tracking-wider">Código EAN de Fábrica</h3>
+              <p className="text-[10px] text-gray-400">Asociar código escaneado a un producto de Almacén</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 text-gray-500 hover:text-white rounded-xl bg-white/5 transition-colors cursor-pointer">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="p-3 bg-black/40 border border-white/5 rounded-2xl flex items-center justify-between">
+          <span className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Código detectado:</span>
+          <span className="text-purple-300 font-mono font-black text-sm bg-purple-500/10 border border-purple-500/20 px-2.5 py-1 rounded-lg">
+            {ean}
+          </span>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="flex bg-black/30 p-1 rounded-xl border border-white/5 gap-1">
+            <button
+              type="button"
+              onClick={() => setModoCrear(false)}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                !modoCrear ? 'bg-purple-600 text-white font-black' : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              Producto existente
+            </button>
+            <button
+              type="button"
+              onClick={() => setModoCrear(true)}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                modoCrear ? 'bg-purple-600 text-white font-black' : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              Nuevo producto
+            </button>
+          </div>
+
+          {!modoCrear ? (
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Seleccionar Producto</label>
+              <select
+                value={selectedProdId}
+                onChange={(e) => {
+                  setSelectedProdId(e.target.value);
+                  const p = stockData?.[e.target.value];
+                  if (p?.subcategoria) setSubcategoria(p.subcategoria);
+                }}
+                className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-white text-xs font-bold outline-none focus:border-purple-500"
+              >
+                {Object.values(stockData || {})
+                  .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''))
+                  .map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.nombre} ({p.categoriaPrincipal || 'Almacén'} {p.subcategoria ? `· ${p.subcategoria}` : ''})
+                    </option>
+                  ))}
+              </select>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Nombre del Producto</label>
+              <input
+                type="text"
+                required
+                placeholder="Ej: Fideos Matarazzo 500g"
+                value={nuevoNombre}
+                onChange={(e) => setNuevoNombre(e.target.value)}
+                className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-white text-xs font-bold outline-none focus:border-purple-500"
+              />
+            </div>
+          )}
+
+          {/* Subcategoría de Almacén */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Subcategoría</label>
+            <div className="grid grid-cols-3 gap-1.5">
+              {['Bebidas', 'Almacén seco', 'Limpieza', 'Lácteos', 'Golosinas'].map(sub => (
+                <button
+                  key={sub}
+                  type="button"
+                  onClick={() => setSubcategoria(sub)}
+                  className={`py-2 px-2 text-[10px] font-bold rounded-xl border text-center transition-all cursor-pointer ${
+                    subcategoria === sub
+                      ? 'bg-purple-600/30 border-purple-500 text-purple-200 font-black'
+                      : 'bg-black/30 border-white/5 text-gray-400 hover:text-white'
+                  }`}
+                >
+                  {sub}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <p className="text-[10px] text-gray-400 bg-white/5 p-3 rounded-xl">
+            💡 En escaneos futuros, este código EAN sumará o descontará automáticamente 1 unidad del producto seleccionado.
+          </p>
+
+          <div className="flex gap-2.5 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-gray-300 text-xs font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="flex-[2] py-3 bg-purple-600 hover:bg-purple-500 text-white text-xs font-black uppercase tracking-wider rounded-xl shadow-lg border-b-2 border-purple-800 transition-all cursor-pointer"
+            >
+              Vincular Código y Sumar 1 Ud
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

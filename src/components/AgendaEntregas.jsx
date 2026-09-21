@@ -3,6 +3,7 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, CheckCircle, Sun, Sunset, Printer, FileText, User, Clock, ScanBarcode, X, Trash2, Check, RotateCcw, Lock, AlertTriangle } from 'lucide-react';
 import { HOY } from '../data/mockData';
 import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido } from '../utils/remitoPrinter';
+import { getEanMapping, esCodigoEan } from '../data/productUtils';
 
 const DIAS_SEMANA = ['Martes', 'Jueves'];
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
@@ -220,6 +221,106 @@ export default function AgendaEntregas({ rol, usuario }) {
   const procesarEscaneoPedido = useCallback((rawCode) => {
     if (!rawCode || !preparandoPedido) return;
     setScanError(null); setScanSuccess(null);
+
+    const cleanCode = String(rawCode).replace(/[\r\n\x00-\x1F]/g, '').trim().replace(/^\][a-zA-Z0-9]{2,3}/, '').replace(/^\*+|\*+$/g, '').trim().toUpperCase();
+    const eanMap = getEanMapping();
+    const mappedEan = eanMap[cleanCode];
+
+    // ── Si es un código EAN de fábrica mapeado a Almacén ──────────────────
+    if (mappedEan) {
+      const prepActual = preparaciones[preparandoPedido];
+      if (!prepActual) return;
+
+      const nombreProd = mappedEan.nombre;
+      const nombreNorm = norm(nombreProd);
+
+      let matchedItemIdx = -1;
+      for (let i = 0; i < prepActual.items.length; i++) {
+        const itemNorm = norm(prepActual.items[i].nombre);
+        if (itemNorm === nombreNorm || itemNorm.includes(nombreNorm) || nombreNorm.includes(itemNorm)) {
+          const asignadas = prepActual.items[i].bolsasAsignadas?.length || 0;
+          if (asignadas < prepActual.items[i].cantidad) {
+            matchedItemIdx = i;
+            break;
+          }
+        }
+      }
+
+      if (matchedItemIdx === -1) {
+        setScanError(`⚠️ "${nombreProd}" no coincide con ningún producto pendiente del pedido.`);
+        return;
+      }
+
+      // Descontar 1 unidad del stock
+      const current = stockDataRef.current || {};
+      let matchedStockId = mappedEan.productoId && current[mappedEan.productoId] ? mappedEan.productoId : null;
+      if (!matchedStockId && typeof current === 'object' && !Array.isArray(current)) {
+        matchedStockId = Object.keys(current).find(id => {
+          const pNorm = norm(current[id]?.nombre);
+          return pNorm === nombreNorm || pNorm.includes(nombreNorm) || nombreNorm.includes(pNorm);
+        });
+      }
+      const matchedProd = matchedStockId ? current[matchedStockId] : null;
+
+      if (matchedProd && matchedStockId) {
+        const stockActual = Number(matchedProd.stock?.unidades ?? matchedProd.stock?.['1kg']) || 0;
+        if (stockActual <= 0) {
+          setScanError(`🚫 ¡Sin stock! No hay "${matchedProd.nombre}" disponible en stock.`);
+          return;
+        }
+        const nuevoStock = Math.max(0, stockActual - 1);
+        const newData = { ...current };
+        newData[matchedStockId] = {
+          ...matchedProd,
+          stock: { ...matchedProd.stock, '1kg': nuevoStock, unidades: nuevoStock }
+        };
+        setStockData(newData);
+      }
+
+      const now = new Date();
+      const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      setCodigosProcesados(prev => ({
+        ...prev,
+        [cleanCode]: {
+          uniqueCode: cleanCode,
+          nombre: nombreProd,
+          matchedId: matchedStockId,
+          peso: 1,
+          estado: 'SACADO',
+          bloqueado: false,
+          fechaModificacion: horaStr,
+          ultimaAccion: `Asignado a pedido ${preparandoPedido}`,
+          ts: Date.now()
+        }
+      }));
+
+      const nuevaBolsa = {
+        uniqueCode: cleanCode,
+        nombre: nombreProd,
+        peso: 1,
+        tagId: null,
+        ts: Date.now(),
+        matchedStockId: matchedStockId || null,
+        slot: 'unidad',
+        esUnidad: true
+      };
+
+      setPreparaciones(prev => {
+        const prep = { ...prev[preparandoPedido] };
+        const items = [...prep.items];
+        items[matchedItemIdx] = {
+          ...items[matchedItemIdx],
+          bolsasAsignadas: [...(items[matchedItemIdx].bolsasAsignadas || []), nuevaBolsa]
+        };
+        const todosCompletos = items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
+        return { ...prev, [preparandoPedido]: { ...prep, items, completado: todosCompletos } };
+      });
+
+      setScanSuccess(`✅ ${nombreProd.toUpperCase()} — 1 unidad asignada`);
+      setTimeout(() => setScanSuccess(null), 2500);
+      setTimeout(() => modalScanInputRef.current?.focus(), 50);
+      return;
+    }
     
     const resultado = parsearCodigoBarras(rawCode);
     if (!resultado || (!resultado.peso && !resultado.esIncompleto)) {

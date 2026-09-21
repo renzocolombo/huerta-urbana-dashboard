@@ -248,7 +248,8 @@ export function GoogleSheetsProvider({ children }) {
   useEffect(() => {
     fetchSheetPedidos();
     fetchPanelCostos();
-  }, [fetchSheetPedidos, fetchPanelCostos]);
+    fetchControlStock();
+  }, [fetchSheetPedidos, fetchPanelCostos, fetchControlStock]);
 
   const actualizarEstadoEnSheet = useCallback(async (fila, nuevoEstado, motivo = null) => {
     setPedidos(current =>
@@ -369,12 +370,13 @@ export function GoogleSheetsProvider({ children }) {
   return (
     <GoogleSheetsContext.Provider value={{
       pedidos, setPedidos,
-      productosCostos, stockData, setStockData,
+      productosCostos, setProductosCostos, stockData, setStockData,
       ultimoRefresco,
       cargando,
       error,
       conectado,
       fetchSheetPedidos,
+      fetchControlStock,
       cargarTodo,
       actualizarEstadoEnSheet,
       actualizarRemitoEnSheet,
