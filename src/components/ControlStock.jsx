@@ -205,6 +205,40 @@ function playScanBeep(success = true) {
   } catch (e) {}
 }
 
+// Descompone texto de escaneo en códigos individuales limpios (evita concatenaciones)
+function extraerCodigosIndividuales(rawText) {
+  if (!rawText) return [];
+  // 1. Separar por retornos de carro o saltos de línea (CR / LF)
+  const lineas = String(rawText)
+    .split(/[\r\n]+/)
+    .map(l => String(l).replace(/[\r\n\x00-\x1F]/g, '').trim().replace(/^\][a-zA-Z0-9]{2,3}/, '').replace(/^\*+|\*+$/g, '').trim())
+    .filter(Boolean);
+
+  const codigosFinales = [];
+
+  for (const l of lineas) {
+    // Si por congestión de buffer de la pistola se concatenaron 2 o más códigos numéricos (ej: 26 dígitos = 2x13, 39 = 3x13)
+    if (/^\d{26}$/.test(l)) {
+      codigosFinales.push(l.slice(0, 13));
+      codigosFinales.push(l.slice(13));
+    } else if (/^\d{39}$/.test(l)) {
+      codigosFinales.push(l.slice(0, 13));
+      codigosFinales.push(l.slice(13, 26));
+      codigosFinales.push(l.slice(26));
+    } else if (/^\d{24}$/.test(l)) {
+      codigosFinales.push(l.slice(0, 12));
+      codigosFinales.push(l.slice(12));
+    } else if (/^\d{16}$/.test(l)) {
+      codigosFinales.push(l.slice(0, 8));
+      codigosFinales.push(l.slice(8));
+    } else {
+      codigosFinales.push(l);
+    }
+  }
+
+  return codigosFinales;
+}
+
 export default function ControlStock() {
   const { stockData, setStockData, productosCostos: contextMaster, setProductosCostos, stockData: contextStock } = useGoogleSheets();
   const [productosMaster, setProductosMaster] = useState([]);
@@ -269,6 +303,7 @@ export default function ControlStock() {
   useEffect(() => { scanModeRef.current = scanMode; }, [scanMode]);
 
   const [scanBuffer, setScanBuffer] = useState('');
+  const scanBufferRef = useRef('');
   const [lastScan, setLastScan] = useState(null);        // { productoNombre, peso, slot, ok, accion? }
   const [scanLog, setScanLog] = useState([]);             // array de últimos escaneos (max 8)
   const [scanError, setScanError] = useState(null);
@@ -504,8 +539,12 @@ export default function ControlStock() {
       }, ...prev].slice(0, 8));
 
       // 6. Limpiar y mantener el foco listo para el siguiente escaneo inmediato con la pistola
+      if (scanInputRef.current) {
+        scanInputRef.current.value = '';
+      }
+      scanBufferRef.current = '';
       setScanBuffer('');
-      setTimeout(() => scanInputRef.current?.focus(), 15);
+      setTimeout(() => scanInputRef.current?.focus(), 10);
       return;
     }
 
@@ -764,19 +803,25 @@ export default function ControlStock() {
         if (code) {
           e.preventDefault();
           e.stopPropagation();
-          const scanTime = Date.now();
-          if (scanTime - lastProcessedTimeRef.current > 250) {
-            lastProcessedTimeRef.current = scanTime;
-            procesarEscaneo(code);
+          const codigos = extraerCodigosIndividuales(code);
+          for (const c of codigos) {
+            procesarEscaneo(c);
           }
+        }
+        if (scanInputRef.current) {
+          scanInputRef.current.value = '';
+          scanInputRef.current.focus();
         }
         return;
       }
 
-      if (e.key.length === 1) {
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
         globalBuffer += e.key;
         if (scanInputRef.current) {
           scanInputRef.current.focus();
+          scanInputRef.current.value = globalBuffer;
+          scanBufferRef.current = globalBuffer;
+          setScanBuffer(globalBuffer);
         }
       }
     };
@@ -1107,30 +1152,61 @@ export default function ControlStock() {
     }
   };
 
+  // ── Procesador central de lecturas de la pistola (Enter o salto de línea) ──
+  const ejecutarLecturaEscaneo = useCallback((elementoTarget) => {
+    // 1. Tomar todo el texto acumulado hasta ese punto
+    const inputEl = elementoTarget || scanInputRef.current;
+    const rawVal = (inputEl ? inputEl.value : '') || scanBufferRef.current || scanBuffer || '';
+
+    // 2. Limpiar el campo de texto a cero INMEDIATAMENTE de forma síncrona en el DOM
+    if (inputEl) {
+      inputEl.value = '';
+    }
+    if (scanInputRef.current) {
+      scanInputRef.current.value = '';
+    }
+    scanBufferRef.current = '';
+    setScanBuffer('');
+
+    if (!rawVal || !rawVal.trim()) return;
+
+    // 3. Extraer cada código individual evitando concatenaciones o uniones de búfer
+    const codigosAProcesar = extraerCodigosIndividuales(rawVal);
+    if (codigosAProcesar.length === 0) return;
+
+    // 4. Procesar inmediatamente cada código de forma individual sin debounce que descarte lecturas
+    for (const c of codigosAProcesar) {
+      if (c && c.trim()) {
+        procesarEscaneo(c.trim());
+      }
+    }
+
+    // 5. Dejar el campo limpio y enfocado para el siguiente código sin ninguna acción del usuario
+    setTimeout(() => {
+      if (scanInputRef.current) {
+        scanInputRef.current.value = '';
+        scanInputRef.current.focus();
+      }
+    }, 10);
+  }, [procesarEscaneo, scanBuffer]);
+
   const handleScanInput = (e) => {
-    setScanBuffer(e.target.value);
+    const val = e.target.value || '';
+    // Si la pistola envió retorno de carro o salto de línea dentro del evento input
+    if (val.includes('\n') || val.includes('\r')) {
+      e.preventDefault();
+      ejecutarLecturaEscaneo(e.target);
+      return;
+    }
+    scanBufferRef.current = val;
+    setScanBuffer(val);
   };
 
   const handleScanKeyDown = (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' || e.keyCode === 13 || e.which === 13) {
       e.preventDefault();
       e.stopPropagation();
-
-      const rawVal = e.target.value || scanBuffer || '';
-      const code = rawVal.replace(/[\r\n]/g, '').trim();
-
-      e.target.value = '';
-      setScanBuffer('');
-
-      const now = Date.now();
-      if (now - lastProcessedTimeRef.current < 250) {
-        return;
-      }
-
-      if (code) {
-        lastProcessedTimeRef.current = now;
-        procesarEscaneo(code);
-      }
+      ejecutarLecturaEscaneo(e.target);
     }
   };
 
