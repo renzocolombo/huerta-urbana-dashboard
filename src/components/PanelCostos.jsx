@@ -310,7 +310,72 @@ export default function PanelCostos() {
         }
       });
 
-      // Cargar productos de almacén (custom y presets)
+      // Cargar productos de la pestaña Almacen de Google Sheet si existe
+      if (SHEET_ID) {
+        try {
+          const gvizAlmUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`;
+          const resAlm = await fetch(gvizAlmUrl);
+          if (resAlm.ok) {
+            const txtAlm = await resAlm.text();
+            const sA = txtAlm.indexOf('{');
+            const eA = txtAlm.lastIndexOf('}');
+            if (sA !== -1 && eA !== -1) {
+              const jA = JSON.parse(txtAlm.substring(sA, eA + 1));
+              const rowsAlm = jA.table?.rows || [];
+              if (rowsAlm.length > 0) {
+                const isHeader = String(rowsAlm[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
+                const dataSlice = isHeader ? rowsAlm.slice(1) : rowsAlm;
+                dataSlice.forEach((r, idx) => {
+                  const nombreP = String(r.c?.[0]?.v || '').trim();
+                  if (!nombreP) return;
+                  const filaP = isHeader ? (idx + 3) : (idx + 2);
+                  const marcaP = String(r.c?.[1]?.v || '').trim();
+                  const catP = String(r.c?.[2]?.v || 'Almacén').trim();
+                  const subCatP = String(r.c?.[3]?.v || getSubcategoriaAlmacen(nombreP)).trim();
+                  const eanP = String(r.c?.[4]?.v || '').trim();
+                  const costoP = Number(r.c?.[5]?.v) || 0;
+                  const precioVentaP = Number(r.c?.[6]?.v) || 0;
+                  const stockUdsP = Number(r.c?.[7]?.v) || 0;
+
+                  const existing = mapped.find(p => p.nombre?.toLowerCase().trim() === nombreP.toLowerCase());
+                  if (existing) {
+                    existing.fila = filaP;
+                    existing.categoriaPrincipal = 'Almacén';
+                    if (costoP) existing.precioCajon = costoP;
+                    if (precioVentaP) existing.precioMaxManual = precioVentaP;
+                    existing.subcategoria = subCatP;
+                    existing.marca = marcaP;
+                    existing.ean = eanP;
+                    existing.stock_unidades = stockUdsP;
+                  } else {
+                    mapped.push({
+                      id: `alm_${filaP}`,
+                      fila: filaP,
+                      nombre: nombreP,
+                      marca: marcaP,
+                      categoria: 'otros',
+                      categoriaPrincipal: 'Almacén',
+                      subcategoria: subCatP,
+                      cantidadCajon: 1,
+                      unidad: 'unidad',
+                      precioCajon: costoP,
+                      margen: 60,
+                      precioMaxManual: precioVentaP || null,
+                      activo: true,
+                      ean: eanP,
+                      stock_unidades: stockUdsP
+                    });
+                  }
+                });
+              }
+            }
+          }
+        } catch (eAlm) {
+          console.warn('[COSTOS] Error leyendo pestaña Almacen:', eAlm);
+        }
+      }
+
+      // Cargar productos de almacén (custom y presets que no estén ya en mapped)
       let customSaved = [];
       try {
         const cs = localStorage.getItem('huerta_custom_almacen_prods_v1');
@@ -357,7 +422,73 @@ export default function PanelCostos() {
   };
 
   const syncWithSheet = async (p) => {
-    if (!APPS_SCRIPT_URL || !p.fila) return;
+    if (!APPS_SCRIPT_URL) return;
+
+    if (p.categoriaPrincipal === 'Almacén') {
+      let filaDestino = p.fila;
+      if (!filaDestino && SHEET_ID) {
+        try {
+          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`);
+          if (gvizRes.ok) {
+            const text = await gvizRes.text();
+            const s = text.indexOf('{');
+            const e = text.lastIndexOf('}');
+            if (s !== -1 && e !== -1) {
+              const json = JSON.parse(text.substring(s, e + 1));
+              const rows = json.table?.rows || [];
+              const isHeader = String(rows[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
+              const existingIdx = rows.findIndex(r => String(r.c?.[0]?.v || '').trim().toLowerCase() === String(p.nombre || '').trim().toLowerCase());
+              if (existingIdx !== -1) {
+                filaDestino = existingIdx + (isHeader ? 1 : 2);
+              } else {
+                const dataCount = isHeader ? Math.max(0, rows.length - 1) : rows.length;
+                filaDestino = dataCount + 2;
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[SYNC-ALMACEN-COSTOS] Error buscando fila:', e);
+        }
+      }
+
+      if (!filaDestino) filaDestino = 2;
+      p.fila = filaDestino;
+
+      const precioVenta = p.precioMaxManual !== null && p.precioMaxManual !== undefined
+        ? Number(p.precioMaxManual)
+        : Math.round(Number(p.precioCajon || 0) * (1 + (Number(p.margen || 60) / 100)));
+
+      const payloadAlmacen = {
+        accion: 'updateAlmacen',
+        action: 'updateAlmacen',
+        sheetName: 'Almacen',
+        sheet: 'Almacen',
+        fila: filaDestino,
+        nombre: p.nombre,
+        marca: p.marca || '',
+        categoria: 'Almacén',
+        subcategoria: p.subcategoria || 'Almacén',
+        codigo_ean: p.ean || '',
+        costo_unitario: Number(p.precioCajon) || 0,
+        precio_venta: precioVenta,
+        stock_unidades: Number(p.stock_unidades) || 0,
+        fila_val: filaDestino
+      };
+
+      try {
+        await fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(payloadAlmacen)
+        });
+        console.log(`✅ [SYNC COSTOS ALMACEN] "${p.nombre}" sincronizado en fila ${filaDestino}`);
+      } catch (e) {
+        console.error('Error sincronizando almacén con Google Sheets:', e);
+      }
+      return;
+    }
+
+    if (!p.fila) return;
     
     const payload = {
       accion: 'updatePanelCostos',
@@ -370,15 +501,13 @@ export default function PanelCostos() {
     };
 
     try {
-      // POST no-cors para evitar problemas preflight
       await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
-        mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain' },
         body: JSON.stringify(payload)
       });
     } catch (e) {
-      console.error('Error síncronizando con Google Sheets:', e);
+      console.error('Error sincronizando con Google Sheets:', e);
     }
   };
 
@@ -688,6 +817,65 @@ export default function PanelCostos() {
         } catch (jsonErr) {
           if (jsonErr.message && jsonErr.message.includes('Google Sheets Apps Script')) {
             throw jsonErr;
+          }
+        }
+
+        // Sincronizar todos los productos de Almacén activos directamente en las filas de la pestaña Almacen del Sheet
+        const prodsAlmacenActivos = productosCalculados.filter(p => p.categoriaPrincipal === 'Almacén' && p.activo);
+        if (prodsAlmacenActivos.length > 0) {
+          try {
+            let existingRows = [];
+            if (SHEET_ID) {
+              const gRes = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`);
+              if (gRes.ok) {
+                const txt = await gRes.text();
+                const s = txt.indexOf('{');
+                const e = txt.lastIndexOf('}');
+                if (s !== -1 && e !== -1) {
+                  const j = JSON.parse(txt.substring(s, e + 1));
+                  existingRows = j.table?.rows || [];
+                }
+              }
+            }
+
+            const isHeader = String(existingRows[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
+            let nextFila = (isHeader ? Math.max(0, existingRows.length - 1) : existingRows.length) + 2;
+
+            const syncAlmPromises = prodsAlmacenActivos.map(async (p) => {
+              let f = p.fila;
+              if (!f) {
+                const idx = existingRows.findIndex(r => String(r.c?.[0]?.v || '').trim().toLowerCase() === String(p.nombre || '').trim().toLowerCase());
+                if (idx !== -1) {
+                  f = idx + (isHeader ? 1 : 2);
+                } else {
+                  f = nextFila++;
+                }
+                p.fila = f;
+              }
+              const precioVenta = Math.floor(p.precioFinal || (Number(p.precioCajon || 0) * (1 + (Number(p.margen || 60) / 100))));
+              return fetch(APPS_SCRIPT_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain' },
+                body: JSON.stringify({
+                  accion: 'updateAlmacen',
+                  sheetName: 'Almacen',
+                  fila: f,
+                  nombre: p.nombre,
+                  marca: p.marca || '',
+                  categoria: 'Almacén',
+                  subcategoria: p.subcategoria || 'Almacén',
+                  codigo_ean: p.ean || '',
+                  costo_unitario: Number(p.precioCajon) || 0,
+                  precio_venta: precioVenta,
+                  stock_unidades: Number(p.stock_unidades) || 0,
+                  fila_val: f
+                })
+              });
+            });
+            await Promise.all(syncAlmPromises);
+            console.log(`✅ [PUBLICAR] ${prodsAlmacenActivos.length} productos de Almacén sincronizados en la hoja de Google Sheets`);
+          } catch (eAlm) {
+            console.warn('[PUBLICAR] Error sincronizando Almacen en sheet:', eAlm);
           }
         }
       }
