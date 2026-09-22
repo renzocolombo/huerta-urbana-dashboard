@@ -1512,12 +1512,12 @@ export default function ControlStock() {
   }, [processedData, productosMaster]);
 
   // ── Handler de Carga Simplificada por Unidad (Ajo, Choclo, Almacén) ─────────
-  const handleConfirmCargaUnidad = ({ productoId, nombre, subcategoria, costoTotal, cantidad, costoUnitario, fecha }) => {
+  const handleConfirmCargaUnidad = ({ esCreacionNueva, ean, productoId, nombre, subcategoria, costoTotal, cantidad, costoUnitario, fecha }) => {
     const current = stockDataRef.current || {};
-    let targetId = productoId;
+    let targetId = esCreacionNueva ? null : productoId;
     let prod = targetId ? current[targetId] : null;
 
-    if (!prod && nombre) {
+    if (!esCreacionNueva && !prod && nombre) {
       targetId = Object.keys(current).find(id => norm(current[id]?.nombre) === norm(nombre));
       if (targetId) prod = current[targetId];
     }
@@ -1528,7 +1528,7 @@ export default function ControlStock() {
       : '';
 
     if (!prod) {
-      // Producto nuevo creado al vuelo (ej: Harina leudante Favorita)
+      // Producto nuevo creado al vuelo o explícito (ej: Harina Leudante Blancaflor, Sal Celusal, Sal Dos Anclas)
       targetId = 'alm_custom_' + Date.now();
       prod = {
         id: targetId,
@@ -1573,6 +1573,16 @@ export default function ControlStock() {
     setStockData(newData);
     syncWithSheet(updatedProd);
 
+    // Si se especificó un código de barras EAN, asociarlo de inmediato al producto
+    if (ean && esCodigoEan(ean)) {
+      asociarEanAProducto(ean, {
+        productoId: targetId,
+        nombre: updatedProd.nombre,
+        subcategoria: subCat,
+        unidad: 'unidad'
+      });
+    }
+
     // Guardar en cache local para persistencia inmediata
     try {
       const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
@@ -1589,17 +1599,24 @@ export default function ControlStock() {
 
       // Guardar lista de productos personalizados de almacén
       const customSaved = JSON.parse(localStorage.getItem('huerta_custom_almacen_prods_v1') || '[]');
-      if (!customSaved.some(cp => norm(cp.nombre) === norm(updatedProd.nombre))) {
-        customSaved.push({
-          id: targetId,
-          nombre: updatedProd.nombre,
-          subcategoria: subCat,
-          categoriaPrincipal: catPrincipal,
-          unidad: 'unidad',
-          tipo: 'otros'
-        });
-        localStorage.setItem('huerta_custom_almacen_prods_v1', JSON.stringify(customSaved));
+      const existingIdx = customSaved.findIndex(cp => cp.id === targetId || norm(cp.nombre) === norm(updatedProd.nombre));
+      const customObj = {
+        id: targetId,
+        nombre: updatedProd.nombre,
+        subcategoria: subCat,
+        categoriaPrincipal: catPrincipal,
+        unidad: 'unidad',
+        tipo: 'otros',
+        costoUnitario: costoUnitario || 0,
+        costoTotal: costoTotal || 0,
+        ean: ean || undefined
+      };
+      if (existingIdx >= 0) {
+        customSaved[existingIdx] = { ...customSaved[existingIdx], ...customObj };
+      } else {
+        customSaved.push(customObj);
       }
+      localStorage.setItem('huerta_custom_almacen_prods_v1', JSON.stringify(customSaved));
     } catch (e) {}
 
     // Actualizar catálogo de costos en contexto y localStorage
@@ -2784,12 +2801,29 @@ export default function ControlStock() {
                   productoId: null,
                   nombre: '',
                   unidad: 'unidad',
-                  subcategoria: subcategoriaAlmacen !== 'Todas' ? subcategoriaAlmacen : 'Almacén'
+                  subcategoria: subcategoriaAlmacen !== 'Todas' ? subcategoriaAlmacen : 'Almacén',
+                  initialMode: 'nuevo'
+                })}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-md cursor-pointer border border-purple-400/40"
+                title="Crear producto nuevo con nombre y marca propia e independiente"
+              >
+                <Sparkles size={14} />
+                <span>+ Crear con Marca</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalCargaUnidad({
+                  open: true,
+                  productoId: null,
+                  nombre: '',
+                  unidad: 'unidad',
+                  subcategoria: subcategoriaAlmacen !== 'Todas' ? subcategoriaAlmacen : 'Almacén',
+                  initialMode: 'existente'
                 })}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-md cursor-pointer border border-emerald-400/40"
               >
                 <Plus size={14} />
-                <span>+ Cargar Producto</span>
+                <span>+ Cargar Stock</span>
               </button>
               <span className="text-[10px] font-mono font-bold text-purple-300 bg-purple-500/20 border border-purple-500/30 px-2.5 py-1 rounded-lg">
                 Activa: {subcategoriaAlmacen}
@@ -2866,14 +2900,31 @@ export default function ControlStock() {
                 <p className="text-gray-400 text-xs max-w-sm mx-auto">
                   Podés incorporar productos a esta categoría con el botón de Carga Rápida o desde el Panel de Costos.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setModalCargaUnidad({ open: true, productoId: null, nombre: '', unidad: 'unidad' })}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-wider px-4 py-2.5 rounded-xl transition-all inline-flex items-center gap-2 cursor-pointer"
-                >
-                  <Plus size={14} />
-                  <span>Cargar Producto Nuevo</span>
-                </button>
+                <div className="flex items-center justify-center gap-2.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setModalCargaUnidad({
+                      open: true,
+                      productoId: null,
+                      nombre: '',
+                      unidad: 'unidad',
+                      subcategoria: subcategoriaAlmacen !== 'Todas' ? subcategoriaAlmacen : 'Almacén',
+                      initialMode: 'nuevo'
+                    })}
+                    className="bg-purple-600 hover:bg-purple-500 text-white text-xs font-black uppercase tracking-wider px-4 py-2.5 rounded-xl transition-all inline-flex items-center gap-2 cursor-pointer shadow-lg shadow-purple-900/30 border border-purple-400/40"
+                  >
+                    <Sparkles size={14} />
+                    <span>Crear Producto con Marca</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModalCargaUnidad({ open: true, productoId: null, nombre: '', unidad: 'unidad', initialMode: 'existente' })}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-wider px-4 py-2.5 rounded-xl transition-all inline-flex items-center gap-2 cursor-pointer"
+                  >
+                    <Plus size={14} />
+                    <span>Cargar Stock Existente</span>
+                  </button>
+                </div>
               </div>
             );
           }
@@ -3395,15 +3446,22 @@ function AddStockInline({ nombre, labels, currentStock, onCancel, onSave }) {
 }
 
 function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfirmCarga }) {
+  const [modo, setModo] = useState('existente'); // 'existente' | 'nuevo'
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  
+  // Campos para producto nuevo con marca
+  const [nuevoNombre, setNuevoNombre] = useState('');
+  const [nuevoEan, setNuevoEan] = useState('');
+
   const [subcategoria, setSubcategoria] = useState('Almacén');
   const [costoTotal, setCostoTotal] = useState('');
   const [cantidad, setCantidad] = useState('6');
   const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
 
   const inputRef = useRef(null);
+  const nuevoInputRef = useRef(null);
   const dropdownRef = useRef(null);
 
   // Lista ordenada de todos los productos disponibles
@@ -3416,6 +3474,22 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
   // Inicialización cuando se abre el modal
   useEffect(() => {
     if (!isOpen) return;
+
+    if (initialProduct?.initialMode === 'nuevo') {
+      setModo('nuevo');
+      setNuevoNombre(initialProduct?.nombre || '');
+      setNuevoEan(initialProduct?.ean || '');
+      setSubcategoria(initialProduct?.subcategoria ? normalizeSubcategoriaAlmacen(initialProduct.subcategoria) : 'Almacén');
+      setSelectedProduct(null);
+      setSearchQuery('');
+      setIsDropdownOpen(false);
+      setTimeout(() => nuevoInputRef.current?.focus(), 60);
+      return;
+    }
+
+    setModo('existente');
+    setNuevoNombre('');
+    setNuevoEan('');
 
     if (initialProduct?.id && stockData?.[initialProduct.id]) {
       const prod = stockData[initialProduct.id];
@@ -3509,11 +3583,14 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
   };
 
   // Determinar producto activo o coincidencia existente
-  const activeItem = selectedProduct || (searchQuery.trim()
-    ? allProducts.find(p => norm(p.nombre) === norm(searchQuery))
-    : null);
+  const activeItem = modo === 'nuevo'
+    ? null
+    : (selectedProduct || (searchQuery.trim() ? allProducts.find(p => norm(p.nombre) === norm(searchQuery)) : null));
 
-  const nombreFinal = selectedProduct ? selectedProduct.nombre : searchQuery.trim();
+  const nombreFinal = modo === 'nuevo'
+    ? nuevoNombre.trim()
+    : (selectedProduct ? selectedProduct.nombre : searchQuery.trim());
+
   const stockActual = activeItem ? (Number(activeItem.stock?.unidades ?? activeItem.stock?.['1kg']) || 0) : 0;
   const cantNum = Math.max(0, parseInt(cantidad, 10) || 0);
   const costoNum = Math.max(0, parseFloat(costoTotal) || 0);
@@ -3523,21 +3600,37 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!nombreFinal || cantNum <= 0) return;
-    onConfirmCarga({
-      productoId: activeItem?.id || (selectedProduct ? selectedProduct.id : null),
-      nombre: nombreFinal,
-      subcategoria,
-      costoTotal: costoNum,
-      cantidad: cantNum,
-      costoUnitario,
-      fecha
-    });
+
+    if (modo === 'nuevo') {
+      onConfirmCarga({
+        esCreacionNueva: true,
+        productoId: null,
+        nombre: nuevoNombre.trim(),
+        ean: nuevoEan.trim() || null,
+        subcategoria,
+        costoTotal: costoNum,
+        cantidad: cantNum,
+        costoUnitario,
+        fecha
+      });
+    } else {
+      onConfirmCarga({
+        esCreacionNueva: false,
+        productoId: activeItem?.id || (selectedProduct ? selectedProduct.id : null),
+        nombre: nombreFinal,
+        subcategoria,
+        costoTotal: costoNum,
+        cantidad: cantNum,
+        costoUnitario,
+        fecha
+      });
+    }
     onClose();
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
-      <div className="bg-gray-900 border border-emerald-500/40 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4 animate-in zoom-in-95">
+      <div className="bg-gray-900 border border-emerald-500/40 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4 animate-in zoom-in-95 max-h-[92vh] overflow-y-auto">
         
         {/* Cabecera del Modal */}
         <div className="flex items-center justify-between pb-3 border-b border-white/10">
@@ -3546,8 +3639,8 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
               <Zap size={18} />
             </div>
             <div>
-              <h3 className="text-sm font-black text-white uppercase tracking-wider">Carga Rápida de Stock (Unidades)</h3>
-              <p className="text-[10px] text-gray-400">Buscá en la lista o escribí un producto para sumar al inventario</p>
+              <h3 className="text-sm font-black text-white uppercase tracking-wider">Carga de Stock (Almacén / Unidades)</h3>
+              <p className="text-[10px] text-gray-400">Sumá stock existente o creá un producto nuevo independiente</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 text-gray-500 hover:text-white rounded-xl bg-white/5 transition-colors cursor-pointer">
@@ -3555,171 +3648,262 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
           </button>
         </div>
 
+        {/* SELECTOR DE MODO: Cargar Existente vs Crear Nuevo con Marca */}
+        <div className="grid grid-cols-2 gap-1.5 p-1 bg-black/50 border border-white/10 rounded-2xl">
+          <button
+            type="button"
+            onClick={() => {
+              setModo('existente');
+              setTimeout(() => inputRef.current?.focus(), 50);
+            }}
+            className={`flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              modo === 'existente'
+                ? 'bg-emerald-600 text-white font-black shadow-md border border-emerald-400/40'
+                : 'text-gray-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Search size={13} />
+            <span>Cargar Existente</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setModo('nuevo');
+              if (!nuevoNombre && searchQuery) setNuevoNombre(searchQuery);
+              setTimeout(() => nuevoInputRef.current?.focus(), 50);
+            }}
+            className={`flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              modo === 'nuevo'
+                ? 'bg-purple-600 text-white font-black shadow-md border border-purple-400/40'
+                : 'text-gray-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Sparkles size={13} />
+            <span>+ Crear con Marca</span>
+          </button>
+        </div>
+
         <form onSubmit={handleSubmit} className="space-y-4">
           
-          {/* BUSCADOR DE PRODUCTO INTERACTIVO */}
-          <div className="space-y-1.5 relative">
-            <div className="flex items-center justify-between">
-              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
-                <Search size={12} className="text-emerald-400" />
-                Buscar o Escribir Producto
-              </label>
-              <span className="text-[10px] text-gray-400 font-mono">
-                {filteredList.length} en lista
-              </span>
-            </div>
+          {/* MODO 1: BUSCADOR DE PRODUCTO EXISTENTE */}
+          {modo === 'existente' && (
+            <div className="space-y-1.5 relative">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
+                  <Search size={12} className="text-emerald-400" />
+                  Buscar Producto en Catálogo
+                </label>
+                <span className="text-[10px] text-gray-400 font-mono">
+                  {filteredList.length} disponibles
+                </span>
+              </div>
 
-            <div className="relative">
-              <input
-                ref={inputRef}
-                type="text"
-                required
-                placeholder="Escribí para buscar (ej: choclo, harina, fideos...)"
-                value={searchQuery}
-                onChange={(e) => handleInputChange(e.target.value)}
-                onFocus={() => setIsDropdownOpen(true)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    if (isDropdownOpen && filteredList.length > 0) {
-                      e.preventDefault();
-                      handleSelectProduct(filteredList[0]);
-                    }
-                  } else if (e.key === 'Escape') {
-                    setIsDropdownOpen(false);
-                  }
-                }}
-                className="w-full bg-black/60 border border-white/15 focus:border-emerald-500 rounded-2xl pl-10 pr-10 py-3 text-white text-xs font-bold outline-none placeholder:text-gray-500 shadow-inner transition-all"
-              />
-              <Search size={16} className="absolute left-3.5 top-3.5 text-gray-400 pointer-events-none" />
-              {searchQuery && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchQuery('');
-                    setSelectedProduct(null);
-                    setIsDropdownOpen(true);
-                    inputRef.current?.focus();
-                  }}
-                  className="absolute right-3 top-2.5 p-1 text-gray-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
-                >
-                  <X size={14} />
-                </button>
-              )}
-            </div>
-
-            {/* LISTA DESPLEGABLE DE RESULTADOS / BUSCADOR */}
-            {isDropdownOpen && (
-              <div
-                ref={dropdownRef}
-                className="absolute left-0 right-0 top-full mt-1.5 z-30 bg-gray-900/98 border border-emerald-500/40 rounded-2xl shadow-2xl max-h-56 overflow-y-auto p-1.5 space-y-1 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-100"
-              >
-                {filteredList.map((p, idx) => {
-                  const isSelected = Boolean(selectedProduct && (
-                    (selectedProduct.id && p.id && selectedProduct.id === p.id) ||
-                    (selectedProduct.nombre && p.nombre && norm(selectedProduct.nombre) === norm(p.nombre))
-                  ));
-                  const pStock = Number(p.stock?.unidades ?? p.stock?.['1kg']) || 0;
-                  const icon = p.subcategoria === 'Bebidas' ? '🥤' :
-                               p.subcategoria === 'Limpieza' ? '🧼' :
-                               p.subcategoria === 'Lácteos' ? '🧀' :
-                               p.subcategoria === 'Golosinas' ? '🍫' : '🥫';
-                  return (
-                    <div
-                      key={p.id || p.nombre}
-                      onMouseDown={(e) => {
+              <div className="relative">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  required={modo === 'existente'}
+                  placeholder="Escribí para buscar (ej: choclo, harina, fideos...)"
+                  value={searchQuery}
+                  onChange={(e) => handleInputChange(e.target.value)}
+                  onFocus={() => setIsDropdownOpen(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      if (isDropdownOpen && filteredList.length > 0) {
                         e.preventDefault();
-                        handleSelectProduct(p);
-                      }}
-                      className={`flex items-center justify-between p-2.5 rounded-xl cursor-pointer transition-all ${
-                        isSelected
-                          ? 'bg-emerald-600/30 border border-emerald-500/50 text-white shadow-sm'
-                          : idx === 0 && searchQuery.trim()
-                            ? 'bg-white/10 text-white'
-                            : 'hover:bg-white/5 text-gray-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-base shrink-0">{icon}</span>
-                        <div className="min-w-0">
-                          <div className="text-xs font-bold text-white truncate flex items-center gap-1.5">
-                            <span>{p.nombre}</span>
-                            {isSelected && (
-                              <span className="text-[9px] bg-emerald-500/30 text-emerald-300 px-1.5 py-0.5 rounded font-bold">
-                                ✓ Elegido
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[10px] text-gray-400">
-                            {p.categoriaPrincipal || 'Almacén'} {p.subcategoria ? `· ${p.subcategoria}` : ''}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="text-right shrink-0 pl-2">
-                        <span className={`text-[10px] font-mono px-2 py-0.5 rounded-md border ${
-                          pStock > 0 
-                            ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 font-bold' 
-                            : 'bg-black/40 text-gray-400 border-white/5'
-                        }`}>
-                          {pStock} uds
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {/* Opción para usar lo escrito como nuevo producto */}
-                {searchQuery.trim() && !allProducts.some(p => norm(p.nombre) === norm(searchQuery)) && (
-                  <div
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      setSelectedProduct(null);
+                        handleSelectProduct(filteredList[0]);
+                      }
+                    } else if (e.key === 'Escape') {
                       setIsDropdownOpen(false);
+                    }
+                  }}
+                  className="w-full bg-black/60 border border-white/15 focus:border-emerald-500 rounded-2xl pl-10 pr-10 py-3 text-white text-xs font-bold outline-none placeholder:text-gray-500 shadow-inner transition-all"
+                />
+                <Search size={16} className="absolute left-3.5 top-3.5 text-gray-400 pointer-events-none" />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setSelectedProduct(null);
+                      setIsDropdownOpen(true);
+                      inputRef.current?.focus();
                     }}
-                    className="flex items-center justify-between p-2.5 rounded-xl bg-purple-600/20 border border-purple-500/40 hover:bg-purple-600/30 cursor-pointer text-purple-300 text-xs font-bold transition-all mt-1"
+                    className="absolute right-3 top-2.5 p-1 text-gray-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
                   >
-                    <div className="flex items-center gap-2 truncate">
-                      <Sparkles size={14} className="text-purple-400 shrink-0" />
-                      <span className="truncate">Usar como nuevo: <strong className="text-white font-black">"{searchQuery.trim()}"</strong></span>
-                    </div>
-                    <span className="text-[9px] bg-purple-500/40 text-purple-200 px-2 py-0.5 rounded-md font-mono shrink-0">
-                      + Crear
-                    </span>
-                  </div>
-                )}
-
-                {filteredList.length === 0 && !searchQuery.trim() && (
-                  <div className="p-3 text-center text-xs text-gray-500">
-                    No hay productos en esta subcategoría
-                  </div>
+                    <X size={14} />
+                  </button>
                 )}
               </div>
-            )}
-          </div>
 
-          {/* FICHA RESUMEN DEL PRODUCTO SELECCIONADO */}
-          {(selectedProduct || (!isDropdownOpen && searchQuery.trim())) && (
+              {/* LISTA DESPLEGABLE DE RESULTADOS */}
+              {isDropdownOpen && (
+                <div
+                  ref={dropdownRef}
+                  className="absolute left-0 right-0 top-full mt-1.5 z-30 bg-gray-900/98 border border-emerald-500/40 rounded-2xl shadow-2xl max-h-52 overflow-y-auto p-1.5 space-y-1 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-100"
+                >
+                  {filteredList.map((p, idx) => {
+                    const isSelected = Boolean(selectedProduct && (
+                      (selectedProduct.id && p.id && selectedProduct.id === p.id) ||
+                      (selectedProduct.nombre && p.nombre && norm(selectedProduct.nombre) === norm(p.nombre))
+                    ));
+                    const pStock = Number(p.stock?.unidades ?? p.stock?.['1kg']) || 0;
+                    const icon = p.subcategoria === 'Bebidas' ? '🥤' :
+                                 p.subcategoria === 'Limpieza' ? '🧼' :
+                                 p.subcategoria === 'Lácteos' ? '🧀' :
+                                 p.subcategoria === 'Golosinas' ? '🍫' : '🥫';
+                    return (
+                      <div
+                        key={p.id || p.nombre}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          handleSelectProduct(p);
+                        }}
+                        className={`flex items-center justify-between p-2.5 rounded-xl cursor-pointer transition-all ${
+                          isSelected
+                            ? 'bg-emerald-600/30 border border-emerald-500/50 text-white shadow-sm'
+                            : idx === 0 && searchQuery.trim()
+                              ? 'bg-white/10 text-white'
+                              : 'hover:bg-white/5 text-gray-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-base shrink-0">{icon}</span>
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-white truncate flex items-center gap-1.5">
+                              <span>{p.nombre}</span>
+                              {isSelected && (
+                                <span className="text-[9px] bg-emerald-500/30 text-emerald-300 px-1.5 py-0.5 rounded font-bold">
+                                  ✓ Elegido
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-gray-400">
+                              {p.categoriaPrincipal || 'Almacén'} {p.subcategoria ? `· ${p.subcategoria}` : ''}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0 pl-2">
+                          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-md border ${
+                            pStock > 0 
+                              ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 font-bold' 
+                              : 'bg-black/40 text-gray-400 border-white/5'
+                          }`}>
+                            {pStock} uds
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Atajo para pasar a modo Crear con lo escrito */}
+                  {searchQuery.trim() && (
+                    <div
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setModo('nuevo');
+                        setNuevoNombre(searchQuery.trim());
+                        setIsDropdownOpen(false);
+                      }}
+                      className="flex items-center justify-between p-2.5 rounded-xl bg-purple-600/20 border border-purple-500/40 hover:bg-purple-600/30 cursor-pointer text-purple-300 text-xs font-bold transition-all mt-1"
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <Sparkles size={14} className="text-purple-400 shrink-0" />
+                        <span className="truncate">Crear como producto nuevo: <strong className="text-white font-black">"{searchQuery.trim()}"</strong></span>
+                      </div>
+                      <span className="text-[9px] bg-purple-500/40 text-purple-200 px-2 py-0.5 rounded-md font-mono shrink-0">
+                        + Crear Nuevo
+                      </span>
+                    </div>
+                  )}
+
+                  {filteredList.length === 0 && !searchQuery.trim() && (
+                    <div className="p-3 text-center text-xs text-gray-500">
+                      No hay productos en esta subcategoría
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* MODO 2: FORMULARIO DE PRODUCTO NUEVO CON MARCA ESPECÍFICA */}
+          {modo === 'nuevo' && (
+            <div className="space-y-3.5 p-3.5 bg-gradient-to-br from-purple-950/30 to-black/40 border border-purple-500/30 rounded-2xl animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <Sparkles size={16} className="text-purple-400" />
+                <div>
+                  <h4 className="text-xs font-black text-white uppercase tracking-wider">Crear Ítem con Marca Específica</h4>
+                  <p className="text-[10px] text-gray-400">Tendrá su propio stock, costo y código EAN independiente</p>
+                </div>
+              </div>
+
+              {/* Nombre y Marca del Producto */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-gray-300 uppercase tracking-widest flex items-center gap-1">
+                  <span>Nombre y Marca del Producto *</span>
+                </label>
+                <input
+                  ref={nuevoInputRef}
+                  type="text"
+                  required={modo === 'nuevo'}
+                  placeholder="Ej: Harina Leudante Blancaflor, Sal Celusal, Sal Dos Anclas..."
+                  value={nuevoNombre}
+                  onChange={(e) => {
+                    setNuevoNombre(e.target.value);
+                    const guessed = getSubcategoriaAlmacen(e.target.value);
+                    if (guessed) setSubcategoria(guessed);
+                  }}
+                  className="w-full bg-black/70 border border-purple-500/40 focus:border-purple-400 rounded-xl px-3.5 py-2.5 text-white text-xs font-bold outline-none placeholder:text-gray-500 shadow-inner"
+                />
+              </div>
+
+              {/* Código de Barras EAN de Fábrica (Opcional) */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-black text-gray-300 uppercase tracking-widest flex items-center gap-1">
+                    <ScanBarcode size={12} className="text-purple-400" />
+                    <span>Código de Barras EAN de Fábrica (Opcional)</span>
+                  </label>
+                  <span className="text-[9px] text-gray-500 font-mono">Pistola o manual</span>
+                </div>
+                <input
+                  type="text"
+                  placeholder="Escaneá con la pistola o escribí el código EAN de fábrica..."
+                  value={nuevoEan}
+                  onChange={(e) => setNuevoEan(e.target.value)}
+                  className="w-full bg-black/70 border border-white/10 focus:border-purple-400 rounded-xl px-3.5 py-2 text-white text-xs font-mono outline-none placeholder:text-gray-600 shadow-inner"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* FICHA RESUMEN DEL PRODUCTO SELECCIONADO / A CREAR */}
+          {(nombreFinal || activeItem) && (
             <div className="p-3 bg-black/40 border border-white/10 rounded-2xl flex items-center justify-between animate-in fade-in">
               <div className="flex items-center gap-2.5 min-w-0">
                 <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-sm shrink-0 ${
-                  activeItem 
-                    ? 'bg-emerald-500/20 border border-emerald-500/30 text-emerald-400' 
-                    : 'bg-purple-500/20 border border-purple-500/30 text-purple-300'
+                  modo === 'nuevo' 
+                    ? 'bg-purple-500/20 border border-purple-500/30 text-purple-300' 
+                    : 'bg-emerald-500/20 border border-emerald-500/30 text-emerald-400'
                 }`}>
-                  {activeItem ? '✓' : '✨'}
+                  {modo === 'nuevo' ? '✨' : '✓'}
                 </div>
                 <div className="min-w-0">
                   <span className="text-[9px] font-black uppercase tracking-wider text-gray-400 block">
-                    {activeItem ? 'Producto a cargar' : 'Nuevo producto a crear'}
+                    {modo === 'nuevo' ? 'Nuevo Ítem Independiente' : 'Producto en Inventario'}
                   </span>
                   <span className="text-xs font-black text-white truncate block">
-                    {nombreFinal || 'Seleccioná o escribí un producto'}
+                    {nombreFinal || 'Ingresá el nombre del producto'}
                   </span>
                 </div>
               </div>
               <div className="text-right shrink-0">
-                <span className="text-[9px] font-bold uppercase tracking-wider text-gray-400 block">Stock actual</span>
+                <span className="text-[9px] font-bold uppercase tracking-wider text-gray-400 block">
+                  {modo === 'nuevo' ? 'Stock actual' : 'Stock actual'}
+                </span>
                 <span className="text-xs font-mono font-bold text-emerald-400">
-                  {stockActual} uds
+                  {modo === 'nuevo' ? '0 uds (nuevo)' : `${stockActual} uds`}
                 </span>
               </div>
             </div>
@@ -3740,7 +3924,7 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
                   type="button"
                   onClick={() => {
                     setSubcategoria(sub);
-                    if (!searchQuery && !selectedProduct) {
+                    if (modo === 'existente' && !searchQuery && !selectedProduct) {
                       setIsDropdownOpen(true);
                     }
                   }}
@@ -3761,7 +3945,7 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
             {/* Cantidad de unidades con botones rápidos */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Cantidad (Uds)</label>
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Cantidad (Uds) *</label>
                 <div className="flex gap-1">
                   {[6, 12, 24].map(n => (
                     <button
@@ -3830,9 +4014,15 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
             <div className="flex justify-between items-center text-xs pt-1.5 border-t border-emerald-500/20">
               <span className="text-gray-300 font-medium">Stock resultante:</span>
               <span className="text-white font-mono font-bold">
-                {stockActual} + <span className="text-emerald-400">{cantNum}</span> = {stockFinal} unidades
+                {modo === 'nuevo' ? 0 : stockActual} + <span className="text-emerald-400">{cantNum}</span> = {modo === 'nuevo' ? cantNum : stockFinal} unidades
               </span>
             </div>
+            {modo === 'nuevo' && nuevoEan.trim() && (
+              <div className="flex justify-between items-center text-[10px] pt-1 border-t border-purple-500/20 text-purple-300 font-mono">
+                <span>EAN a asociar:</span>
+                <span>{nuevoEan.trim()}</span>
+              </div>
+            )}
           </div>
 
           <div className="flex gap-2.5 pt-2">
@@ -3846,9 +4036,15 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
             <button
               type="submit"
               disabled={cantNum <= 0 || !nombreFinal}
-              className="flex-[2] py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-black uppercase tracking-wider rounded-xl shadow-lg border-b-2 border-emerald-800 transition-all cursor-pointer"
+              className={`flex-[2] py-3 text-white text-xs font-black uppercase tracking-wider rounded-xl shadow-lg transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                modo === 'nuevo'
+                  ? 'bg-purple-600 hover:bg-purple-500 border-b-2 border-purple-800'
+                  : 'bg-emerald-600 hover:bg-emerald-500 border-b-2 border-emerald-800'
+              }`}
             >
-              Confirmar y Cargar (+{cantNum} Uds)
+              {modo === 'nuevo'
+                ? `✨ Crear y Cargar (+${cantNum} Uds)`
+                : `Confirmar y Cargar (+${cantNum} Uds)`}
             </button>
           </div>
         </form>

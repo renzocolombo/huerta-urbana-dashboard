@@ -1,6 +1,6 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, CheckCircle, Sun, Sunset, Printer, FileText, User, Clock, ScanBarcode, X, Trash2, Check, RotateCcw, Lock, AlertTriangle } from 'lucide-react';
+import { MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, CheckCircle, Sun, Sunset, Printer, FileText, User, Clock, ScanBarcode, X, Trash2, Check, RotateCcw, Lock, AlertTriangle, Sparkles } from 'lucide-react';
 import { HOY } from '../data/mockData';
 import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido } from '../utils/remitoPrinter';
 import { getEanMapping, esCodigoEan } from '../data/productUtils';
@@ -44,12 +44,14 @@ function parsearCodigoBarras(raw) {
   code = code.replace(/^\*+|\*+$/g, '').trim();
   if (!code) return null;
 
+  // 1. Formato Balanza Systel / Kretz / Toledo (EAN-13 estándar de balanza)
   const eanBalanza = code.match(/^(20|02)(\d{4,5})(\d{5})\d$/);
   if (eanBalanza) {
     const plu = eanBalanza[2]; const gramos = parseInt(eanBalanza[3], 10);
     return { nombre: `plu ${plu}`, plu, peso: Math.round((gramos / 1000) * 1000) / 1000, tagId: null, uniqueCode: code.toUpperCase(), rawCode: code, origenBalanza: true };
   }
 
+  // 2. Formato con ID único por bolsa: NOMBRE-PESO-TAGID (ej: BANANA-1.000-E49A, PAPA-1.120-7K9F)
   const parts = code.split('-');
   if (parts.length >= 3) {
     const lastPart = parts[parts.length - 1].trim();
@@ -62,6 +64,7 @@ function parsearCodigoBarras(raw) {
     }
   }
 
+  // 3. Formato clásico: NOMBRE-PESO (ej: PAPA-1.120, TOMATE-CHERRY-0.500)
   const lastDashIdx = code.lastIndexOf('-');
   if (lastDashIdx > 0) {
     const rawPeso = code.slice(lastDashIdx + 1).replace(',', '.').replace(/(?:kg|kilos?|g|gr?)$/i, '').trim();
@@ -70,6 +73,24 @@ function parsearCodigoBarras(raw) {
       const nombre = code.slice(0, lastDashIdx).toLowerCase().replace(/-/g, ' ').trim();
       const pesoKg = pesoNum >= 100 && !/[.,]/.test(rawPeso) ? pesoNum / 1000 : pesoNum;
       return { nombre, peso: Math.round(pesoKg * 1000) / 1000, tagId: null, uniqueCode: code.toUpperCase(), rawCode: code };
+    }
+  }
+
+  // 4. Formato alternativo con espacios, guión bajo o dos puntos (ej: "PAPA 1.120", "PAPA 1.120 KG", "PAPA_0.500")
+  const altMatch = code.match(/^(.+?)[\s_:–]+([0-9]+(?:[.,][0-9]+)?)\s*(?:kg|kilos?|g|gr?)?$/i);
+  if (altMatch) {
+    const nombre = altMatch[1].toLowerCase().replace(/[-_]/g, ' ').trim();
+    const rawPeso = altMatch[2].replace(',', '.');
+    const pesoNum = parseFloat(rawPeso);
+    if (!isNaN(pesoNum) && pesoNum > 0) {
+      const pesoKg = pesoNum >= 100 && !/[.,]/.test(altMatch[2]) ? pesoNum / 1000 : pesoNum;
+      return {
+        nombre,
+        peso: Math.round(pesoKg * 1000) / 1000,
+        tagId: null,
+        uniqueCode: code.toUpperCase(),
+        rawCode: code
+      };
     }
   }
 
@@ -161,6 +182,7 @@ export default function AgendaEntregas({ rol, usuario }) {
   });
   const [preparandoPedido, setPreparandoPedido] = useState(null);
   const [modalPreparacion, setModalPreparacion] = useState(null); // { pedido }
+  const [modalItemExtra, setModalItemExtra] = useState(null);     // { nombre, mappedEan, cleanCode, matchedStockId, numPedido, peso, tagId, slot, esUnidad }
   const [scanBuffer, setScanBuffer] = useState('');
   const [scanError, setScanError] = useState(null);
   const [scanSuccess, setScanSuccess] = useState(null);
@@ -217,16 +239,158 @@ export default function AgendaEntregas({ rol, usuario }) {
     setTimeout(() => modalScanInputRef.current?.focus(), 150);
   }, [preparaciones]);
 
-  // ── ESCANEAR BOLSA ─────────────────────────────────────────────────────────
+  // Revertir el descuento de stock de una bolsa puntual
+  const revertirStockBolsa = useCallback((bolsa) => {
+    if (!bolsa?.matchedStockId) return;
+    const current = stockDataRef.current || {};
+    const prod = current[bolsa.matchedStockId];
+    if (!prod) return;
+    const newData = { ...current };
+
+    if (bolsa.esUnidad || bolsa.slot === 'unidades' || bolsa.slot === 'unidad') {
+      const stockActual = Number(prod.stock?.unidades ?? prod.stock?.['1kg']) || 0;
+      const nuevoStock = stockActual + 1;
+      newData[bolsa.matchedStockId] = {
+        ...prod,
+        stock: { ...prod.stock, unidades: nuevoStock, '1kg': nuevoStock }
+      };
+      try {
+        const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
+        const pNorm = norm(prod.nombre);
+        if (unitsCache[pNorm]) {
+          unitsCache[pNorm].stock = nuevoStock;
+        } else {
+          unitsCache[pNorm] = { stock: nuevoStock, originalLoad: nuevoStock, subcategoria: prod.subcategoria };
+        }
+        localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
+      } catch (e) {}
+    } else if (bolsa.slot) {
+      const stockSlot = prod.stock?.[bolsa.slot] || 0;
+      newData[bolsa.matchedStockId] = { ...prod, stock: { ...prod.stock, [bolsa.slot]: stockSlot + 1 } };
+    }
+    setStockData(newData);
+  }, [setStockData]);
+
+  // Confirmar y agregar un ítem extra escaneado que no figuraba en el pedido original
+  const confirmarAgregarItemExtra = useCallback((itemExtraData) => {
+    if (!itemExtraData || !itemExtraData.numPedido) return;
+    const { nombre, cleanCode, matchedStockId, numPedido, peso, tagId, slot, esUnidad, mappedEan } = itemExtraData;
+    const prepActual = preparaciones[numPedido];
+    if (!prepActual) return;
+
+    // Descontar 1 unidad o slot del stock
+    const current = stockDataRef.current || {};
+    let finalMatchedStockId = matchedStockId;
+    if (!finalMatchedStockId && typeof current === 'object' && !Array.isArray(current)) {
+      finalMatchedStockId = Object.keys(current).find(id => {
+        const pNorm = norm(current[id]?.nombre);
+        return pNorm === norm(nombre) || pNorm.includes(norm(nombre)) || norm(nombre).includes(pNorm);
+      });
+    }
+
+    const matchedProd = finalMatchedStockId ? current[finalMatchedStockId] : null;
+    if (matchedProd && finalMatchedStockId) {
+      if (esUnidad) {
+        const stockActual = Number(matchedProd.stock?.unidades ?? matchedProd.stock?.['1kg']) || 0;
+        const nuevoStock = Math.max(0, stockActual - 1);
+        const newData = { ...current };
+        newData[finalMatchedStockId] = {
+          ...matchedProd,
+          stock: { ...matchedProd.stock, '1kg': nuevoStock, unidades: nuevoStock }
+        };
+        setStockData(newData);
+        try {
+          const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
+          const pNorm = norm(matchedProd.nombre);
+          if (unitsCache[pNorm]) {
+            unitsCache[pNorm].stock = nuevoStock;
+          } else {
+            unitsCache[pNorm] = { stock: nuevoStock, originalLoad: nuevoStock, subcategoria: matchedProd.subcategoria || mappedEan?.subcategoria };
+          }
+          localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
+        } catch (e) {}
+      } else if (slot) {
+        const stockActual = matchedProd.stock?.[slot] || 0;
+        const newData = { ...current };
+        newData[finalMatchedStockId] = { ...matchedProd, stock: { ...matchedProd.stock, [slot]: Math.max(0, stockActual - 1) } };
+        setStockData(newData);
+      }
+    }
+
+    const now = new Date();
+    const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    const uniqueInstanceId = esUnidad ? `${cleanCode}#${Date.now()}` : cleanCode;
+
+    setCodigosProcesados(prev => ({
+      ...prev,
+      [cleanCode]: {
+        uniqueCode: cleanCode,
+        nombre,
+        matchedId: finalMatchedStockId,
+        peso: peso || 1,
+        estado: 'SACADO',
+        bloqueado: false,
+        fechaModificacion: horaStr,
+        ultimaAccion: `Agregado como extra a pedido ${numPedido}`,
+        ts: Date.now()
+      }
+    }));
+
+    const nuevaBolsa = {
+      uniqueCode: uniqueInstanceId,
+      rawCode: cleanCode,
+      nombre,
+      peso: peso || 1,
+      tagId: tagId || null,
+      ts: Date.now(),
+      matchedStockId: finalMatchedStockId || null,
+      slot: esUnidad ? 'unidades' : slot,
+      esUnidad: Boolean(esUnidad)
+    };
+
+    setPreparaciones(prev => {
+      const prep = { ...prev[numPedido] };
+      const items = [...(prep.items || [])];
+      const nombreNorm = norm(nombre);
+      const existingIdx = items.findIndex(it => norm(it.nombre) === nombreNorm);
+
+      if (existingIdx >= 0) {
+        const it = items[existingIdx];
+        items[existingIdx] = {
+          ...it,
+          cantidad: (it.cantidad || 0) + 1,
+          bolsasAsignadas: [...(it.bolsasAsignadas || []), nuevaBolsa]
+        };
+      } else {
+        items.push({
+          nombre,
+          cantidad: 1,
+          pesoSolicitado: esUnidad ? null : peso,
+          esExtra: true,
+          bolsasAsignadas: [nuevaBolsa]
+        });
+      }
+
+      const todosCompletos = items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
+      return { ...prev, [numPedido]: { ...prep, items, completado: todosCompletos } };
+    });
+
+    setModalItemExtra(null);
+    setScanSuccess(`✅ Agregado ítem extra: ${nombre.toUpperCase()} (+1 ${esUnidad ? 'ud' : 'bolsa'})`);
+    setTimeout(() => setScanSuccess(null), 2500);
+    setTimeout(() => modalScanInputRef.current?.focus(), 80);
+  }, [preparaciones, setStockData]);
+
+  // ── ESCANEAR BOLSA / PRODUCTO EAN ──────────────────────────────────────────
   const procesarEscaneoPedido = useCallback((rawCode) => {
     if (!rawCode || !preparandoPedido) return;
     setScanError(null); setScanSuccess(null);
 
     const cleanCode = String(rawCode).replace(/[\r\n\x00-\x1F]/g, '').trim().replace(/^\][a-zA-Z0-9]{2,3}/, '').replace(/^\*+|\*+$/g, '').trim().toUpperCase();
     const eanMap = getEanMapping();
-    const mappedEan = eanMap[cleanCode];
+    const mappedEan = eanMap[cleanCode] || eanMap[cleanCode.replace(/^0+/, '')] || eanMap['0' + cleanCode];
 
-    // ── Si es un código EAN de fábrica mapeado a Almacén ──────────────────
+    // ── 1. Si es un código EAN de fábrica mapeado a Almacén ──────────────────
     if (mappedEan) {
       const prepActual = preparaciones[preparandoPedido];
       if (!prepActual) return;
@@ -234,10 +398,11 @@ export default function AgendaEntregas({ rol, usuario }) {
       const nombreProd = mappedEan.nombre;
       const nombreNorm = norm(nombreProd);
 
+      // Prioridad 1: Coincidencia exacta de nombre
       let matchedItemIdx = -1;
       for (let i = 0; i < prepActual.items.length; i++) {
         const itemNorm = norm(prepActual.items[i].nombre);
-        if (itemNorm === nombreNorm || itemNorm.includes(nombreNorm) || nombreNorm.includes(itemNorm)) {
+        if (itemNorm === nombreNorm) {
           const asignadas = prepActual.items[i].bolsasAsignadas?.length || 0;
           if (asignadas < prepActual.items[i].cantidad) {
             matchedItemIdx = i;
@@ -246,28 +411,53 @@ export default function AgendaEntregas({ rol, usuario }) {
         }
       }
 
+      // Prioridad 2: Coincidencia parcial si no hubo exacta
       if (matchedItemIdx === -1) {
-        setScanError(`⚠️ "${nombreProd}" no coincide con ningún producto pendiente del pedido.`);
-        return;
+        for (let i = 0; i < prepActual.items.length; i++) {
+          const itemNorm = norm(prepActual.items[i].nombre);
+          if (itemNorm.includes(nombreNorm) || nombreNorm.includes(itemNorm)) {
+            const asignadas = prepActual.items[i].bolsasAsignadas?.length || 0;
+            if (asignadas < prepActual.items[i].cantidad) {
+              matchedItemIdx = i;
+              break;
+            }
+          }
+        }
       }
 
-      // Descontar 1 unidad del stock
+      // Buscar producto en stock de manera precisa
       const current = stockDataRef.current || {};
       let matchedStockId = mappedEan.productoId && current[mappedEan.productoId] ? mappedEan.productoId : null;
       if (!matchedStockId && typeof current === 'object' && !Array.isArray(current)) {
-        matchedStockId = Object.keys(current).find(id => {
-          const pNorm = norm(current[id]?.nombre);
-          return pNorm === nombreNorm || pNorm.includes(nombreNorm) || nombreNorm.includes(pNorm);
-        });
+        matchedStockId = Object.keys(current).find(id => norm(current[id]?.nombre) === nombreNorm);
+        if (!matchedStockId) {
+          matchedStockId = Object.keys(current).find(id => {
+            const pNorm = norm(current[id]?.nombre);
+            return pNorm.includes(nombreNorm) || nombreNorm.includes(pNorm);
+          });
+        }
       }
       const matchedProd = matchedStockId ? current[matchedStockId] : null;
 
+      // Si el ítem no estaba en el pedido o ya se completaron las unidades solicitadas:
+      // Permitir agregarlo como ítem extra al pedido
+      if (matchedItemIdx === -1) {
+        setModalItemExtra({
+          nombre: nombreProd,
+          mappedEan,
+          cleanCode,
+          matchedStockId,
+          numPedido: preparandoPedido,
+          esUnidad: true,
+          peso: 1,
+          slot: 'unidades'
+        });
+        return;
+      }
+
+      // Descontar 1 unidad del stock y persistir en cache
       if (matchedProd && matchedStockId) {
         const stockActual = Number(matchedProd.stock?.unidades ?? matchedProd.stock?.['1kg']) || 0;
-        if (stockActual <= 0) {
-          setScanError(`🚫 ¡Sin stock! No hay "${matchedProd.nombre}" disponible en stock.`);
-          return;
-        }
         const nuevoStock = Math.max(0, stockActual - 1);
         const newData = { ...current };
         newData[matchedStockId] = {
@@ -275,10 +465,23 @@ export default function AgendaEntregas({ rol, usuario }) {
           stock: { ...matchedProd.stock, '1kg': nuevoStock, unidades: nuevoStock }
         };
         setStockData(newData);
+
+        try {
+          const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
+          const pNorm = norm(matchedProd.nombre);
+          if (unitsCache[pNorm]) {
+            unitsCache[pNorm].stock = nuevoStock;
+          } else {
+            unitsCache[pNorm] = { stock: nuevoStock, originalLoad: nuevoStock, subcategoria: matchedProd.subcategoria || mappedEan.subcategoria };
+          }
+          localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
+        } catch (e) {}
       }
 
       const now = new Date();
       const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      const uniqueInstanceId = `${cleanCode}#${Date.now()}`;
+
       setCodigosProcesados(prev => ({
         ...prev,
         [cleanCode]: {
@@ -295,13 +498,14 @@ export default function AgendaEntregas({ rol, usuario }) {
       }));
 
       const nuevaBolsa = {
-        uniqueCode: cleanCode,
+        uniqueCode: uniqueInstanceId,
+        rawCode: cleanCode,
         nombre: nombreProd,
         peso: 1,
         tagId: null,
         ts: Date.now(),
         matchedStockId: matchedStockId || null,
-        slot: 'unidad',
+        slot: 'unidades',
         esUnidad: true
       };
 
@@ -321,7 +525,14 @@ export default function AgendaEntregas({ rol, usuario }) {
       setTimeout(() => modalScanInputRef.current?.focus(), 50);
       return;
     }
+
+    // Si es un código EAN no mapeado a ningún producto
+    if (esCodigoEan(cleanCode)) {
+      setScanError(`⚠️ Código EAN "${cleanCode}" no está asociado a ningún producto de Almacén. Asocialo primero en Control de Stock.`);
+      return;
+    }
     
+    // ── 2. Códigos de balanza (Verduras / Frutas) ─────────────────────────────
     const resultado = parsearCodigoBarras(rawCode);
     if (!resultado || (!resultado.peso && !resultado.esIncompleto)) {
       setScanError('No se pudo leer el código. Intentá de nuevo.');
@@ -346,28 +557,54 @@ export default function AgendaEntregas({ rol, usuario }) {
     let matchedStockId = null;
     let matchedProd = null;
     if (typeof current === 'object' && !Array.isArray(current)) {
-      matchedStockId = Object.keys(current).find(id => {
-        const pNorm = norm(current[id]?.nombre);
-        return pNorm === nombreEscaneado || pNorm.includes(nombreEscaneado) || nombreEscaneado.includes(pNorm);
-      });
+      matchedStockId = Object.keys(current).find(id => norm(current[id]?.nombre) === nombreEscaneado);
+      if (!matchedStockId) {
+        matchedStockId = Object.keys(current).find(id => {
+          const pNorm = norm(current[id]?.nombre);
+          return pNorm.includes(nombreEscaneado) || nombreEscaneado.includes(pNorm);
+        });
+      }
       matchedProd = matchedStockId ? current[matchedStockId] : null;
     }
 
     if (!prepActual) return;
     
+    // Prioridad 1: Coincidencia exacta
     let matchedItemIdx = -1;
     for (let i = 0; i < prepActual.items.length; i++) {
       const itemNorm = norm(prepActual.items[i].nombre);
       const prodNorm = matchedProd ? norm(matchedProd.nombre) : nombreEscaneado;
-      if (itemNorm === prodNorm || itemNorm.includes(prodNorm) || prodNorm.includes(itemNorm) ||
-          itemNorm === nombreEscaneado || itemNorm.includes(nombreEscaneado) || nombreEscaneado.includes(itemNorm)) {
+      if (itemNorm === prodNorm || itemNorm === nombreEscaneado) {
         const asignadas = prepActual.items[i].bolsasAsignadas?.length || 0;
         if (asignadas < prepActual.items[i].cantidad) { matchedItemIdx = i; break; }
       }
     }
-    
+
+    // Prioridad 2: Coincidencia parcial si no hubo exacta
     if (matchedItemIdx === -1) {
-      setScanError(`⚠️ "${resultado.nombre}" no coincide con ningún producto pendiente del pedido.`);
+      for (let i = 0; i < prepActual.items.length; i++) {
+        const itemNorm = norm(prepActual.items[i].nombre);
+        const prodNorm = matchedProd ? norm(matchedProd.nombre) : nombreEscaneado;
+        if (itemNorm.includes(prodNorm) || prodNorm.includes(itemNorm) ||
+            itemNorm.includes(nombreEscaneado) || nombreEscaneado.includes(itemNorm)) {
+          const asignadas = prepActual.items[i].bolsasAsignadas?.length || 0;
+          if (asignadas < prepActual.items[i].cantidad) { matchedItemIdx = i; break; }
+        }
+      }
+    }
+    
+    // Si la bolsa de balanza no coincide con ningún producto pendiente:
+    if (matchedItemIdx === -1) {
+      setModalItemExtra({
+        nombre: matchedProd ? matchedProd.nombre : resultado.nombre,
+        cleanCode: uniqueCode,
+        matchedStockId,
+        numPedido: preparandoPedido,
+        peso: resultado.peso,
+        tagId: resultado.tagId,
+        esUnidad: false,
+        slot: (matchedProd && matchedStockId) ? determinarSlot(matchedProd.tipo || getTipoByNombre(matchedProd.nombre), resultado.peso || 0.5) : null
+      });
       return;
     }
     
@@ -398,7 +635,7 @@ export default function AgendaEntregas({ rol, usuario }) {
     
     setScanSuccess(`✅ ${resultado.nombre.toUpperCase()} — ${resultado.peso?.toFixed(3) || '?'} kg asignado`);
     setTimeout(() => setScanSuccess(null), 2500);
-    setTimeout(() => scanInputRef.current?.focus(), 50);
+    setTimeout(() => modalScanInputRef.current?.focus(), 50);
   }, [preparandoPedido, preparaciones, setStockData]);
 
   const marcarPreparado = useCallback((numPedido) => {
@@ -427,17 +664,6 @@ export default function AgendaEntregas({ rol, usuario }) {
     if (pedido.sheetRowIndex) actualizarRemitoEnSheet(pedido.sheetRowIndex, true);
   }, [marcarPreparado, preparaciones, actualizarRemitoEnSheet]);
 
-  // Revertir el descuento de stock de una bolsa puntual
-  const revertirStockBolsa = useCallback((bolsa) => {
-    if (!bolsa?.matchedStockId || !bolsa?.slot) return;
-    const current = stockDataRef.current || {};
-    const prod = current[bolsa.matchedStockId];
-    if (!prod) return;
-    const newData = { ...current };
-    newData[bolsa.matchedStockId] = { ...prod, stock: { ...prod.stock, [bolsa.slot]: (prod.stock?.[bolsa.slot] || 0) + 1 } };
-    setStockData(newData);
-  }, [setStockData]);
-
   const cancelarRemito = useCallback((numPedido) => {
     // Revertir stock de TODAS las bolsas de este pedido
     const prep = preparaciones[numPedido];
@@ -446,7 +672,7 @@ export default function AgendaEntregas({ rol, usuario }) {
         (item.bolsasAsignadas || []).forEach(bolsa => revertirStockBolsa(bolsa));
       });
     }
-    // Borrar la preparacion de este pedido del state y localStorage
+    // Borrar la preparación de este pedido del state y localStorage
     setPreparaciones(prev => { const { [numPedido]: _, ...rest } = prev; return rest; });
     setPreparandoPedido(null);
     setModalPreparacion(null);
@@ -464,8 +690,14 @@ export default function AgendaEntregas({ rol, usuario }) {
       const bolsaAQuitar = items[itemIdx]?.bolsasAsignadas?.[bolsaIdx];
       // Revertir stock de esta bolsa
       if (bolsaAQuitar) revertirStockBolsa(bolsaAQuitar);
-      items[itemIdx] = { ...items[itemIdx], bolsasAsignadas: items[itemIdx].bolsasAsignadas.filter((_, i) => i !== bolsaIdx) };
-      const todosCompletos = items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
+      
+      const nuevasBolsas = items[itemIdx].bolsasAsignadas.filter((_, i) => i !== bolsaIdx);
+      if (items[itemIdx].esExtra && nuevasBolsas.length === 0) {
+        items.splice(itemIdx, 1);
+      } else {
+        items[itemIdx] = { ...items[itemIdx], bolsasAsignadas: nuevasBolsas };
+      }
+      const todosCompletos = items.length > 0 && items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
       return { ...prev, [numPedido]: { ...prep, items, completado: todosCompletos } };
     });
   }, [revertirStockBolsa]);
@@ -1287,9 +1519,10 @@ export default function AgendaEntregas({ rol, usuario }) {
                     const bolsas = item.bolsasAsignadas || [];
                     const completo = bolsas.length >= item.cantidad;
                     const parcial = bolsas.length > 0 && !completo;
+                    const esUnidad = item.esUnidad || item.slot === 'unidades';
                     const pesoReal = bolsas.reduce((s, b) => s + (b.peso || 0), 0);
                     const pesoPedido = item.pesoSolicitado ? item.pesoSolicitado * item.cantidad : null;
-                    const diff = (pesoPedido && pesoReal > 0) ? Math.round((pesoReal - pesoPedido) * 1000) / 1000 : null;
+                    const diff = (!esUnidad && pesoPedido && pesoReal > 0) ? Math.round((pesoReal - pesoPedido) * 1000) / 1000 : null;
 
                     return (
                       <div
@@ -1315,21 +1548,30 @@ export default function AgendaEntregas({ rol, usuario }) {
                               {completo ? <Check size={16} /> : `${bolsas.length}/${item.cantidad}`}
                             </div>
                             <div>
-                              <p className={`text-sm font-bold uppercase tracking-wide transition-colors duration-300 ${
-                                completo ? 'text-green-300' : parcial ? 'text-amber-300' : 'text-gray-400'
-                              }`}>
-                                {item.nombre}
-                              </p>
+                              <div className="flex items-center gap-2">
+                                <p className={`text-sm font-bold uppercase tracking-wide transition-colors duration-300 ${
+                                  completo ? 'text-green-300' : parcial ? 'text-amber-300' : 'text-gray-400'
+                                }`}>
+                                  {item.nombre}
+                                </p>
+                                {item.esExtra && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center gap-1">
+                                    <Sparkles size={9} /> Extra
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-[11px] text-gray-600 font-mono mt-0.5">
-                                {item.cantidad} {item.cantidad === 1 ? 'bolsa' : 'bolsas'}
-                                {pesoPedido ? ` · Pedido: ${pesoPedido.toFixed(3)} kg` : ''}
+                                {item.cantidad} {esUnidad ? (item.cantidad === 1 ? 'unidad' : 'unidades') : (item.cantidad === 1 ? 'bolsa' : 'bolsas')}
+                                {(!esUnidad && pesoPedido) ? ` · Pedido: ${pesoPedido.toFixed(3)} kg` : ''}
                               </p>
                             </div>
                           </div>
-                          {/* Peso real + diferencia */}
-                          {pesoReal > 0 && (
+                          {/* Peso real o unidades + diferencia */}
+                          {(esUnidad ? bolsas.length > 0 : pesoReal > 0) && (
                             <div className="text-right shrink-0">
-                              <p className="text-green-400 font-mono text-sm font-bold">{pesoReal.toFixed(3)} kg</p>
+                              <p className="text-green-400 font-mono text-sm font-bold">
+                                {esUnidad ? `${bolsas.length} ud${bolsas.length !== 1 ? 's' : ''}` : `${pesoReal.toFixed(3)} kg`}
+                              </p>
                               {diff !== null && diff !== 0 && (
                                 <p className={`text-[11px] font-bold font-mono ${
                                   diff > 0 ? 'text-emerald-400' : 'text-red-400'
@@ -1342,20 +1584,22 @@ export default function AgendaEntregas({ rol, usuario }) {
                           )}
                         </div>
 
-                        {/* Sub-bolsas asignadas */}
+                        {/* Sub-bolsas / unidades asignadas */}
                         {bolsas.length > 0 && (
                           <div className="mt-3 space-y-1 pl-11">
                             {bolsas.map((bolsa, bIdx) => (
                               <div key={bIdx} className="flex items-center justify-between text-[10px] bg-black/30 rounded-lg px-2.5 py-1.5 group">
                                 <div className="flex items-center gap-2">
                                   <span className="text-green-400">✓</span>
-                                  <span className="text-gray-400 font-mono">{bolsa.uniqueCode}</span>
-                                  <span className="text-green-400 font-bold font-mono">{bolsa.peso?.toFixed(3)} kg</span>
+                                  <span className="text-gray-400 font-mono">{bolsa.rawCode || bolsa.uniqueCode}</span>
+                                  <span className="text-green-400 font-bold font-mono">
+                                    {bolsa.esUnidad ? '1 ud' : `${bolsa.peso?.toFixed(3)} kg`}
+                                  </span>
                                 </div>
                                 <button
                                   onClick={() => quitarBolsaAsignada(numPedido, idx, bIdx)}
                                   className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 cursor-pointer transition-all p-0.5"
-                                  title="Quitar bolsa"
+                                  title="Quitar"
                                 >
                                   <X size={11} />
                                 </button>
@@ -1374,7 +1618,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                 <div className="px-5 py-3 border-b border-white/5 bg-[#111827]/50 shrink-0 flex items-center justify-between">
                   <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">📡 Escaneado en tiempo real</p>
                   <span className="text-[10px] font-mono text-gray-600 bg-black/30 px-2 py-0.5 rounded-lg border border-white/5">
-                    {feedBolsas.length} bolsa{feedBolsas.length !== 1 ? 's' : ''}
+                    {feedBolsas.length} {feedBolsas.length === 1 ? 'ítem' : 'ítems'}
                   </span>
                 </div>
                 <div className="flex-1 overflow-y-auto p-4 space-y-2">
@@ -1385,13 +1629,13 @@ export default function AgendaEntregas({ rol, usuario }) {
                       </div>
                       <div>
                         <p className="text-gray-600 text-sm font-medium">Esperando escaneo...</p>
-                        <p className="text-gray-700 text-xs mt-1">Apuntá la pistola al código de barras de la bolsa</p>
+                        <p className="text-gray-700 text-xs mt-1">Apuntá la pistola al código de barras o EAN</p>
                       </div>
                     </div>
                   )}
                   {[...feedBolsas].reverse().map((bolsa, i) => (
                     <div
-                      key={bolsa.uniqueCode}
+                      key={bolsa.uniqueCode || `${bolsa.itemNombre}_${i}`}
                       className={`rounded-2xl border p-3.5 transition-all group ${
                         i === 0
                           ? 'bg-green-500/10 border-green-500/30 shadow-[0_0_20px_rgba(34,197,94,0.08)] animate-in slide-in-from-top-2 duration-300'
@@ -1406,12 +1650,19 @@ export default function AgendaEntregas({ rol, usuario }) {
                             <Check size={14} />
                           </div>
                           <div>
-                            <p className={`text-xs font-bold uppercase tracking-wide ${
-                              i === 0 ? 'text-green-300' : 'text-gray-400'
-                            }`}>
-                              {bolsa.itemNombre}
-                            </p>
-                            <p className="text-[10px] text-gray-600 font-mono">{bolsa.uniqueCode}</p>
+                            <div className="flex items-center gap-1.5">
+                              <p className={`text-xs font-bold uppercase tracking-wide ${
+                                i === 0 ? 'text-green-300' : 'text-gray-400'
+                              }`}>
+                                {bolsa.itemNombre}
+                              </p>
+                              {bolsa.esUnidad && (
+                                <span className="px-1.5 py-0.2 rounded text-[8px] font-black uppercase tracking-wider bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                                  Almacén
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-gray-600 font-mono">{bolsa.rawCode || bolsa.uniqueCode}</p>
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -1419,7 +1670,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                             <p className={`font-mono text-sm font-bold ${
                               i === 0 ? 'text-green-400' : 'text-gray-400'
                             }`}>
-                              {bolsa.peso?.toFixed(3)} kg
+                              {bolsa.esUnidad ? '1 ud' : `${bolsa.peso?.toFixed(3)} kg`}
                             </p>
                             <p className="text-[9px] text-gray-700 font-mono">
                               #{feedBolsas.length - i}
@@ -1429,7 +1680,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                           <button
                             onClick={() => quitarBolsaAsignada(numPedido, bolsa.itemIdx, bolsa.bIdx)}
                             className="ml-1 opacity-0 group-hover:opacity-100 w-7 h-7 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-transparent hover:border-red-500/30 text-gray-600 hover:text-red-400 flex items-center justify-center transition-all cursor-pointer shrink-0"
-                            title={`Deshacer: quitar ${bolsa.itemNombre} ${bolsa.peso?.toFixed(3)} kg y devolver al stock`}
+                            title={`Deshacer: quitar ${bolsa.itemNombre} y devolver al stock`}
                           >
                             <Trash2 size={12} />
                           </button>
@@ -1490,6 +1741,87 @@ export default function AgendaEntregas({ rol, usuario }) {
           </div>
         );
       })()}
+
+      {/* ═══════ MODAL CONFIRMACIÓN: AGREGAR ÍTEM EXTRA AL PEDIDO ═══════ */}
+      {modalItemExtra && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-200"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              confirmarAgregarItemExtra(modalItemExtra);
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              setModalItemExtra(null);
+              setTimeout(() => modalScanInputRef.current?.focus(), 80);
+            }
+          }}
+          tabIndex={-1}
+        >
+          <div className="bg-[#111827] border border-purple-500/40 rounded-3xl max-w-md w-full p-6 shadow-[0_0_50px_rgba(168,85,247,0.25)] space-y-5 animate-in zoom-in-95 duration-200">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center shrink-0">
+                <Sparkles size={24} className="text-purple-400 animate-pulse" />
+              </div>
+              <div className="flex-1">
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-purple-500/20 text-purple-300 border border-purple-500/30 inline-block mb-1">
+                  Ítem no figuraba en el pedido
+                </span>
+                <h3 className="text-lg font-black text-white tracking-tight">
+                  ¿Agregar ítem extra?
+                </h3>
+                <p className="text-gray-400 text-xs mt-1">
+                  Se escaneó un producto que no está en la lista pendiente del cliente. Podés sumarlo al pedido y se descontará del stock.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-black/40 border border-white/10 rounded-2xl p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-gray-500 uppercase font-mono">Producto</span>
+                <span className="text-sm font-bold text-white uppercase">{modalItemExtra.nombre}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-gray-500 uppercase font-mono">Código</span>
+                <span className="text-xs font-mono text-gray-400">{modalItemExtra.cleanCode}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-gray-500 uppercase font-mono">Cantidad / Medida</span>
+                <span className="text-sm font-bold font-mono text-purple-400">
+                  {modalItemExtra.esUnidad ? '+1 unidad' : `+${modalItemExtra.peso?.toFixed(3) || 1} kg`}
+                </span>
+              </div>
+              {modalItemExtra.esUnidad && (
+                <div className="pt-2 border-t border-white/5 flex items-center justify-between text-[11px] text-gray-400">
+                  <span>Descuento de stock:</span>
+                  <span className="text-green-400 font-bold">-1 unidad</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setModalItemExtra(null);
+                  setTimeout(() => modalScanInputRef.current?.focus(), 80);
+                }}
+                className="flex-1 py-3 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-400 hover:text-white text-xs font-bold transition-all cursor-pointer"
+              >
+                Ignorar (Esc)
+              </button>
+              <button
+                type="button"
+                autoFocus
+                onClick={() => confirmarAgregarItemExtra(modalItemExtra)}
+                className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 border border-purple-500/50 text-white text-xs font-bold shadow-[0_0_20px_rgba(168,85,247,0.3)] transition-all active:scale-[0.98] cursor-pointer"
+              >
+                ✅ Sumar al pedido (Enter)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
