@@ -832,7 +832,76 @@ export default function ControlStock() {
 
   // ── Sincronizar con Google Sheet ──────────────────────────────────────────
   const syncWithSheet = async (updatedProduct) => {
-    if (!APPS_SCRIPT_URL || !updatedProduct.fila) return;
+    if (!APPS_SCRIPT_URL) return;
+
+    const isAlmacen = updatedProduct.categoriaPrincipal === 'Almacén' || updatedProduct.esUnidad || (updatedProduct.id && String(updatedProduct.id).startsWith('alm_'));
+
+    if (isAlmacen) {
+      let filaDestino = updatedProduct.fila;
+      
+      // Si no tiene fila asignada, consultamos el Google Sheet para obtener el número de fila real en la pestaña Almacen
+      if (!filaDestino && SHEET_ID) {
+        try {
+          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`);
+          if (gvizRes.ok) {
+            const text = await gvizRes.text();
+            const s = text.indexOf('{');
+            const e = text.lastIndexOf('}');
+            if (s !== -1 && e !== -1) {
+              const json = JSON.parse(text.substring(s, e + 1));
+              const rows = json.table?.rows || [];
+              const isHeader = String(rows[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
+              const existingIdx = rows.findIndex(r => String(r.c?.[0]?.v || '').trim().toLowerCase() === String(updatedProduct.nombre || '').trim().toLowerCase());
+              if (existingIdx !== -1) {
+                filaDestino = existingIdx + (isHeader ? 1 : 2);
+              } else {
+                const dataCount = isHeader ? Math.max(0, rows.length - 1) : rows.length;
+                filaDestino = dataCount + 2;
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[SYNC-ALMACEN] Error al consultar fila en Almacen:', e);
+        }
+      }
+
+      if (!filaDestino) filaDestino = 2;
+      updatedProduct.fila = filaDestino;
+
+      const stockUds = Number(updatedProduct.stock?.unidades ?? updatedProduct.stock?.['1kg']) || 0;
+      const payloadAlmacen = {
+        accion: 'updateAlmacen',
+        action: 'updateAlmacen',
+        sheetName: 'Almacen',
+        sheet: 'Almacen',
+        fila: filaDestino,
+        nombre: updatedProduct.nombre,
+        marca: updatedProduct.marca || '',
+        categoria: 'Almacén',
+        subcategoria: updatedProduct.subcategoria || 'Almacén',
+        codigo_ean: updatedProduct.ean || '',
+        costo_unitario: updatedProduct.costoUnitario || 0,
+        precio_venta: updatedProduct.precioVenta || Math.round((updatedProduct.costoUnitario || 0) * 1.6),
+        stock_unidades: stockUds,
+        fila_val: filaDestino
+      };
+
+      try {
+        const res = await fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(payloadAlmacen)
+        });
+        if (res.ok) {
+          console.log(`✅ [SYNC ALMACEN] Producto "${updatedProduct.nombre}" sincronizado en fila ${filaDestino}`);
+        }
+      } catch (e) {
+        console.error('[SYNC ALMACEN ERROR]', e);
+      }
+      return;
+    }
+
+    if (!updatedProduct.fila) return;
     const payload = {
       accion: 'updateStock',
       action: 'updateStock',
@@ -849,7 +918,7 @@ export default function ControlStock() {
       ultimo_bandejeado: updatedProduct.ultimo_bandejeado
     };
     try {
-      await fetch(APPS_SCRIPT_URL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(payload) });
+      await fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(payload) });
     } catch (e) { console.error(e); }
   };
 
@@ -1280,6 +1349,59 @@ export default function ControlStock() {
           })()
         : [];
 
+      // Leer también pestaña Almacen si existe en el Google Sheet
+      if (SHEET_ID) {
+        try {
+          const gvizAlmUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`;
+          const resAlm = await fetch(gvizAlmUrl);
+          if (resAlm.ok) {
+            const txtAlm = await resAlm.text();
+            const sA = txtAlm.indexOf('{');
+            const eA = txtAlm.lastIndexOf('}');
+            if (sA !== -1 && eA !== -1) {
+              const jA = JSON.parse(txtAlm.substring(sA, eA + 1));
+              const rowsAlm = jA.table?.rows || [];
+              if (rowsAlm.length > 0) {
+                const isHeader = String(rowsAlm[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
+                const dataSlice = isHeader ? rowsAlm.slice(1) : rowsAlm;
+                dataSlice.forEach((r, idx) => {
+                  const nombreP = String(r.c?.[0]?.v || '').trim();
+                  if (!nombreP) return;
+                  const filaP = isHeader ? (idx + 2) : (idx + 1);
+                  const marcaP = String(r.c?.[1]?.v || '').trim();
+                  const catP = String(r.c?.[2]?.v || 'Almacén').trim();
+                  const subCatP = String(r.c?.[3]?.v || 'Almacén').trim();
+                  const eanP = String(r.c?.[4]?.v || '').trim();
+                  const costoP = Number(r.c?.[5]?.v) || 0;
+                  const precioVentaP = Number(r.c?.[6]?.v) || 0;
+                  const stockUdsP = Number(r.c?.[7]?.v) || 0;
+
+                  parsedRows.push({
+                    fila: filaP,
+                    producto: nombreP,
+                    nombre: nombreP,
+                    marca: marcaP,
+                    tipo: 'otros',
+                    categoriaPrincipal: 'Almacén',
+                    subcategoria: subCatP,
+                    codigo_ean: eanP,
+                    costo_unitario: costoP,
+                    precio_venta: precioVentaP,
+                    stock_500g: 0,
+                    stock_1kg: stockUdsP,
+                    stock_unidades: stockUdsP,
+                    unidades: stockUdsP,
+                    esUnidad: true
+                  });
+                });
+              }
+            }
+          }
+        } catch (eAlm) {
+          console.warn('[CONTROL-STOCK] No se pudo leer pestaña Almacen:', eAlm.message);
+        }
+      }
+
       const initial = inicializarStockLocal(master, parsedRows);
       setStockData(initial);
     } catch (err) {
@@ -1512,7 +1634,7 @@ export default function ControlStock() {
   }, [processedData, productosMaster]);
 
   // ── Handler de Carga Simplificada por Unidad (Ajo, Choclo, Almacén) ─────────
-  const handleConfirmCargaUnidad = ({ esCreacionNueva, ean, productoId, nombre, subcategoria, costoTotal, cantidad, costoUnitario, fecha }) => {
+  const handleConfirmCargaUnidad = async ({ esCreacionNueva, ean, productoId, nombre, marca, subcategoria, costoTotal, cantidad, costoUnitario, fecha }) => {
     const current = stockDataRef.current || {};
     let targetId = esCreacionNueva ? null : productoId;
     let prod = targetId ? current[targetId] : null;
@@ -1527,13 +1649,44 @@ export default function ControlStock() {
       ? normalizeSubcategoriaAlmacen(subcategoria || prod?.subcategoria || getSubcategoriaAlmacen(nombre))
       : '';
 
+    // Asignar o consultar número de fila real en la pestaña Almacen del Google Sheet
+    let filaAsignada = prod?.fila || null;
+    if (!filaAsignada && (catPrincipal === 'Almacén' || esCreacionNueva) && SHEET_ID) {
+      try {
+        const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`);
+        if (gvizRes.ok) {
+          const text = await gvizRes.text();
+          const s = text.indexOf('{');
+          const e = text.lastIndexOf('}');
+          if (s !== -1 && e !== -1) {
+            const json = JSON.parse(text.substring(s, e + 1));
+            const rows = json.table?.rows || [];
+            const isHeader = String(rows[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
+            const existingIdx = rows.findIndex(r => String(r.c?.[0]?.v || '').trim().toLowerCase() === nombre.trim().toLowerCase());
+            if (existingIdx !== -1) {
+              filaAsignada = existingIdx + (isHeader ? 1 : 2);
+            } else {
+              const dataCount = isHeader ? Math.max(0, rows.length - 1) : rows.length;
+              filaAsignada = dataCount + 2;
+            }
+          }
+        }
+      } catch (errRow) {
+        console.warn('[ALMACEN-ROW] Error al consultar fila disponible en Almacen:', errRow);
+      }
+    }
+    if (!filaAsignada && (catPrincipal === 'Almacén' || esCreacionNueva)) {
+      filaAsignada = 2;
+    }
+
     if (!prod) {
       // Producto nuevo creado al vuelo o explícito (ej: Harina Leudante Blancaflor, Sal Celusal, Sal Dos Anclas)
       targetId = 'alm_custom_' + Date.now();
       prod = {
         id: targetId,
         nombre: nombre.trim(),
-        fila: null,
+        marca: marca || '',
+        fila: filaAsignada,
         stock: { '500g': 0, '1kg': 0, unidades: 0 },
         originalLoad: { '500g': 0, '1kg': 0, unidades: 0 },
         ultimoBandejeado: fecha,
@@ -1556,6 +1709,9 @@ export default function ControlStock() {
       ...prod,
       categoriaPrincipal: catPrincipal,
       subcategoria: subCat,
+      marca: marca || prod?.marca || '',
+      fila: filaAsignada || prod?.fila || null,
+      costoUnitario: costoUnitario || prod?.costoUnitario || 0,
       stock: {
         '500g': 0,
         '1kg': nuevoStock,
@@ -1593,7 +1749,9 @@ export default function ControlStock() {
         subcategoria: subCat,
         costoUnitario,
         costoTotal,
-        cantidad
+        cantidad,
+        fila: updatedProd.fila,
+        marca: updatedProd.marca
       };
       localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
 
@@ -1603,6 +1761,8 @@ export default function ControlStock() {
       const customObj = {
         id: targetId,
         nombre: updatedProd.nombre,
+        marca: updatedProd.marca || '',
+        fila: updatedProd.fila || null,
         subcategoria: subCat,
         categoriaPrincipal: catPrincipal,
         unidad: 'unidad',
@@ -3453,6 +3613,7 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
   
   // Campos para producto nuevo con marca
   const [nuevoNombre, setNuevoNombre] = useState('');
+  const [nuevaMarca, setNuevaMarca] = useState('');
   const [nuevoEan, setNuevoEan] = useState('');
 
   const [subcategoria, setSubcategoria] = useState('Almacén');
@@ -3478,6 +3639,7 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
     if (initialProduct?.initialMode === 'nuevo') {
       setModo('nuevo');
       setNuevoNombre(initialProduct?.nombre || '');
+      setNuevaMarca(initialProduct?.marca || '');
       setNuevoEan(initialProduct?.ean || '');
       setSubcategoria(initialProduct?.subcategoria ? normalizeSubcategoriaAlmacen(initialProduct.subcategoria) : 'Almacén');
       setSelectedProduct(null);
@@ -3489,6 +3651,7 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
 
     setModo('existente');
     setNuevoNombre('');
+    setNuevaMarca('');
     setNuevoEan('');
 
     if (initialProduct?.id && stockData?.[initialProduct.id]) {
@@ -3606,6 +3769,7 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
         esCreacionNueva: true,
         productoId: null,
         nombre: nuevoNombre.trim(),
+        marca: nuevaMarca.trim(),
         ean: nuevoEan.trim() || null,
         subcategoria,
         costoTotal: costoNum,
@@ -3841,13 +4005,13 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
               {/* Nombre y Marca del Producto */}
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-gray-300 uppercase tracking-widest flex items-center gap-1">
-                  <span>Nombre y Marca del Producto *</span>
+                  <span>Nombre del Producto *</span>
                 </label>
                 <input
                   ref={nuevoInputRef}
                   type="text"
                   required={modo === 'nuevo'}
-                  placeholder="Ej: Harina Leudante Blancaflor, Sal Celusal, Sal Dos Anclas..."
+                  placeholder="Ej: Harina Leudante, Sal Fina, Arroz..."
                   value={nuevoNombre}
                   onChange={(e) => {
                     setNuevoNombre(e.target.value);
@@ -3855,6 +4019,20 @@ function ModalCargaUnidad({ isOpen, onClose, initialProduct, stockData, onConfir
                     if (guessed) setSubcategoria(guessed);
                   }}
                   className="w-full bg-black/70 border border-purple-500/40 focus:border-purple-400 rounded-xl px-3.5 py-2.5 text-white text-xs font-bold outline-none placeholder:text-gray-500 shadow-inner"
+                />
+              </div>
+
+              {/* Marca o Fabricante (Opcional) */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-gray-300 uppercase tracking-widest flex items-center gap-1">
+                  <span>Marca / Fabricante (Opcional)</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ej: Blancaflor, Celusal, Dos Anclas, Arcor..."
+                  value={nuevaMarca}
+                  onChange={(e) => setNuevaMarca(e.target.value)}
+                  className="w-full bg-black/70 border border-white/10 focus:border-purple-400 rounded-xl px-3.5 py-2 text-white text-xs font-bold outline-none placeholder:text-gray-500 shadow-inner"
                 />
               </div>
 
