@@ -73,15 +73,14 @@ export default async function handler(req, res) {
       extras
     }
 
-    // Reemplazar el objeto individual en PRODUCTS
+    // Reemplazar el objeto individual en PRODUCTS si existe en el HTML
     const regexIndividual = /('verduras'\s*:\s*\[[\s\S]*?'extras'\s*:\s*\[[\s\S]*?\])/
     if (regexIndividual.test(htmlActualizado)) {
       const nuevoIndividual = `'verduras': ${JSON.stringify(todosProductos.verduras)},\n    'frutas': ${JSON.stringify(todosProductos.frutas)},\n    'extras': ${JSON.stringify(todosProductos.extras)}`
       htmlActualizado = htmlActualizado.replace(regexIndividual, nuevoIndividual)
       console.log('[PUBLICAR-API] ✅ Productos reemplazados en HTML')
     } else {
-      console.error('[PUBLICAR-API] ❌ No se encontró el objeto individual en index.html')
-      throw new Error('No se encontró el bloque individual en index.html del repositorio de ventas para actualizar los productos.')
+      console.log('[PUBLICAR-API] ℹ️ Bloque individual estático no requerido en index.html (se sincroniza dinámicamente vía precios.json y Apps Script)')
     }
     
     // Incrementar versión del CSS para forzar recarga
