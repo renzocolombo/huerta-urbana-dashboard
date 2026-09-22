@@ -80,7 +80,8 @@ export default async function handler(req, res) {
       htmlActualizado = htmlActualizado.replace(regexIndividual, nuevoIndividual)
       console.log('[PUBLICAR-API] ✅ Productos reemplazados en HTML')
     } else {
-      console.log('[PUBLICAR-API] ⚠️ No se encontró el objeto individual')
+      console.error('[PUBLICAR-API] ❌ No se encontró el objeto individual en index.html')
+      throw new Error('No se encontró el bloque individual en index.html del repositorio de ventas para actualizar los productos.')
     }
     
     // Incrementar versión del CSS para forzar recarga

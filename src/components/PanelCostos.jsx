@@ -670,12 +670,26 @@ export default function PanelCostos() {
     try {
       // 1. PUBLICAR EN GOOGLE SHEETS (Vía Apps Script)
       if (APPS_SCRIPT_URL) {
-        await fetch(APPS_SCRIPT_URL, {
+        const appsRes = await fetch(APPS_SCRIPT_URL, {
           method: 'POST',
-          mode: 'no-cors',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify(dataPayload)
         });
+
+        if (!appsRes.ok) {
+          throw new Error(`Google Sheets HTTP Error ${appsRes.status}: ${appsRes.statusText}`);
+        }
+
+        try {
+          const appsJson = await appsRes.json();
+          if (appsJson && appsJson.success === false) {
+            throw new Error(`Google Sheets Apps Script: ${appsJson.error || 'Error desconocido'}`);
+          }
+        } catch (jsonErr) {
+          if (jsonErr.message && jsonErr.message.includes('Google Sheets Apps Script')) {
+            throw jsonErr;
+          }
+        }
       }
 
       // 2. PUBLICAR EN GITHUB PAGES (Vía Vercel Serverless Function)
@@ -685,11 +699,11 @@ export default function PanelCostos() {
         body: JSON.stringify({ contenido: dataPayload })
       });
       
-      console.log('[PUBLICAR] Respuesta de la API:', await githubRes.clone().json())
+      const ghData = await githubRes.json().catch(() => ({}));
+      console.log('[PUBLICAR] Respuesta de la API GitHub:', ghData);
 
-      if (!githubRes.ok) {
-        const ghErr = await githubRes.json();
-        throw new Error(`GitHub: ${ghErr.error || 'Error desconocido'}`);
+      if (!githubRes.ok || ghData.success === false) {
+        throw new Error(`GitHub: ${ghData.error || ('HTTP ' + githubRes.status)}`);
       }
 
       const ahora = new Date().toLocaleString('es-AR', { 
