@@ -412,6 +412,7 @@ export function GoogleSheetsProvider({ children }) {
       error,
       conectado,
       fetchSheetPedidos,
+      fetchPanelCostos,
       fetchControlStock,
       cargarTodo,
       actualizarEstadoEnSheet,

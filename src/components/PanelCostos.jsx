@@ -176,7 +176,7 @@ export const COMBOS_INICIALES = [
 ];
 
 export default function PanelCostos() {
-  const { productosCostos: contextProds } = useGoogleSheets();
+  const { productosCostos: contextProds, setProductosCostos } = useGoogleSheets();
   const [productos, setProductos] = useState([]);
   const [combos, setCombos] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY + '_combos');
@@ -196,6 +196,9 @@ export default function PanelCostos() {
   const [subcategoriaAlmacen, setSubcategoriaAlmacen] = useState('Todas');
 
   const [cargando, setCargando] = useState(true);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [sincronizadoExito, setSincronizadoExito] = useState(false);
+  const [ultimaSync, setUltimaSync] = useState(null);
   const [publicando, setPublicando] = useState(false);
   const [error, setError] = useState(null);
 
@@ -210,30 +213,59 @@ export default function PanelCostos() {
   }, [contextProds]);
 
   const cargarDatosDesdeSheet = async () => {
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/PanelCostos?key=${API_KEY}`;
-    
-    if (!API_KEY || !SHEET_ID) {
-      setProductos(PRODUCTOS_INICIALES);
-      setCargando(false);
-      return;
-    }
+    setSincronizando(true);
+    setError(null);
 
     try {
-      const response = await fetch(url);
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data?.error?.message || `Error HTTP ${response.status}`);
+      let rows = null;
+
+      // 1. Intentar vía API v4 oficial de Google Sheets
+      if (API_KEY && SHEET_ID) {
+        try {
+          const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/PanelCostos?key=${API_KEY}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.values && data.values.length > 0) rows = data.values;
+          } else {
+            console.warn(`[COSTOS-API] v4 devolvió estado ${res.status}. Usando fallback GViz...`);
+          }
+        } catch (e) {
+          console.warn('[COSTOS-API] Fallback a GViz:', e.message);
+        }
       }
 
-      const rows = data.values;
+      // 2. Fallback resiliente: Google Visualization API (GViz)
+      if (!rows && SHEET_ID) {
+        try {
+          const gvizUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=PanelCostos`;
+          const gvizRes = await fetch(gvizUrl);
+          if (gvizRes.ok) {
+            const text = await gvizRes.text();
+            const start = text.indexOf('{');
+            const end = text.lastIndexOf('}');
+            if (start !== -1 && end !== -1) {
+              const json = JSON.parse(text.substring(start, end + 1));
+              if (json.status === 'ok' && json.table) {
+                const headers = (json.table.cols || []).map(c => c.label || '');
+                const bodyRows = (json.table.rows || []).map(r =>
+                  (r.c || []).map(cell => (cell ? (cell.v !== null && cell.v !== undefined ? cell.v : cell.f || '') : ''))
+                );
+                rows = [headers, ...bodyRows];
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[COSTOS-GVIZ] Error en fallback GViz:', e.message);
+        }
+      }
+
       if (!rows || rows.length < 1) {
-        setProductos(PRODUCTOS_INICIALES);
-        return;
+        throw new Error('No se pudieron obtener datos del Google Sheet');
       }
 
       let mapped = rows.slice(1).map((row, index) => {
-        let nombre = row[0] || 'Sin nombre';
+        let nombre = String(row[0] || 'Sin nombre').trim();
         const fixAcentos = (str) => str
             .replace(/\bcebolla comun\b/gi, 'Cebolla')
             .replace(/\bCebolla común\b/gi, 'Cebolla')
@@ -254,7 +286,7 @@ export default function PanelCostos() {
           cantidadCajon: Number(row[2]) || 1,
           margen: Number(row[3]) || 60,
           precioMaxManual: row[4] ? Number(row[4]) : null,
-          activo: row[5] === 'TRUE' || row[5] === 'true' || row[5] === '1',
+          activo: row[5] === true || row[5] === 'TRUE' || row[5] === 'true' || row[5] === '1' || row[5] === 1,
           ultimaActualizacion: row[6] || '',
           categoria: tipo, 
           categoriaPrincipal: getCategoriaPrincipal(nombre),
@@ -306,11 +338,21 @@ export default function PanelCostos() {
       });
 
       setProductos(mapped);
+      if (setProductosCostos) setProductosCostos(mapped);
+      localStorage.setItem('huerta_data_costos_v1_productos', JSON.stringify(mapped));
+
+      const now = new Date();
+      const horaStr = now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      setUltimaSync(horaStr);
+      setSincronizadoExito(true);
+      setError(null);
+      setTimeout(() => setSincronizadoExito(false), 3500);
     } catch (err) {
-      setError('No se pudo sincronizar el Panel de Costos. Usando datos locales.');
-      setProductos(PRODUCTOS_INICIALES);
+      console.error('[COSTOS] Error sincronizando:', err);
+      setError('No se pudo sincronizar el Panel de Costos con Google Sheets. Usando datos locales.');
     } finally {
       setCargando(false);
+      setSincronizando(false);
     }
   };
 
@@ -671,7 +713,18 @@ export default function PanelCostos() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-white">Panel de Costos v3.1</h2>
-          <p className="text-gray-500 text-sm mt-1">{error || 'Sincronizado con Google Sheets'}</p>
+          <div className="flex items-center gap-2 mt-1">
+            {error ? (
+              <span className="flex items-center gap-1.5 text-xs text-amber-400 font-medium">
+                <AlertTriangle size={13} /> {error}
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-xs text-green-400 font-medium">
+                <span className="w-2 h-2 rounded-full bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)] animate-pulse" />
+                Sincronizado con Google Sheets {ultimaSync ? `(${ultimaSync} hs)` : ''} · {productos.length} productos cargados
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex gap-3">
           {/* Botones movidos abajo para evitar obstrucciones */}
@@ -900,10 +953,29 @@ export default function PanelCostos() {
         <div className="flex gap-3 relative z-10">
           <button 
             onClick={cargarDatosDesdeSheet} 
-            className="flex items-center gap-2 p-4 bg-gray-800 hover:bg-gray-700 text-white rounded-2xl transition-all border border-gray-700"
+            disabled={sincronizando}
+            className={`flex items-center gap-2.5 px-6 py-4 rounded-2xl transition-all border font-bold text-xs cursor-pointer shadow-lg active:scale-95 ${
+              sincronizadoExito
+                ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.35)]'
+                : sincronizando
+                ? 'bg-gray-800 text-gray-400 border-gray-700 cursor-wait'
+                : 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700 hover:border-gray-600'
+            }`}
           >
-            <Globe size={18} />
-            <span className="text-xs font-bold">Sincronizar Sheet</span>
+            {sincronizando ? (
+              <Loader2 size={18} className="animate-spin text-green-400" />
+            ) : sincronizadoExito ? (
+              <Check size={18} className="text-white" />
+            ) : (
+              <Globe size={18} className="text-green-400" />
+            )}
+            <span>
+              {sincronizando 
+                ? 'Sincronizando...' 
+                : sincronizadoExito 
+                ? '¡Sincronizado con Sheet!' 
+                : 'Sincronizar Sheet'}
+            </span>
           </button>
           <button
             onClick={publicar}
