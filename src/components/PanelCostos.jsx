@@ -383,12 +383,26 @@ export default function PanelCostos() {
         if (cs) customSaved = JSON.parse(cs);
       } catch(e) {}
 
+      let unitsCache = {};
+      try {
+        unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
+      } catch(e) {}
+
       const allAlmacen = [...customSaved, ...ALMACEN_PRESETS];
       allAlmacen.forEach(alm => {
-        if (!mapped.some(p => p.nombre?.toLowerCase().trim() === alm.nombre?.toLowerCase().trim())) {
+        const nNorm = (alm.nombre || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const stockCache = unitsCache[nNorm]?.stock;
+
+        const existing = mapped.find(p => p.nombre?.toLowerCase().trim() === alm.nombre?.toLowerCase().trim());
+        if (existing) {
+          if (stockCache !== undefined && (existing.stock_unidades === undefined || existing.stock_unidades === 0)) {
+            existing.stock_unidades = Number(stockCache) || 0;
+          }
+        } else {
           mapped.push({
             id: alm.id || Date.now() + Math.random(),
             nombre: alm.nombre,
+            marca: alm.marca || '',
             categoria: 'otros',
             categoriaPrincipal: 'Almacén',
             subcategoria: alm.subcategoria || getSubcategoriaAlmacen(alm.nombre),
@@ -398,7 +412,8 @@ export default function PanelCostos() {
             margen: 60,
             precioMaxManual: null,
             activo: true,
-            fila: null
+            fila: alm.fila || null,
+            stock_unidades: stockCache !== undefined ? Number(stockCache) : 0
           });
         }
       });
@@ -775,7 +790,18 @@ export default function PanelCostos() {
       accion: 'publicarPrecios',
       monto_minimo: montoMinimo,
       mensaje_minimo: `El pedido mínimo es de $${montoMinimo.toLocaleString('es-AR')}`,
-      productos: productosCalculados.filter(p => p.activo).map(p => ({
+      productos: productosCalculados.filter(p => {
+        if (!p.activo) return false;
+        // Para productos de Almacén: si el stock es 0 o no tiene unidades, no se publica en la tienda web
+        if (p.categoriaPrincipal === 'Almacén') {
+          const stock = Number(p.stock_unidades);
+          if (isNaN(stock) || stock <= 0) {
+            console.log(`[PUBLICAR] Omitiendo de la tienda web por falta de stock: "${p.nombre}"`);
+            return false;
+          }
+        }
+        return true;
+      }).map(p => ({
         nombre: p.nombre,
         precio: p.precioFinal,
         unidad: (p.unidad || '').toLowerCase().replace(/\bunidad\b/gi, '').trim(),
@@ -1091,9 +1117,22 @@ export default function PanelCostos() {
                     {catItems.map(p => (
                       <tr key={p.id} className={`hover:bg-gray-800/40 transition-colors ${!p.activo ? 'opacity-40' : ''}`}>
                         <td className="px-6 py-4">
-                          <p className="font-bold text-white text-sm">{p.nombre}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="font-bold text-white text-sm">{p.nombre}</p>
+                            {p.categoriaPrincipal === 'Almacén' && (
+                              Number(p.stock_unidades) > 0 ? (
+                                <span className="text-[10px] bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 px-1.5 py-0.5 rounded font-medium" title="Stock disponible en depósito">
+                                  {p.stock_unidades} uds
+                                </span>
+                              ) : (
+                                <span className="text-[10px] bg-red-950/60 border border-red-500/40 text-red-300 px-1.5 py-0.5 rounded font-medium" title="Sin stock: no se publicará en la tienda online">
+                                  Sin stock
+                                </span>
+                              )
+                            )}
+                          </div>
                           <p className="text-[10px] text-gray-500 font-medium">
-                            {p.subcategoria ? `${p.subcategoria} · ` : ''}Fila: {p.fila || '-'}
+                            {p.marca ? `${p.marca} · ` : ''}{p.subcategoria ? `${p.subcategoria} · ` : ''}Fila: {p.fila || '-'}
                           </p>
                         </td>
                         <td className="px-6 py-4 text-gray-400">

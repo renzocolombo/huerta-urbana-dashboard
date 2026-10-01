@@ -283,12 +283,26 @@ export function GoogleSheetsProvider({ children }) {
         if (cs) customSaved = JSON.parse(cs);
       } catch(e) {}
 
+      let unitsCache = {};
+      try {
+        unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
+      } catch(e) {}
+
       const allAlmacen = [...customSaved, ...ALMACEN_PRESETS];
       allAlmacen.forEach(alm => {
-        if (!mapped.some(p => p.nombre?.toLowerCase().trim() === alm.nombre?.toLowerCase().trim())) {
+        const nNorm = (alm.nombre || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const stockCache = unitsCache[nNorm]?.stock;
+
+        const existing = mapped.find(p => p.nombre?.toLowerCase().trim() === alm.nombre?.toLowerCase().trim());
+        if (existing) {
+          if (stockCache !== undefined && (existing.stock_unidades === undefined || existing.stock_unidades === 0)) {
+            existing.stock_unidades = Number(stockCache) || 0;
+          }
+        } else {
           mapped.push({
             id: alm.id || Date.now() + Math.random(),
             nombre: alm.nombre,
+            marca: alm.marca || '',
             categoria: 'otros',
             categoriaPrincipal: 'Almacén',
             subcategoria: normalizeSubcategoriaAlmacen(alm.subcategoria || getSubcategoriaAlmacen(alm.nombre)),
@@ -298,7 +312,8 @@ export function GoogleSheetsProvider({ children }) {
             margen: 60,
             precioMaxManual: null,
             activo: true,
-            fila: null
+            fila: alm.fila || null,
+            stock_unidades: stockCache !== undefined ? Number(stockCache) : 0
           });
         }
       });
