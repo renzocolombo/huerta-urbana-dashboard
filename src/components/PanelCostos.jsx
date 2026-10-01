@@ -200,6 +200,7 @@ export default function PanelCostos() {
   const [sincronizadoExito, setSincronizadoExito] = useState(false);
   const [ultimaSync, setUltimaSync] = useState(null);
   const [publicando, setPublicando] = useState(false);
+  const [publicandoMsg, setPublicandoMsg] = useState('');
   const [error, setError] = useState(null);
 
   // Carga inicial: Si contextProds ya tiene datos, usarlos.
@@ -784,6 +785,7 @@ export default function PanelCostos() {
   const publicar = async () => {
     console.log('[PUBLICAR] Botón apretado - iniciando publicación...');
     setPublicando(true);
+    setPublicandoMsg('Preparando catálogo...');
     setError(null);
 
     const dataPayload = {
@@ -847,6 +849,7 @@ export default function PanelCostos() {
     try {
       // 1. PUBLICAR EN GOOGLE SHEETS (Vía Apps Script)
       if (APPS_SCRIPT_URL) {
+        setPublicandoMsg('Publicando precios...');
         const appsController = new AbortController();
         const appsTimeout = setTimeout(() => appsController.abort(), 12000);
         let appsRes;
@@ -876,15 +879,19 @@ export default function PanelCostos() {
           }
         }
 
-        // Sincronizar SOLO los productos reales de Almacén (los que ya están en el Sheet, tienen stock o son creados por el usuario)
-        // Evitamos enviar 31 presets vacíos que colgaban la ejecución
-        const prodsAlmacenReales = productosCalculados.filter(p => 
-          p.categoriaPrincipal === 'Almacén' && 
-          p.activo &&
-          ((p.fila && Number(p.fila) < 900) || Number(p.stock_unidades) > 0 || (p.id && String(p.id).startsWith('alm_custom')))
-        );
+        // Sincronizar todos los productos de Almacén reales o configurados (incluso con stock 0)
+        // Incluye: los que tienen fila, los que tienen stock, los que son alm_custom o tienen precio/costo configurado
+        const prodsAlmacenASincronizar = productosCalculados.filter(p => {
+          if (p.categoriaPrincipal !== 'Almacén') return false;
+          const tieneFila = Boolean(p.fila && Number(p.fila) < 900);
+          const tieneStock = Number(p.stock_unidades) > 0;
+          const esCustom = Boolean(p.id && String(p.id).startsWith('alm_custom'));
+          const tieneCostoOPrecio = (Number(p.precioCajon) > 0) || (p.precioMaxManual !== null && Number(p.precioMaxManual) > 0);
+          return tieneFila || tieneStock || esCustom || tieneCostoOPrecio;
+        });
 
-        if (prodsAlmacenReales.length > 0) {
+        if (prodsAlmacenASincronizar.length > 0) {
+          setPublicandoMsg('Verificando filas de Almacén...');
           try {
             let existingRows = [];
             if (SHEET_ID) {
@@ -907,53 +914,59 @@ export default function PanelCostos() {
             });
             let nextFila = maxFilaFound + 1;
 
-            // Sincronización en cola secuencial ágil para los productos reales
-            for (const p of prodsAlmacenReales) {
-              let f = (p.fila && Number(p.fila) < 900) ? Number(p.fila) : null;
-              if (!f) {
-                const idx = existingRows.findIndex(r => {
-                  const rNom = String(r.c?.[0]?.v || '').trim().toLowerCase();
-                  return rNom && rNom === String(p.nombre || '').trim().toLowerCase();
-                });
-                if (idx !== -1) {
-                  const fVal = Number(existingRows[idx]?.c?.[8]?.v);
-                  f = (fVal && fVal < 900) ? fVal : (idx + 2);
-                } else {
-                  f = nextFila++;
+            // Sincronización en lotes paralelos de 3 para máxima velocidad y sin sobrecargar Apps Script
+            const BATCH_SIZE = 3;
+            for (let i = 0; i < prodsAlmacenASincronizar.length; i += BATCH_SIZE) {
+              const batch = prodsAlmacenASincronizar.slice(i, i + BATCH_SIZE);
+              setPublicandoMsg(`Guardando en Sheet (${Math.min(i + BATCH_SIZE, prodsAlmacenASincronizar.length)}/${prodsAlmacenASincronizar.length})...`);
+
+              await Promise.all(batch.map(async (p) => {
+                let f = (p.fila && Number(p.fila) < 900) ? Number(p.fila) : null;
+                if (!f) {
+                  const idx = existingRows.findIndex(r => {
+                    const rNom = String(r.c?.[0]?.v || '').trim().toLowerCase();
+                    return rNom && rNom === String(p.nombre || '').trim().toLowerCase();
+                  });
+                  if (idx !== -1) {
+                    const fVal = Number(existingRows[idx]?.c?.[8]?.v);
+                    f = (fVal && fVal < 900) ? fVal : (idx + 2);
+                  } else {
+                    f = nextFila++;
+                  }
+                  p.fila = f;
                 }
-                p.fila = f;
-              }
-              const precioVenta = Math.floor(p.precioFinal || (Number(p.precioCajon || 0) * (1 + (Number(p.margen || 60) / 100))));
-              
-              const itemController = new AbortController();
-              const itemTimeout = setTimeout(() => itemController.abort(), 6000);
-              try {
-                await fetch(APPS_SCRIPT_URL, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'text/plain' },
-                  body: JSON.stringify({
-                    accion: 'updateAlmacen',
-                    sheetName: 'Almacen',
-                    fila: f,
-                    nombre: p.nombre,
-                    marca: p.marca || '',
-                    categoria: 'Almacén',
-                    subcategoria: p.subcategoria || 'Almacén',
-                    codigo_ean: p.ean || '',
-                    costo_unitario: Number(p.precioCajon) || 0,
-                    precio_venta: precioVenta,
-                    stock_unidades: Number(p.stock_unidades) || 0,
-                    fila_val: f
-                  }),
-                  signal: itemController.signal
-                });
-              } catch (errSyncOne) {
-                console.warn(`[PUBLICAR] Sync ${p.nombre} omitido o timeout:`, errSyncOne.message);
-              } finally {
-                clearTimeout(itemTimeout);
-              }
+                const precioVenta = Math.floor(p.precioFinal || (Number(p.precioCajon || 0) * (1 + (Number(p.margen || 60) / 100))));
+                
+                const itemController = new AbortController();
+                const itemTimeout = setTimeout(() => itemController.abort(), 6000);
+                try {
+                  await fetch(APPS_SCRIPT_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain' },
+                    body: JSON.stringify({
+                      accion: 'updateAlmacen',
+                      sheetName: 'Almacen',
+                      fila: f,
+                      nombre: p.nombre,
+                      marca: p.marca || '',
+                      categoria: 'Almacén',
+                      subcategoria: p.subcategoria || 'Almacén',
+                      codigo_ean: p.ean || '',
+                      costo_unitario: Number(p.precioCajon) || 0,
+                      precio_venta: precioVenta,
+                      stock_unidades: Number(p.stock_unidades) || 0,
+                      fila_val: f
+                    }),
+                    signal: itemController.signal
+                  });
+                } catch (errSyncOne) {
+                  console.warn(`[PUBLICAR] Sync ${p.nombre} omitido o timeout:`, errSyncOne.message);
+                } finally {
+                  clearTimeout(itemTimeout);
+                }
+              }));
             }
-            console.log(`✅ [PUBLICAR] ${prodsAlmacenReales.length} productos de Almacén sincronizados en la hoja de Google Sheets`);
+            console.log(`✅ [PUBLICAR] ${prodsAlmacenASincronizar.length} productos de Almacén sincronizados en la hoja de Google Sheets`);
           } catch (eAlm) {
             console.warn('[PUBLICAR] Error sincronizando Almacen en sheet:', eAlm);
           }
@@ -961,9 +974,10 @@ export default function PanelCostos() {
       }
 
       // 2. PUBLICAR EN GITHUB PAGES (Vía Vercel Serverless Function)
+      setPublicandoMsg('Actualizando catálogo web...');
       try {
         const ghController = new AbortController();
-        const ghTimeout = setTimeout(() => ghController.abort(), 10000);
+        const ghTimeout = setTimeout(() => ghController.abort(), 8000);
         const githubRes = await fetch('/api/publicar-precios', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -993,6 +1007,7 @@ export default function PanelCostos() {
       alert(`❌ Error al publicar precios:\n${err.message}`);
     } finally {
       setPublicando(false);
+      setPublicandoMsg('');
     }
   };
 
@@ -1286,7 +1301,7 @@ export default function PanelCostos() {
             className="flex items-center gap-2 bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white font-bold px-8 py-4 rounded-2xl transition-all shadow-lg hover:shadow-green-500/20 active:scale-95 pointer-events-auto"
           >
             {publicando ? <Settings className="animate-spin" size={20} /> : <Globe size={20} />}
-            {publicando ? 'Publicando...' : 'Publicar precios'}
+            {publicando ? (publicandoMsg || 'Publicando...') : 'Publicar precios'}
           </button>
         </div>
       </div>
