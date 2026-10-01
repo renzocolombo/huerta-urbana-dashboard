@@ -461,15 +461,34 @@ export default function ControlStock() {
         stockDataRef.current = newData;
         syncWithSheet(updatedProd);
       } else {
-        const newPid = pf.id || `prod_${Date.now()}`;
+        const catPrincipal = pf.categoriaPrincipal || getCategoriaPrincipal(pf.nombre) || 'Almacén';
+        const subCat = normalizeSubcategoriaAlmacen(pf.subcategoria || 'Almacén');
+        const isAlm = catPrincipal === 'Almacén' || subCat !== '';
+        
+        let assignedFila = pf.fila;
+        if (!assignedFila && isAlm) {
+          let maxF = 1;
+          Object.values(current).forEach(p => {
+            if (p.categoriaPrincipal === 'Almacén' || p.esUnidad || (p.id && String(p.id).startsWith('alm_'))) {
+              const f = Number(p.fila);
+              if (f && f < 900 && f > maxF) maxF = f;
+            }
+          });
+          assignedFila = maxF + 1;
+        }
+
+        const newPid = (pf.id && String(pf.id).startsWith('alm_')) ? pf.id : (isAlm ? `alm_custom_${Date.now()}` : `prod_${Date.now()}`);
         nuevoStock = 1;
         updatedProd = {
           id: newPid,
           nombre: pf.nombre,
-          categoriaPrincipal: pf.categoriaPrincipal || getCategoriaPrincipal(pf.nombre),
-          subcategoria: normalizeSubcategoriaAlmacen(pf.subcategoria || 'Almacén'),
-          tipo: pf.tipo || getTipoByNombre(pf.nombre),
-          unidad: pf.unidad || getUnidadByNombre(pf.nombre),
+          marca: pf.marca || '',
+          fila: assignedFila || null,
+          categoriaPrincipal: 'Almacén',
+          subcategoria: subCat,
+          tipo: 'otros',
+          unidad: 'unidad',
+          esUnidad: true,
           stock: { '500g': 0, '1kg': nuevoStock, unidades: nuevoStock },
           originalLoad: { '500g': 0, '1kg': nuevoStock, unidades: nuevoStock },
           mermaKg: 0,
@@ -843,13 +862,16 @@ export default function ControlStock() {
       if (!filaDestino) {
         let maxFilaEncontrada = 1;
 
-        // 1. Revisar estado actual en memoria
+        // 1. Revisar estado actual en memoria (solo Almacén)
         const currentData = stockDataRef.current || {};
         Object.values(currentData).forEach(p => {
-          const f = Number(p.fila);
-          if (f && f < 900 && f > maxFilaEncontrada) maxFilaEncontrada = f;
-          if (p.nombre && updatedProduct.nombre && p.nombre.trim().toLowerCase() === updatedProduct.nombre.trim().toLowerCase() && f && f < 900) {
-            filaDestino = f;
+          const isAlmP = p.categoriaPrincipal === 'Almacén' || p.esUnidad || (p.id && String(p.id).startsWith('alm_'));
+          if (isAlmP) {
+            const f = Number(p.fila);
+            if (f && f < 900 && f > maxFilaEncontrada) maxFilaEncontrada = f;
+            if (p.nombre && updatedProduct.nombre && p.nombre.trim().toLowerCase() === updatedProduct.nombre.trim().toLowerCase() && f && f < 900) {
+              filaDestino = f;
+            }
           }
         });
 
@@ -932,6 +954,11 @@ export default function ControlStock() {
       } catch (e) {
         console.error('[SYNC ALMACEN ERROR]', e);
       }
+      return;
+    }
+
+    // PREVENCIÓN ESTRICTA: Ningún producto de Almacén debe ir jamás a la pestaña ControlStock
+    if (updatedProduct.categoriaPrincipal === 'Almacén' || updatedProduct.subcategoria === 'Almacén' || SUBCATEGORIAS_ALMACEN.includes(updatedProduct.subcategoria)) {
       return;
     }
 
@@ -1689,11 +1716,14 @@ export default function ControlStock() {
     if (!filaAsignada && (catPrincipal === 'Almacén' || esCreacionNueva)) {
       let maxFilaLocal = 1;
 
-      // 1. Revisar memoria activa de stockData
+      // 1. Revisar memoria activa de stockData (solo Almacén)
       Object.values(current).forEach(p => {
-        const f = Number(p.fila);
-        if (f && f < 900 && f > maxFilaLocal) maxFilaLocal = f;
-        if (norm(p.nombre) === norm(nombre) && f && f < 900) filaAsignada = f;
+        const isAlmP = p.categoriaPrincipal === 'Almacén' || p.esUnidad || (p.id && String(p.id).startsWith('alm_'));
+        if (isAlmP) {
+          const f = Number(p.fila);
+          if (f && f < 900 && f > maxFilaLocal) maxFilaLocal = f;
+          if (norm(p.nombre) === norm(nombre) && f && f < 900) filaAsignada = f;
+        }
       });
 
       // 2. Revisar lista persistida en localStorage
