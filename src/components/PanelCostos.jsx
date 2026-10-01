@@ -328,7 +328,8 @@ export default function PanelCostos() {
                 dataSlice.forEach((r, idx) => {
                   const nombreP = String(r.c?.[0]?.v || '').trim();
                   if (!nombreP) return;
-                  const filaP = isHeader ? (idx + 3) : (idx + 2);
+                  const filaCol = Number(r.c?.[8]?.v);
+                  const filaP = (filaCol && filaCol < 900) ? filaCol : (isHeader ? (idx + 3) : (idx + 2));
                   const marcaP = String(r.c?.[1]?.v || '').trim();
                   const catP = String(r.c?.[2]?.v || 'Almacén').trim();
                   const subCatP = String(r.c?.[3]?.v || getSubcategoriaAlmacen(nombreP)).trim();
@@ -425,33 +426,54 @@ export default function PanelCostos() {
     if (!APPS_SCRIPT_URL) return;
 
     if (p.categoriaPrincipal === 'Almacén') {
-      let filaDestino = p.fila;
-      if (!filaDestino && SHEET_ID) {
-        try {
-          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`);
-          if (gvizRes.ok) {
-            const text = await gvizRes.text();
-            const s = text.indexOf('{');
-            const e = text.lastIndexOf('}');
-            if (s !== -1 && e !== -1) {
-              const json = JSON.parse(text.substring(s, e + 1));
-              const rows = json.table?.rows || [];
-              const isHeader = String(rows[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
-              const existingIdx = rows.findIndex(r => String(r.c?.[0]?.v || '').trim().toLowerCase() === String(p.nombre || '').trim().toLowerCase());
-              if (existingIdx !== -1) {
-                filaDestino = existingIdx + (isHeader ? 1 : 2);
-              } else {
-                const dataCount = isHeader ? Math.max(0, rows.length - 1) : rows.length;
-                filaDestino = dataCount + 2;
+      let filaDestino = (p.fila && Number(p.fila) < 900) ? Number(p.fila) : null;
+      if (!filaDestino) {
+        let maxFilaEncontrada = 1;
+
+        // 1. Revisar productos cargados en memoria
+        productos.forEach(pr => {
+          const f = Number(pr.fila);
+          if (f && f < 900 && f > maxFilaEncontrada) maxFilaEncontrada = f;
+          if (pr.nombre && p.nombre && pr.nombre.trim().toLowerCase() === p.nombre.trim().toLowerCase() && f && f < 900) {
+            filaDestino = f;
+          }
+        });
+
+        // 2. Revisar Sheet
+        if (SHEET_ID) {
+          try {
+            const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`);
+            if (gvizRes.ok) {
+              const text = await gvizRes.text();
+              const s = text.indexOf('{');
+              const e = text.lastIndexOf('}');
+              if (s !== -1 && e !== -1) {
+                const json = JSON.parse(text.substring(s, e + 1));
+                const rows = json.table?.rows || [];
+                const isHeader = String(rows[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
+                const existingIdx = rows.findIndex(r => String(r.c?.[0]?.v || '').trim().toLowerCase() === String(p.nombre || '').trim().toLowerCase());
+                if (existingIdx !== -1) {
+                  const fVal = Number(rows[existingIdx]?.c?.[8]?.v);
+                  filaDestino = (fVal && fVal < 900) ? fVal : (isHeader ? (existingIdx + 3) : (existingIdx + 2));
+                } else {
+                  rows.forEach((r, idx) => {
+                    const fVal = Number(r.c?.[8]?.v) || (isHeader ? (idx + 3) : (idx + 2));
+                    if (fVal < 900 && fVal > maxFilaEncontrada) maxFilaEncontrada = fVal;
+                  });
+                }
               }
             }
+          } catch (e) {
+            console.warn('[SYNC-ALMACEN-COSTOS] Error buscando fila:', e);
           }
-        } catch (e) {
-          console.warn('[SYNC-ALMACEN-COSTOS] Error buscando fila:', e);
+        }
+
+        if (!filaDestino) {
+          filaDestino = Math.max(maxFilaEncontrada, 1) + 1;
         }
       }
 
-      if (!filaDestino) filaDestino = 2;
+      if (!filaDestino || filaDestino < 2) filaDestino = 2;
       p.fila = filaDestino;
 
       const precioVenta = p.precioMaxManual !== null && p.precioMaxManual !== undefined
@@ -838,41 +860,56 @@ export default function PanelCostos() {
               }
             }
 
-            const isHeader = String(existingRows[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
-            let nextFila = (isHeader ? Math.max(0, existingRows.length - 1) : existingRows.length) + 2;
+            let maxFilaFound = 1;
+            existingRows.forEach((r, idx) => {
+              const fVal = Number(r.c?.[8]?.v) || (idx + 2);
+              if (fVal < 900 && fVal > maxFilaFound) maxFilaFound = fVal;
+            });
+            let nextFila = maxFilaFound + 1;
 
-            const syncAlmPromises = prodsAlmacenActivos.map(async (p) => {
-              let f = p.fila;
+            // Sincronización en cola secuencial para evitar LockTimeout en Google Sheets
+            for (const p of prodsAlmacenActivos) {
+              let f = (p.fila && Number(p.fila) < 900) ? Number(p.fila) : null;
               if (!f) {
-                const idx = existingRows.findIndex(r => String(r.c?.[0]?.v || '').trim().toLowerCase() === String(p.nombre || '').trim().toLowerCase());
+                const idx = existingRows.findIndex(r => {
+                  const rNom = String(r.c?.[0]?.v || '').trim().toLowerCase();
+                  return rNom && rNom === String(p.nombre || '').trim().toLowerCase();
+                });
                 if (idx !== -1) {
-                  f = idx + (isHeader ? 1 : 2);
+                  const fVal = Number(existingRows[idx]?.c?.[8]?.v);
+                  f = (fVal && fVal < 900) ? fVal : (idx + 2);
                 } else {
                   f = nextFila++;
                 }
                 p.fila = f;
               }
               const precioVenta = Math.floor(p.precioFinal || (Number(p.precioCajon || 0) * (1 + (Number(p.margen || 60) / 100))));
-              return fetch(APPS_SCRIPT_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain' },
-                body: JSON.stringify({
-                  accion: 'updateAlmacen',
-                  sheetName: 'Almacen',
-                  fila: f,
-                  nombre: p.nombre,
-                  marca: p.marca || '',
-                  categoria: 'Almacén',
-                  subcategoria: p.subcategoria || 'Almacén',
-                  codigo_ean: p.ean || '',
-                  costo_unitario: Number(p.precioCajon) || 0,
-                  precio_venta: precioVenta,
-                  stock_unidades: Number(p.stock_unidades) || 0,
-                  fila_val: f
-                })
-              });
-            });
-            await Promise.all(syncAlmPromises);
+              
+              try {
+                await fetch(APPS_SCRIPT_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'text/plain' },
+                  body: JSON.stringify({
+                    accion: 'updateAlmacen',
+                    sheetName: 'Almacen',
+                    fila: f,
+                    nombre: p.nombre,
+                    marca: p.marca || '',
+                    categoria: 'Almacén',
+                    subcategoria: p.subcategoria || 'Almacén',
+                    codigo_ean: p.ean || '',
+                    costo_unitario: Number(p.precioCajon) || 0,
+                    precio_venta: precioVenta,
+                    stock_unidades: Number(p.stock_unidades) || 0,
+                    fila_val: f
+                  })
+                });
+                // Pausa breve de 150ms para garantizar escritura atómica
+                await new Promise(res => setTimeout(res, 150));
+              } catch (errSyncOne) {
+                console.warn(`[PUBLICAR] Error sincronizando ${p.nombre} en fila ${f}:`, errSyncOne);
+              }
+            }
             console.log(`✅ [PUBLICAR] ${prodsAlmacenActivos.length} productos de Almacén sincronizados en la hoja de Google Sheets`);
           } catch (eAlm) {
             console.warn('[PUBLICAR] Error sincronizando Almacen en sheet:', eAlm);

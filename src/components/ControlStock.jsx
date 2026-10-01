@@ -837,35 +837,69 @@ export default function ControlStock() {
     const isAlmacen = updatedProduct.categoriaPrincipal === 'Almacén' || updatedProduct.esUnidad || (updatedProduct.id && String(updatedProduct.id).startsWith('alm_'));
 
     if (isAlmacen) {
-      let filaDestino = updatedProduct.fila;
+      let filaDestino = (updatedProduct.fila && Number(updatedProduct.fila) < 900) ? Number(updatedProduct.fila) : null;
       
-      // Si no tiene fila asignada, consultamos el Google Sheet para obtener el número de fila real en la pestaña Almacen
-      if (!filaDestino && SHEET_ID) {
+      // Si no tiene fila asignada, calculamos la próxima fila libre considerando estado en memoria, localStorage y Sheet
+      if (!filaDestino) {
+        let maxFilaEncontrada = 1;
+
+        // 1. Revisar estado actual en memoria
+        const currentData = stockDataRef.current || {};
+        Object.values(currentData).forEach(p => {
+          const f = Number(p.fila);
+          if (f && f < 900 && f > maxFilaEncontrada) maxFilaEncontrada = f;
+          if (p.nombre && updatedProduct.nombre && p.nombre.trim().toLowerCase() === updatedProduct.nombre.trim().toLowerCase() && f && f < 900) {
+            filaDestino = f;
+          }
+        });
+
+        // 2. Revisar localStorage
         try {
-          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`);
-          if (gvizRes.ok) {
-            const text = await gvizRes.text();
-            const s = text.indexOf('{');
-            const e = text.lastIndexOf('}');
-            if (s !== -1 && e !== -1) {
-              const json = JSON.parse(text.substring(s, e + 1));
-              const rows = json.table?.rows || [];
-              const isHeader = String(rows[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
-              const existingIdx = rows.findIndex(r => String(r.c?.[0]?.v || '').trim().toLowerCase() === String(updatedProduct.nombre || '').trim().toLowerCase());
-              if (existingIdx !== -1) {
-                filaDestino = existingIdx + (isHeader ? 1 : 2);
-              } else {
-                const dataCount = isHeader ? Math.max(0, rows.length - 1) : rows.length;
-                filaDestino = dataCount + 2;
+          const cs = JSON.parse(localStorage.getItem('huerta_custom_almacen_prods_v1') || '[]');
+          cs.forEach(p => {
+            const f = Number(p.fila);
+            if (f && f < 900 && f > maxFilaEncontrada) maxFilaEncontrada = f;
+            if (p.nombre && updatedProduct.nombre && p.nombre.trim().toLowerCase() === updatedProduct.nombre.trim().toLowerCase() && f && f < 900) {
+              filaDestino = f;
+            }
+          });
+        } catch(e) {}
+
+        // 3. Consultar Google Sheet como verificación adicional
+        if (SHEET_ID) {
+          try {
+            const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`);
+            if (gvizRes.ok) {
+              const text = await gvizRes.text();
+              const s = text.indexOf('{');
+              const e = text.lastIndexOf('}');
+              if (s !== -1 && e !== -1) {
+                const json = JSON.parse(text.substring(s, e + 1));
+                const rows = json.table?.rows || [];
+                const isHeader = String(rows[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
+                const existingIdx = rows.findIndex(r => String(r.c?.[0]?.v || '').trim().toLowerCase() === String(updatedProduct.nombre || '').trim().toLowerCase());
+                if (existingIdx !== -1) {
+                  const fVal = Number(rows[existingIdx]?.c?.[8]?.v);
+                  filaDestino = (fVal && fVal < 900) ? fVal : (isHeader ? (existingIdx + 3) : (existingIdx + 2));
+                } else {
+                  rows.forEach((r, idx) => {
+                    const fVal = Number(r.c?.[8]?.v) || (isHeader ? (idx + 3) : (idx + 2));
+                    if (fVal < 900 && fVal > maxFilaEncontrada) maxFilaEncontrada = fVal;
+                  });
+                }
               }
             }
+          } catch (e) {
+            console.warn('[SYNC-ALMACEN] Error al consultar fila en Almacen:', e);
           }
-        } catch (e) {
-          console.warn('[SYNC-ALMACEN] Error al consultar fila en Almacen:', e);
+        }
+
+        if (!filaDestino) {
+          filaDestino = Math.max(maxFilaEncontrada, 1) + 1;
         }
       }
 
-      if (!filaDestino) filaDestino = 2;
+      if (!filaDestino || filaDestino < 2) filaDestino = 2;
       updatedProduct.fila = filaDestino;
 
       const stockUds = Number(updatedProduct.stock?.unidades ?? updatedProduct.stock?.['1kg']) || 0;
@@ -1367,7 +1401,8 @@ export default function ControlStock() {
                 dataSlice.forEach((r, idx) => {
                   const nombreP = String(r.c?.[0]?.v || '').trim();
                   if (!nombreP) return;
-                  const filaP = isHeader ? (idx + 2) : (idx + 1);
+                  const filaCol = Number(r.c?.[8]?.v);
+                  const filaP = (filaCol && filaCol < 900) ? filaCol : (isHeader ? (idx + 3) : (idx + 2));
                   const marcaP = String(r.c?.[1]?.v || '').trim();
                   const catP = String(r.c?.[2]?.v || 'Almacén').trim();
                   const subCatP = String(r.c?.[3]?.v || 'Almacén').trim();
@@ -1649,30 +1684,59 @@ export default function ControlStock() {
       ? normalizeSubcategoriaAlmacen(subcategoria || prod?.subcategoria || getSubcategoriaAlmacen(nombre))
       : '';
 
-    // Asignar o consultar número de fila real en la pestaña Almacen del Google Sheet
-    let filaAsignada = prod?.fila || null;
-    if (!filaAsignada && (catPrincipal === 'Almacén' || esCreacionNueva) && SHEET_ID) {
+    // Asignar o consultar número de fila real en la pestaña Almacen del Google Sheet de forma secuencial y sin colisiones
+    let filaAsignada = (prod?.fila && Number(prod.fila) < 900) ? Number(prod.fila) : null;
+    if (!filaAsignada && (catPrincipal === 'Almacén' || esCreacionNueva)) {
+      let maxFilaLocal = 1;
+
+      // 1. Revisar memoria activa de stockData
+      Object.values(current).forEach(p => {
+        const f = Number(p.fila);
+        if (f && f < 900 && f > maxFilaLocal) maxFilaLocal = f;
+        if (norm(p.nombre) === norm(nombre) && f && f < 900) filaAsignada = f;
+      });
+
+      // 2. Revisar lista persistida en localStorage
       try {
-        const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`);
-        if (gvizRes.ok) {
-          const text = await gvizRes.text();
-          const s = text.indexOf('{');
-          const e = text.lastIndexOf('}');
-          if (s !== -1 && e !== -1) {
-            const json = JSON.parse(text.substring(s, e + 1));
-            const rows = json.table?.rows || [];
-            const isHeader = String(rows[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
-            const existingIdx = rows.findIndex(r => String(r.c?.[0]?.v || '').trim().toLowerCase() === nombre.trim().toLowerCase());
-            if (existingIdx !== -1) {
-              filaAsignada = existingIdx + (isHeader ? 1 : 2);
-            } else {
-              const dataCount = isHeader ? Math.max(0, rows.length - 1) : rows.length;
-              filaAsignada = dataCount + 2;
+        const customSaved = JSON.parse(localStorage.getItem('huerta_custom_almacen_prods_v1') || '[]');
+        customSaved.forEach(cp => {
+          const f = Number(cp.fila);
+          if (f && f < 900 && f > maxFilaLocal) maxFilaLocal = f;
+          if (norm(cp.nombre) === norm(nombre) && f && f < 900) filaAsignada = f;
+        });
+      } catch(e) {}
+
+      // 3. Revisar Google Sheet
+      if (!filaAsignada && SHEET_ID) {
+        try {
+          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`);
+          if (gvizRes.ok) {
+            const text = await gvizRes.text();
+            const s = text.indexOf('{');
+            const e = text.lastIndexOf('}');
+            if (s !== -1 && e !== -1) {
+              const json = JSON.parse(text.substring(s, e + 1));
+              const rows = json.table?.rows || [];
+              const isHeader = String(rows[0]?.c?.[0]?.v || '').toLowerCase() === 'nombre';
+              const existingIdx = rows.findIndex(r => String(r.c?.[0]?.v || '').trim().toLowerCase() === nombre.trim().toLowerCase());
+              if (existingIdx !== -1) {
+                const fVal = Number(rows[existingIdx]?.c?.[8]?.v);
+                filaAsignada = (fVal && fVal < 900) ? fVal : (isHeader ? (existingIdx + 3) : (existingIdx + 2));
+              } else {
+                rows.forEach((r, idx) => {
+                  const fVal = Number(r.c?.[8]?.v) || (isHeader ? (idx + 3) : (idx + 2));
+                  if (fVal < 900 && fVal > maxFilaLocal) maxFilaLocal = fVal;
+                });
+              }
             }
           }
+        } catch (errRow) {
+          console.warn('[ALMACEN-ROW] Error al consultar fila disponible en Almacen:', errRow);
         }
-      } catch (errRow) {
-        console.warn('[ALMACEN-ROW] Error al consultar fila disponible en Almacen:', errRow);
+      }
+
+      if (!filaAsignada) {
+        filaAsignada = Math.max(maxFilaLocal, 1) + 1;
       }
     }
     if (!filaAsignada && (catPrincipal === 'Almacén' || esCreacionNueva)) {
