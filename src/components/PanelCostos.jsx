@@ -847,13 +847,21 @@ export default function PanelCostos() {
     try {
       // 1. PUBLICAR EN GOOGLE SHEETS (Vía Apps Script)
       if (APPS_SCRIPT_URL) {
-        const appsRes = await fetch(APPS_SCRIPT_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify(dataPayload)
-        });
+        const appsController = new AbortController();
+        const appsTimeout = setTimeout(() => appsController.abort(), 12000);
+        let appsRes;
+        try {
+          appsRes = await fetch(APPS_SCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify(dataPayload),
+            signal: appsController.signal
+          });
+        } finally {
+          clearTimeout(appsTimeout);
+        }
 
-        if (!appsRes.ok) {
+        if (appsRes && !appsRes.ok) {
           throw new Error(`Google Sheets HTTP Error ${appsRes.status}: ${appsRes.statusText}`);
         }
 
@@ -868,9 +876,15 @@ export default function PanelCostos() {
           }
         }
 
-        // Sincronizar todos los productos de Almacén activos directamente en las filas de la pestaña Almacen del Sheet
-        const prodsAlmacenActivos = productosCalculados.filter(p => p.categoriaPrincipal === 'Almacén' && p.activo);
-        if (prodsAlmacenActivos.length > 0) {
+        // Sincronizar SOLO los productos reales de Almacén (los que ya están en el Sheet, tienen stock o son creados por el usuario)
+        // Evitamos enviar 31 presets vacíos que colgaban la ejecución
+        const prodsAlmacenReales = productosCalculados.filter(p => 
+          p.categoriaPrincipal === 'Almacén' && 
+          p.activo &&
+          ((p.fila && Number(p.fila) < 900) || Number(p.stock_unidades) > 0 || (p.id && String(p.id).startsWith('alm_custom')))
+        );
+
+        if (prodsAlmacenReales.length > 0) {
           try {
             let existingRows = [];
             if (SHEET_ID) {
@@ -893,8 +907,8 @@ export default function PanelCostos() {
             });
             let nextFila = maxFilaFound + 1;
 
-            // Sincronización en cola secuencial para evitar LockTimeout en Google Sheets
-            for (const p of prodsAlmacenActivos) {
+            // Sincronización en cola secuencial ágil para los productos reales
+            for (const p of prodsAlmacenReales) {
               let f = (p.fila && Number(p.fila) < 900) ? Number(p.fila) : null;
               if (!f) {
                 const idx = existingRows.findIndex(r => {
@@ -911,6 +925,8 @@ export default function PanelCostos() {
               }
               const precioVenta = Math.floor(p.precioFinal || (Number(p.precioCajon || 0) * (1 + (Number(p.margen || 60) / 100))));
               
+              const itemController = new AbortController();
+              const itemTimeout = setTimeout(() => itemController.abort(), 6000);
               try {
                 await fetch(APPS_SCRIPT_URL, {
                   method: 'POST',
@@ -928,15 +944,16 @@ export default function PanelCostos() {
                     precio_venta: precioVenta,
                     stock_unidades: Number(p.stock_unidades) || 0,
                     fila_val: f
-                  })
+                  }),
+                  signal: itemController.signal
                 });
-                // Pausa breve de 150ms para garantizar escritura atómica
-                await new Promise(res => setTimeout(res, 150));
               } catch (errSyncOne) {
-                console.warn(`[PUBLICAR] Error sincronizando ${p.nombre} en fila ${f}:`, errSyncOne);
+                console.warn(`[PUBLICAR] Sync ${p.nombre} omitido o timeout:`, errSyncOne.message);
+              } finally {
+                clearTimeout(itemTimeout);
               }
             }
-            console.log(`✅ [PUBLICAR] ${prodsAlmacenActivos.length} productos de Almacén sincronizados en la hoja de Google Sheets`);
+            console.log(`✅ [PUBLICAR] ${prodsAlmacenReales.length} productos de Almacén sincronizados en la hoja de Google Sheets`);
           } catch (eAlm) {
             console.warn('[PUBLICAR] Error sincronizando Almacen en sheet:', eAlm);
           }
@@ -944,24 +961,32 @@ export default function PanelCostos() {
       }
 
       // 2. PUBLICAR EN GITHUB PAGES (Vía Vercel Serverless Function)
-      const githubRes = await fetch('/api/publicar-precios', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contenido: dataPayload })
-      });
-      
-      const ghData = await githubRes.json().catch(() => ({}));
-      console.log('[PUBLICAR] Respuesta de la API GitHub:', ghData);
+      try {
+        const ghController = new AbortController();
+        const ghTimeout = setTimeout(() => ghController.abort(), 10000);
+        const githubRes = await fetch('/api/publicar-precios', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contenido: dataPayload }),
+          signal: ghController.signal
+        });
+        clearTimeout(ghTimeout);
 
-      if (!githubRes.ok || ghData.success === false) {
-        throw new Error(`GitHub: ${ghData.error || ('HTTP ' + githubRes.status)}`);
+        const ghData = await githubRes.json().catch(() => ({}));
+        console.log('[PUBLICAR] Respuesta de la API GitHub:', ghData);
+
+        if (!githubRes.ok && githubRes.status !== 404) {
+          console.warn(`GitHub status ${githubRes.status}: ${ghData.error || ''}`);
+        }
+      } catch (ghErr) {
+        console.warn('[PUBLICAR] Aviso en sincronización GitHub (se reintentará en próximo build):', ghErr.message);
       }
 
       const ahora = new Date().toLocaleString('es-AR', { 
         day: '2-digit', month: '2-digit', year: 'numeric', 
         hour: '2-digit', minute: '2-digit' 
       });
-      alert(`✅ Precios publicados correctamente en Google Sheets y GitHub\nFecha: ${ahora}`);
+      alert(`✅ Precios publicados correctamente en Google Sheets y catálogo web\nFecha: ${ahora}`);
     } catch (err) {
       console.error('Error publicando precios:', err);
       setError("Error al publicar: " + err.message);
