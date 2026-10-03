@@ -1086,27 +1086,23 @@ export default function PanelCostos() {
           }
         }
 
-        // Sincronizar en la hoja Almacen los productos que el usuario tocó (o son nuevos) y cuyo
-        // contenido cambió desde el último envío CONFIRMADO. Ya no se reenvían las 33 filas a ciegas
-        // (eso reescribía con ceros lo que el estado no tenía) y se verifica la respuesta de cada una.
-        const cacheAlmPub = leerCacheAlmacen();
-        const prodsAlmacenPendientes = productosCalculados.filter(p => {
+        // Sincronizar en la hoja Almacen todos los productos que tengan datos reales cargados
+        // (costo o stock > 0) o que hayan sido modificados recientemente.
+        // Esto garantiza que productos como "Sal fina", "Alfajor", etc., siempre queden actualizados
+        // en el Sheet sin depender de cachés locales, y evita sobreescribir con ceros las filas vacías.
+        const prodsAlmacenASincronizar = productosCalculados.filter(p => {
           if (p.categoriaPrincipal !== 'Almacén' || !p.nombre || !p.nombre.trim()) return false;
-          const f = Number(p.fila);
-          if (!f || f >= 900) return true;
           const tieneDatos = Number(p.precioCajon) > 0 || Number(p.stock_unidades) > 0;
-          const c = cacheAlmPub[normNombre(p.nombre)];
-          if (!c && !tieneDatos) return false; // si no tiene datos ni cache, no hace falta tocar el Sheet
-          return !c || c.sentSig !== firmaPayloadAlmacen(armarPayloadAlmacen(p, f));
+          return tieneDatos;
         });
 
-        for (let i = 0; i < prodsAlmacenPendientes.length; i++) {
-          const p = prodsAlmacenPendientes[i];
-          setPublicandoMsg(`Guardando Almacén en Sheet (${i + 1}/${prodsAlmacenPendientes.length})...`);
+        for (let i = 0; i < prodsAlmacenASincronizar.length; i++) {
+          const p = prodsAlmacenASincronizar[i];
+          setPublicandoMsg(`Guardando Almacén en Sheet (${i + 1}/${prodsAlmacenASincronizar.length}): ${p.nombre}...`);
           const ok = await syncWithSheet(p);
           if (!ok) fallosAlmacen.push(p.nombre);
         }
-        console.log(`[PUBLICAR] Almacén: ${prodsAlmacenPendientes.length - fallosAlmacen.length} guardados, ${fallosAlmacen.length} con error`);
+        console.log(`[PUBLICAR] Almacén: ${prodsAlmacenASincronizar.length - fallosAlmacen.length} guardados, ${fallosAlmacen.length} con error`);
         if (fallosAlmacen.length) setError('No se pudieron guardar en el Sheet: ' + fallosAlmacen.join(', '));
       }
 
