@@ -20,6 +20,7 @@ import {
   normalizeSubcategoriaAlmacen,
   ALMACEN_PRESETS
 } from '../data/productUtils';
+import { leerCacheAlmacen, guardarCacheAlmacen, calcularPrecioAlmacen, firmaPayloadAlmacen } from '../utils/almacenCache';
 
 // Configuración de entorno
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
@@ -506,6 +507,7 @@ export default function ControlStock() {
       try {
         const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
         unitsCache[norm(pf.nombre)] = {
+          ...(unitsCache[norm(pf.nombre)] || {}),
           stock: nuevoStock,
           originalLoad: nuevoStock,
           subcategoria: pf.subcategoria || 'Almacén',
@@ -937,7 +939,12 @@ export default function ControlStock() {
         subcategoria: updatedProduct.subcategoria || 'Almacén',
         codigo_ean: updatedProduct.ean || '',
         costo_unitario: updatedProduct.costoUnitario || 0,
-        precio_venta: updatedProduct.precioVenta || Math.round((updatedProduct.costoUnitario || 0) * 1.6),
+        precio_venta: updatedProduct.precioVenta || calcularPrecioAlmacen({
+          precioCajon: (updatedProduct.costoUnitario || 0),
+          cantidadCajon: 1,
+          margen: leerCacheAlmacen()[norm(updatedProduct.nombre)]?.margen,
+          precioMaxManual: leerCacheAlmacen()[norm(updatedProduct.nombre)]?.precioMaxManual
+        }).precioFinal,
         stock_unidades: stockUds,
         fila_val: filaDestino
       };
@@ -949,7 +956,16 @@ export default function ControlStock() {
           body: JSON.stringify(payloadAlmacen)
         });
         if (res.ok) {
-          console.log(`✅ [SYNC ALMACEN] Producto "${updatedProduct.nombre}" sincronizado en fila ${filaDestino}`);
+          let rechazado = false;
+          try { const j = await res.clone().json(); rechazado = j && j.success === false; } catch (e2) {}
+          if (rechazado) {
+            console.error(`[SYNC ALMACEN] El Apps Script RECHAZÓ "${updatedProduct.nombre}"`);
+          } else {
+            guardarCacheAlmacen(updatedProduct.nombre, { sentSig: firmaPayloadAlmacen(payloadAlmacen), fila: filaDestino });
+            console.log(`✅ [SYNC ALMACEN] Producto "${updatedProduct.nombre}" confirmado en fila ${filaDestino}`);
+          }
+        } else {
+          console.error(`[SYNC ALMACEN] HTTP ${res.status} guardando "${updatedProduct.nombre}"`);
         }
       } catch (e) {
         console.error('[SYNC ALMACEN ERROR]', e);
@@ -1836,14 +1852,16 @@ export default function ControlStock() {
     // Guardar en cache local para persistencia inmediata
     try {
       const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
+      const cachePrev = unitsCache[norm(updatedProd.nombre)] || {};
       unitsCache[norm(updatedProd.nombre)] = {
+        ...cachePrev,
         stock: nuevoStock,
         originalLoad: nuevoOrig,
         fecha,
         subcategoria: subCat,
-        costoUnitario,
-        costoTotal,
-        cantidad,
+        costoUnitario: costoUnitario > 0 ? costoUnitario : cachePrev.costoUnitario,
+        costoTotal: costoTotal > 0 ? costoTotal : cachePrev.costoTotal,
+        cantidad: cantidad > 0 ? cantidad : cachePrev.cantidad,
         fila: updatedProd.fila,
         marca: updatedProd.marca
       };
@@ -1889,6 +1907,7 @@ export default function ControlStock() {
                 costoUnitario: costoUnitario > 0 ? costoUnitario : item.costoUnitario,
                 precioCajon: costoTotal > 0 ? costoTotal : item.precioCajon,
                 cantidadCajon: cantidad > 0 ? cantidad : item.cantidadCajon,
+                stock_unidades: nuevoStock,
                 subcategoria: subCat || item.subcategoria,
                 categoriaPrincipal: catPrincipal,
                 unidad: 'unidad'
@@ -1908,6 +1927,7 @@ export default function ControlStock() {
             costoUnitario: costoUnitario,
             precioCajon: costoTotal,
             cantidadCajon: cantidad,
+            stock_unidades: nuevoStock,
             margen: 60,
             precioMaxManual: null,
             activo: true,

@@ -9,6 +9,7 @@ import {
   normalizeSubcategoriaAlmacen,
   ALMACEN_PRESETS 
 } from '../data/productUtils';
+import { normNombre, leerCacheAlmacen, aplicarCacheAProducto, aplicarPendientes } from '../utils/almacenCache';
 
 const GoogleSheetsContext = createContext();
 
@@ -20,7 +21,7 @@ export function GoogleSheetsProvider({ children }) {
   const [pedidos, setPedidos]         = useState(PEDIDOS_MOCK);
   const [productosCostos, setProductosCostos] = useState(() => {
     try {
-      const s = localStorage.getItem('huerta_data_costos_v1_productos') || localStorage.getItem('huerta_data_costos_v31_productos');
+      const s = localStorage.getItem('huerta_data_costos_v31_productos') || localStorage.getItem('huerta_data_costos_v1_productos');
       return s ? JSON.parse(s) : [];
     } catch (e) {
       return [];
@@ -234,22 +235,22 @@ export function GoogleSheetsProvider({ children }) {
                   const catP = String(r.c?.[2]?.v || 'Almacén').trim();
                   const subCatP = String(r.c?.[3]?.v || getSubcategoriaAlmacen(nombreP)).trim();
                   const eanP = String(r.c?.[4]?.v || '').trim();
+                  // costo_unitario del Sheet = costo POR UNIDAD; precio_venta es derivado y NO se importa como tope
                   const costoP = Number(r.c?.[5]?.v) || 0;
-                  const precioVentaP = Number(r.c?.[6]?.v) || 0;
                   const stockUdsP = Number(r.c?.[7]?.v) || 0;
+                  const cacheAlm = leerCacheAlmacen()[normNombre(nombreP)];
 
                   const existing = mapped.find(p => p.nombre?.toLowerCase().trim() === nombreP.toLowerCase());
                   if (existing) {
                     existing.fila = filaP;
                     existing.categoriaPrincipal = 'Almacén';
-                    if (costoP) existing.precioCajon = costoP;
-                    if (precioVentaP) existing.precioMaxManual = precioVentaP;
                     existing.subcategoria = subCatP;
                     existing.marca = marcaP;
                     existing.ean = eanP;
                     existing.stock_unidades = stockUdsP;
+                    aplicarCacheAProducto(existing, cacheAlm, costoP);
                   } else {
-                    mapped.push({
+                    const nuevoAlm = ({
                       id: `alm_${filaP}`,
                       fila: filaP,
                       nombre: nombreP,
@@ -261,11 +262,12 @@ export function GoogleSheetsProvider({ children }) {
                       unidad: 'unidad',
                       precioCajon: costoP,
                       margen: 60,
-                      precioMaxManual: precioVentaP || null,
+                      precioMaxManual: null,
                       activo: true,
                       ean: eanP,
                       stock_unidades: stockUdsP
                     });
+                    mapped.push(aplicarCacheAProducto(nuevoAlm, cacheAlm, costoP));
                   }
                 });
               }
@@ -291,15 +293,13 @@ export function GoogleSheetsProvider({ children }) {
       const allAlmacen = [...customSaved, ...ALMACEN_PRESETS];
       allAlmacen.forEach(alm => {
         const nNorm = (alm.nombre || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        const stockCache = unitsCache[nNorm]?.stock;
+        const cacheAlm = unitsCache[nNorm];
 
         const existing = mapped.find(p => p.nombre?.toLowerCase().trim() === alm.nombre?.toLowerCase().trim());
         if (existing) {
-          if (stockCache !== undefined && (existing.stock_unidades === undefined || existing.stock_unidades === 0)) {
-            existing.stock_unidades = Number(stockCache) || 0;
-          }
+          aplicarCacheAProducto(existing, cacheAlm, 0);
         } else {
-          mapped.push({
+          const nuevoAlm = ({
             id: alm.id || Date.now() + Math.random(),
             nombre: alm.nombre,
             marca: alm.marca || '',
@@ -308,17 +308,23 @@ export function GoogleSheetsProvider({ children }) {
             subcategoria: normalizeSubcategoriaAlmacen(alm.subcategoria || getSubcategoriaAlmacen(alm.nombre)),
             cantidadCajon: 1,
             unidad: 'unidad',
-            precioCajon: alm.precioCajon || 0,
+            // Los productos creados desde Control de Stock guardan costoTotal/costoUnitario (no precioCajon)
+            precioCajon: alm.precioCajon || alm.costoTotal || 0,
             margen: 60,
             precioMaxManual: null,
             activo: true,
             fila: alm.fila || null,
-            stock_unidades: stockCache !== undefined ? Number(stockCache) : 0
+            stock_unidades: alm.stock_unidades || 0
           });
+          mapped.push(aplicarCacheAProducto(nuevoAlm, cacheAlm, Number(alm.costoUnitario) || 0));
         }
       });
 
+      // No pisar ediciones que el usuario hizo mientras esta carga estaba en vuelo
+      aplicarPendientes(mapped);
+
       setProductosCostos(mapped);
+      localStorage.setItem('huerta_data_costos_v31_productos', JSON.stringify(mapped));
       localStorage.setItem('huerta_data_costos_v1_productos', JSON.stringify(mapped));
     } catch (e) {
       console.error('[SHEETS-COSTOS] Error:', e.message);

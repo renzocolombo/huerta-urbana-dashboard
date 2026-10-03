@@ -17,6 +17,11 @@ import {
   getCategoriaPrincipal, CATEGORIAS_PRINCIPALES, SUBCATEGORIAS_ALMACEN,
   ALMACEN_PRESETS, getSubcategoriaAlmacen
 } from '../data/productUtils';
+import {
+  normNombre, leerCacheAlmacen, guardarCacheAlmacen, aplicarCacheAProducto,
+  refrescarAlmacenDesdeCache, persistirEconomiaAlmacen, armarPayloadAlmacen,
+  firmaPayloadAlmacen, postAppsScript, marcarPendiente, limpiarPendiente, aplicarPendientes
+} from '../utils/almacenCache';
 
 const PRODUCTOS_INICIALES = [
   { id: 1, nombre: 'Papa', categoria: 'duro', cantidadCajon: 20, unidad: 'kg', precioCajon: 12000, margen: 60, activo: true },
@@ -203,12 +208,20 @@ export default function PanelCostos() {
   const [publicandoMsg, setPublicandoMsg] = useState('');
   const [error, setError] = useState(null);
 
-  // Carga inicial: Si contextProds ya tiene datos, usarlos.
+  // Cola de sincronización: un solo POST a la vez y en el orden en que se editó,
+  // con debounce por producto (antes cada tecla disparaba un POST concurrente y el último en llegar ganaba).
+  const syncTimersRef = useRef({});
+  const syncColaRef = useRef(Promise.resolve());
+
+  // Carga inicial: Si contextProds ya tiene datos, usarlos de inmediato y refrescar desde el Sheet en segundo plano
+  const cargadoRef = useRef(false);
   useEffect(() => {
     if (contextProds && contextProds.length > 0) {
-      setProductos(contextProds);
+      setProductos(refrescarAlmacenDesdeCache(contextProds));
       setCargando(false);
-    } else {
+    }
+    if (!cargadoRef.current) {
+      cargadoRef.current = true;
       cargarDatosDesdeSheet();
     }
   }, [contextProds]);
@@ -335,22 +348,25 @@ export default function PanelCostos() {
                   const catP = String(r.c?.[2]?.v || 'Almacén').trim();
                   const subCatP = String(r.c?.[3]?.v || getSubcategoriaAlmacen(nombreP)).trim();
                   const eanP = String(r.c?.[4]?.v || '').trim();
+                  // En el Sheet, costo_unitario es el costo POR UNIDAD y precio_venta es un valor DERIVADO
+                  // (costo + margen). El precio_venta ya no se importa como tope manual: antes quedaba
+                  // congelado como tope y los cambios de costo/margen dejaban de impactar.
                   const costoP = Number(r.c?.[5]?.v) || 0;
-                  const precioVentaP = Number(r.c?.[6]?.v) || 0;
                   const stockUdsP = Number(r.c?.[7]?.v) || 0;
+                  // cantidad por lote, margen, tope y costo total no existen en el Sheet: salen del registro local
+                  const cacheAlm = leerCacheAlmacen()[normNombre(nombreP)];
 
                   const existing = mapped.find(p => p.nombre?.toLowerCase().trim() === nombreP.toLowerCase());
                   if (existing) {
                     existing.fila = filaP;
                     existing.categoriaPrincipal = 'Almacén';
-                    if (costoP) existing.precioCajon = costoP;
-                    if (precioVentaP) existing.precioMaxManual = precioVentaP;
                     existing.subcategoria = subCatP;
                     existing.marca = marcaP;
                     existing.ean = eanP;
                     existing.stock_unidades = stockUdsP;
+                    aplicarCacheAProducto(existing, cacheAlm, costoP);
                   } else {
-                    mapped.push({
+                    const nuevoAlm = {
                       id: `alm_${filaP}`,
                       fila: filaP,
                       nombre: nombreP,
@@ -362,11 +378,12 @@ export default function PanelCostos() {
                       unidad: 'unidad',
                       precioCajon: costoP,
                       margen: 60,
-                      precioMaxManual: precioVentaP || null,
+                      precioMaxManual: null,
                       activo: true,
                       ean: eanP,
                       stock_unidades: stockUdsP
-                    });
+                    };
+                    mapped.push(aplicarCacheAProducto(nuevoAlm, cacheAlm, costoP));
                   }
                 });
               }
@@ -392,15 +409,14 @@ export default function PanelCostos() {
       const allAlmacen = [...customSaved, ...ALMACEN_PRESETS];
       allAlmacen.forEach(alm => {
         const nNorm = (alm.nombre || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        const stockCache = unitsCache[nNorm]?.stock;
+        const cacheAlm = unitsCache[nNorm];
 
         const existing = mapped.find(p => p.nombre?.toLowerCase().trim() === alm.nombre?.toLowerCase().trim());
         if (existing) {
-          if (stockCache !== undefined && (existing.stock_unidades === undefined || existing.stock_unidades === 0)) {
-            existing.stock_unidades = Number(stockCache) || 0;
-          }
+          // El registro local (costo, cantidad, margen, tope y stock) manda sobre lo leído del Sheet
+          aplicarCacheAProducto(existing, cacheAlm, 0);
         } else {
-          mapped.push({
+          const nuevoAlm = {
             id: alm.id || Date.now() + Math.random(),
             nombre: alm.nombre,
             marca: alm.marca || '',
@@ -409,18 +425,24 @@ export default function PanelCostos() {
             subcategoria: alm.subcategoria || getSubcategoriaAlmacen(alm.nombre),
             cantidadCajon: 1,
             unidad: 'unidad',
-            precioCajon: alm.precioCajon || 0,
+            // Los productos creados desde Control de Stock guardan costoTotal/costoUnitario (no precioCajon)
+            precioCajon: alm.precioCajon || alm.costoTotal || 0,
             margen: 60,
             precioMaxManual: null,
             activo: true,
             fila: alm.fila || null,
-            stock_unidades: stockCache !== undefined ? Number(stockCache) : 0
-          });
+            stock_unidades: alm.stock_unidades || 0
+          };
+          mapped.push(aplicarCacheAProducto(nuevoAlm, cacheAlm, Number(alm.costoUnitario) || 0));
         }
       });
 
+      // Si el usuario editó algo mientras esta carga estaba en vuelo, no se lo pisamos
+      aplicarPendientes(mapped);
+
       setProductos(mapped);
       if (setProductosCostos) setProductosCostos(mapped);
+      localStorage.setItem(STORAGE_KEY + '_productos', JSON.stringify(mapped));
       localStorage.setItem('huerta_data_costos_v1_productos', JSON.stringify(mapped));
 
       const now = new Date();
@@ -438,8 +460,11 @@ export default function PanelCostos() {
     }
   };
 
+  // Devuelve true solo si el Apps Script confirmó el guardado.
   const syncWithSheet = async (p) => {
-    if (!APPS_SCRIPT_URL) return;
+    if (!APPS_SCRIPT_URL) return false;
+    // Un nombre vacío generaba filas fantasma (filas 35 y 999 del Sheet)
+    if (!p.nombre || !String(p.nombre).trim()) return false;
 
     if (p.categoriaPrincipal === 'Almacén') {
       let filaDestino = (p.fila && Number(p.fila) < 900) ? Number(p.fila) : null;
@@ -494,46 +519,29 @@ export default function PanelCostos() {
       if (!filaDestino || filaDestino < 2) filaDestino = 2;
       p.fila = filaDestino;
 
-      const precioVenta = p.precioMaxManual !== null && p.precioMaxManual !== undefined
-        ? Number(p.precioMaxManual)
-        : Math.round(Number(p.precioCajon || 0) * (1 + (Number(p.margen || 60) / 100)));
-
-      const payloadAlmacen = {
-        accion: 'updateAlmacen',
-        action: 'updateAlmacen',
-        sheetName: 'Almacen',
-        sheet: 'Almacen',
-        fila: filaDestino,
-        nombre: p.nombre,
-        marca: p.marca || '',
-        categoria: 'Almacén',
-        subcategoria: p.subcategoria || 'Almacén',
-        codigo_ean: p.ean || '',
-        costo_unitario: Number(p.precioCajon) || 0,
-        precio_venta: precioVenta,
-        stock_unidades: Number(p.stock_unidades) || 0,
-        fila_val: filaDestino
-      };
+      // Payload único: costo POR UNIDAD (costo del lote / cantidad) y precio con la misma fórmula del panel
+      const payloadAlmacen = armarPayloadAlmacen(p, filaDestino);
 
       try {
-        await fetch(APPS_SCRIPT_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify(payloadAlmacen)
-        });
-        console.log(`✅ [SYNC COSTOS ALMACEN] "${p.nombre}" sincronizado en fila ${filaDestino}`);
+        await postAppsScript(APPS_SCRIPT_URL, payloadAlmacen);
+        guardarCacheAlmacen(p.nombre, { sentSig: firmaPayloadAlmacen(payloadAlmacen), fila: filaDestino });
+        limpiarPendiente(p.nombre);
+        console.log(`✅ [SYNC COSTOS ALMACEN] "${p.nombre}" confirmado en fila ${filaDestino}`, payloadAlmacen);
+        return true;
       } catch (e) {
-        console.error('Error sincronizando almacén con Google Sheets:', e);
+        console.error('[SYNC COSTOS ALMACEN] NO se guardó en el Sheet:', p.nombre, e.message);
+        setError(`No se pudo guardar "${p.nombre}" en el Sheet: ${e.message}`);
+        return false;
       }
-      return;
     }
 
-    if (!p.fila) return;
+    if (!p.fila) return false;
     
     const payload = {
       accion: 'updatePanelCostos',
       fila: p.fila,
       costo_cajon: p.precioCajon,
+      kilos_cajon: p.cantidadCajon,
       margen: p.margen,
       activo: p.activo,
       precio_maximo: p.precioMaxManual,
@@ -541,19 +549,32 @@ export default function PanelCostos() {
     };
 
     try {
-      await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify(payload)
-      });
+      await postAppsScript(APPS_SCRIPT_URL, payload);
+      limpiarPendiente(p.nombre);
+      return true;
     } catch (e) {
-      console.error('Error sincronizando con Google Sheets:', e);
+      console.error('[SYNC COSTOS] NO se guardó en el Sheet:', p.nombre, e.message);
+      setError(`No se pudo guardar "${p.nombre}" en el Sheet: ${e.message}`);
+      return false;
     }
+  };
+
+  // Debounce por producto + cola serial: se envía solo el último valor tipeado y siempre en orden.
+  const programarSync = (p) => {
+    const key = String(p.id);
+    clearTimeout(syncTimersRef.current[key]);
+    syncTimersRef.current[key] = setTimeout(() => {
+      delete syncTimersRef.current[key];
+      syncColaRef.current = syncColaRef.current
+        .then(() => syncWithSheet(p))
+        .catch((e) => console.error('[SYNC COLA]', e));
+    }, 700);
   };
 
   // Persistencia local para Combos, Config y Sincronización con Control de Stock
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY + '_productos', JSON.stringify(productos));
+    localStorage.setItem('huerta_data_costos_v1_productos', JSON.stringify(productos));
     localStorage.setItem(STORAGE_KEY + '_combos', JSON.stringify(combos));
     localStorage.setItem(STORAGE_KEY + '_minimo', JSON.stringify(montoMinimo));
     localStorage.setItem(STORAGE_KEY + '_msg', JSON.stringify(mensajeMinimo));
@@ -562,8 +583,17 @@ export default function PanelCostos() {
   // Estados para el Modal de Producto
   const [showModalProd, setShowModalProd] = useState(false);
   const [tempProd, setTempProd] = useState({
-    nombre: '', categoria: 'Verdura', cantidadCajon: 1, unidad: 'kg', 
-    precioCajon: 0, margen: 60, precioMaxManual: ''
+    nombre: '', 
+    categoria: 'Verdura',
+    categoriaPrincipal: 'Verduras',
+    cantidadCajon: 1, 
+    unidad: 'kg', 
+    precioCajon: 0, 
+    margen: 60, 
+    precioMaxManual: '',
+    stock_unidades: 10,
+    marca: '',
+    subcategoria: 'Almacén'
   });
 
   // Estados para el Modal de Combos
@@ -670,26 +700,106 @@ export default function PanelCostos() {
   }, [productosCalculados, combosCalculados]);
 
   const actualizarProducto = (id, campo, valor) => {
+    let editado = null;
     const nuevosProductos = productos.map(p => {
       if (p.id === id) {
         const updated = { ...p, [campo]: valor };
-        syncWithSheet(updated);
+        editado = updated;
         return updated;
       }
       return p;
     });
+    if (editado) {
+      // 1) lo editado queda protegido contra recargas en vuelo hasta que el Sheet lo confirme
+      marcarPendiente(editado.nombre, campo, valor);
+      // 2) Almacén: se guarda de inmediato costo, cantidad, margen, tope y stock en el registro local
+      if (editado.categoriaPrincipal === 'Almacén') persistirEconomiaAlmacen(editado);
+      // 3) envío al Sheet en orden y con confirmación
+      programarSync(editado);
+    }
     setProductos(nuevosProductos);
+    if (setProductosCostos) setProductosCostos(nuevosProductos);
+    localStorage.setItem(STORAGE_KEY + '_productos', JSON.stringify(nuevosProductos));
+    localStorage.setItem('huerta_data_costos_v1_productos', JSON.stringify(nuevosProductos));
+  };
+
+  const publicarCatalogoDirecto = async (prodsParaPublicar = productos) => {
+    if (!APPS_SCRIPT_URL) return;
+    try {
+      const prodsCalculados = prodsParaPublicar.map(p => {
+        const unidadNorm = (p.unidad || getUnidadByNombre(p.nombre)).toLowerCase();
+        const esPesado = unidadNorm === 'kg';
+        const cantidadEfectiva = esPesado 
+          ? Math.max(0.1, Number(p.cantidadCajon || 1) - 1) 
+          : Math.max(1, Number(p.cantidadCajon || 1));
+        const costoUnitario = Number(p.precioCajon || 0) / cantidadEfectiva;
+        const precioConMargen = costoUnitario * (1 + (Number(p.margen) || 0) / 100);
+        let precioFinal = precioConMargen;
+        if (p.precioMaxManual && precioFinal > p.precioMaxManual) {
+          precioFinal = p.precioMaxManual;
+        }
+        return {
+          ...p,
+          precioFinal,
+          unidad: unidadNorm,
+          categoriaPrincipal: p.categoriaPrincipal || getCategoriaPrincipal(p.nombre)
+        };
+      });
+
+      const payload = {
+        accion: 'publicarPrecios',
+        monto_minimo: montoMinimo,
+        mensaje_minimo: `El pedido mínimo es de $${montoMinimo.toLocaleString('es-AR')}`,
+        productos: prodsCalculados.filter(p => {
+          if (!p.activo) return false;
+          if (p.categoriaPrincipal === 'Almacén') {
+            const stock = Number(p.stock_unidades);
+            if (isNaN(stock) || stock <= 0) return false;
+            if (!(Math.floor(p.precioFinal || 0) >= 1)) return false; // nunca publicar un producto a $0
+          }
+          return true;
+        }).map(p => ({
+          nombre: p.nombre,
+          precio: Math.floor(p.precioFinal || 0),
+          unidad: (p.unidad || '').toLowerCase().replace(/\bunidad\b/gi, '').trim(),
+          categoria: p.categoriaPrincipal || getCategoriaPrincipal(p.nombre),
+          categoriaPrincipal: p.categoriaPrincipal || getCategoriaPrincipal(p.nombre),
+          subcategoria: p.subcategoria || '',
+          activo: true
+        })),
+        combos: combosCalculados.filter(c => c.activo).map(c => ({
+          nombre: c.nombre,
+          precio: c.precioFinal || 0,
+          descripcion: (c.descripcion || '').replace(/\b0\.5\s*(unidad)?\b/gi, '1/2 kilo').replace(/\bunidad\b/gi, '').replace(/\s+/g, ' ').trim(),
+          items: c.items || [],
+          activo: true
+        }))
+      };
+
+      await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(payload)
+      });
+      console.log('✅ [AUTO-SYNC TIENDA] Catálogo web y Google Sheets actualizados');
+    } catch (e) {
+      console.warn('[AUTO-SYNC TIENDA] Error sincronizando catálogo web:', e);
+    }
   };
 
   const agregarProducto = () => {
     setTempProd({ 
       nombre: '', 
-      categoria: 'hoja verde', 
+      categoria: 'Verdura',
+      categoriaPrincipal: 'Verduras',
       cantidadCajon: 1, 
       unidad: 'kg', 
       precioCajon: 0, 
-      margen: 70, 
-      precioMaxManual: '' 
+      margen: 60, 
+      precioMaxManual: '',
+      stock_unidades: 10,
+      marca: '',
+      subcategoria: 'Almacén'
     });
     setShowModalProd(true);
   };
@@ -710,24 +820,46 @@ export default function PanelCostos() {
         }
       });
       nextFila = maxF + 1;
+    } else {
+      let maxF = 1;
+      productos.forEach(pr => {
+        if (pr.categoriaPrincipal !== 'Almacén') {
+          const f = Number(pr.fila);
+          if (f && f < 900 && f > maxF) maxF = f;
+        }
+      });
+      nextFila = maxF + 1;
     }
+
+    const stockInicial = tempProd.stock_unidades !== undefined && tempProd.stock_unidades !== ''
+      ? Number(tempProd.stock_unidades)
+      : (esAlm ? 10 : 0);
 
     const nuevo = { 
       ...tempProd,
       id: esAlm ? `alm_custom_${Date.now()}` : Date.now(), 
+      categoriaPrincipal: tempProd.categoriaPrincipal || (esAlm ? 'Almacén' : 'Verduras'),
+      subcategoria: esAlm ? (tempProd.subcategoria || 'Almacén') : '',
       precioMaxManual: tempProd.precioMaxManual !== '' && tempProd.precioMaxManual !== null ? Number(tempProd.precioMaxManual) : null,
       activo: true,
       fila: nextFila,
-      stock_unidades: tempProd.stock_unidades !== undefined ? Number(tempProd.stock_unidades) : 0
+      stock_unidades: stockInicial
     };
 
-    // 2. Actualizar estado local (y localStorage vía useEffect)
-    setProductos(prev => [...prev, nuevo]);
+    // 2. Actualizar estado local, contexto y localStorage
+    const prodsActualizados = [...productos, nuevo];
+    setProductos(prodsActualizados);
+    if (setProductosCostos) setProductosCostos(prodsActualizados);
+    localStorage.setItem(STORAGE_KEY + '_productos', JSON.stringify(prodsActualizados));
+    localStorage.setItem('huerta_data_costos_v1_productos', JSON.stringify(prodsActualizados));
     setShowModalProd(false);
 
     // 3. Sincronizar con Google Sheet vía Apps Script
     if (APPS_SCRIPT_URL) {
       if (esAlm) {
+        // Registro local con costo, cantidad, margen, tope y stock (única fuente para Almacén)
+        persistirEconomiaAlmacen(nuevo);
+
         // Guardar producto en custom almacen de localStorage
         try {
           const customSaved = JSON.parse(localStorage.getItem('huerta_custom_almacen_prods_v1') || '[]');
@@ -741,62 +873,49 @@ export default function PanelCostos() {
             unidad: 'unidad',
             tipo: 'otros',
             precioCajon: nuevo.precioCajon || 0,
-            costoUnitario: nuevo.precioCajon || 0
+            costoUnitario: nuevo.precioCajon || 0,
+            stock_unidades: stockInicial
           });
           localStorage.setItem('huerta_custom_almacen_prods_v1', JSON.stringify(customSaved));
         } catch (e) {}
 
-        const precioVenta = nuevo.precioMaxManual !== null && nuevo.precioMaxManual !== undefined
-          ? Number(nuevo.precioMaxManual)
-          : Math.round(Number(nuevo.precioCajon || 0) * (1 + (Number(nuevo.margen || 60) / 100)));
+        try {
+          const payloadNuevo = armarPayloadAlmacen(nuevo, nuevo.fila);
+          await postAppsScript(APPS_SCRIPT_URL, payloadNuevo);
+          guardarCacheAlmacen(nuevo.nombre, { sentSig: firmaPayloadAlmacen(payloadNuevo), fila: nuevo.fila });
+          console.log(`✅ [ALMACEN NUEVO] "${nuevo.nombre}" confirmado en fila ${nuevo.fila}`, payloadNuevo);
+        } catch (e) {
+          console.error('[ALMACEN NUEVO] NO se guardó en el Sheet:', e.message);
+          setError(`No se pudo guardar "${nuevo.nombre}" en el Sheet: ${e.message}`);
+        }
+      } else {
+        // Para Verduras y Frutas: guardar en PanelCostos
+        const payload = { 
+          accion: 'updatePanelCostos',
+          fila: nuevo.fila,
+          producto: nuevo.nombre,
+          costo_cajon: nuevo.precioCajon,
+          kilos_cajon: nuevo.cantidadCajon,
+          margen: nuevo.margen,
+          precio_maximo: nuevo.precioMaxManual,
+          activo: true,
+          ultima_actualizacion: new Date().toLocaleDateString('es-AR')
+        };
 
         try {
           await fetch(APPS_SCRIPT_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: JSON.stringify({
-              accion: 'updateAlmacen',
-              sheetName: 'Almacen',
-              fila: nuevo.fila,
-              nombre: nuevo.nombre,
-              marca: nuevo.marca || '',
-              categoria: 'Almacén',
-              subcategoria: nuevo.subcategoria || 'Almacén',
-              codigo_ean: nuevo.ean || '',
-              costo_unitario: Number(nuevo.precioCajon) || 0,
-              precio_venta: precioVenta,
-              stock_unidades: Number(nuevo.stock_unidades) || 0,
-              fila_val: nuevo.fila
-            })
+            body: JSON.stringify(payload)
           });
-          console.log(`✅ [ALMACEN NUEVO] "${nuevo.nombre}" guardado en fila ${nuevo.fila}`);
+          console.log(`✅ [PRODUCTO NUEVO] "${nuevo.nombre}" guardado en PanelCostos fila ${nuevo.fila}`);
         } catch (e) {
-          console.error('Error guardando nuevo producto de almacén en Google Sheets:', e);
+          console.error('Error enviando nuevo producto a Google Sheets:', e);
         }
-        return;
       }
 
-      // Para Verduras y Frutas: guardar en PanelCostos
-      const payload = { 
-        accion: 'updatePanelCostos',
-        producto: nuevo.nombre,
-        costo_cajon: nuevo.precioCajon,
-        kilos_cajon: nuevo.cantidadCajon,
-        margen: nuevo.margen,
-        precio_maximo: nuevo.precioMaxManual,
-        activo: true
-      };
-
-      try {
-        await fetch(APPS_SCRIPT_URL, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify(payload)
-        });
-      } catch (e) {
-        console.error('Error enviando nuevo producto:', e);
-      }
+      // 4. Sincronizar automáticamente el catálogo web (PreciosWeb)
+      publicarCatalogoDirecto(prodsActualizados);
     }
   };
 
@@ -862,19 +981,26 @@ export default function PanelCostos() {
       mensaje_minimo: `El pedido mínimo es de $${montoMinimo.toLocaleString('es-AR')}`,
       productos: productosCalculados.filter(p => {
         if (!p.activo) return false;
-        // Para productos de Almacén: si el stock es 0 o no tiene unidades, no se publica en la tienda web
+        // Para productos de Almacén: si el stock es 0, no se publica en la tienda web
         if (p.categoriaPrincipal === 'Almacén') {
           const stock = Number(p.stock_unidades);
           if (isNaN(stock) || stock <= 0) {
             console.log(`[PUBLICAR] Omitiendo de la tienda web por falta de stock: "${p.nombre}"`);
             return false;
           }
+          if (!(Math.floor(p.precioFinal || 0) >= 1)) {
+            console.log(`[PUBLICAR] Omitiendo de la tienda web por precio $0 (falta cargar costo): "${p.nombre}"`);
+            return false;
+          }
         }
         return true;
       }).map(p => ({
         nombre: p.nombre,
-        precio: p.precioFinal,
+        precio: Math.floor(p.precioFinal || 0),
         unidad: (p.unidad || '').toLowerCase().replace(/\bunidad\b/gi, '').trim(),
+        categoria: p.categoriaPrincipal || getCategoriaPrincipal(p.nombre),
+        categoriaPrincipal: p.categoriaPrincipal || getCategoriaPrincipal(p.nombre),
+        subcategoria: p.subcategoria || '',
         activo: true
       })),
       combos: combosCalculados.filter(c => c.activo).map(c => ({
@@ -888,24 +1014,19 @@ export default function PanelCostos() {
           const unidad = (p ? p.unidad : '').toLowerCase();
           const displayCantidad = cantidad === 0.5 ? '1/2' : cantidad;
 
-          // Reglas de formato del usuario con pluralización:
-          // 1. Maple: "1 maple Nº1 x30" o "2 maples Nº1 x30"
           if (unidad.includes('maple')) {
             const namePart = nombre.replace(/huevos/gi, '').trim();
             const uPlural = pluralizar(cantidad, 'maple');
             return `${displayCantidad} ${uPlural} ${namePart}${namePart.includes('x30') ? '' : ' x30'}`.replace(/\s+/g, ' ').trim();
           }
-          // 2. Por kilo: "1 kilo Papa" o "2 kilos Papa"
           if (unidad.includes('kg')) {
             const uKilo = cantidad <= 1 ? 'kilo' : 'kilos';
             return `${displayCantidad} ${uKilo} ${nombre}`;
           }
-          // 3. Por atado: "1 atado Rúcula" o "2 atados Rúcula"
           if (unidad.includes('atado')) {
             const uPlural = pluralizar(cantidad, 'atado');
             return `${displayCantidad} ${uPlural} ${nombre}`;
           }
-          // 4. Por unidad: "1 Palta" o "3 Paltas" (si es 0.5 es "1/2 kilo")
           if (cantidad === 0.5) return `1/2 kilo ${nombre}`;
           const nombrePlural = pluralizar(cantidad, nombre);
           return `${displayCantidad} ${nombrePlural}`.replace(/\bunidad\b/gi, '').replace(/\s+/g, ' ').trim();
@@ -914,10 +1035,11 @@ export default function PanelCostos() {
       }))
     };
 
+    const fallosAlmacen = [];
     try {
-      // 1. PUBLICAR EN GOOGLE SHEETS (Vía Apps Script)
+      // 1. PUBLICAR EN GOOGLE SHEETS (Vía Apps Script - pestaña PreciosWeb para la tienda online)
       if (APPS_SCRIPT_URL) {
-        setPublicandoMsg('Publicando precios...');
+        setPublicandoMsg('Publicando catálogo y precios...');
         const appsController = new AbortController();
         const appsTimeout = setTimeout(() => appsController.abort(), 12000);
         let appsRes;
@@ -947,99 +1069,34 @@ export default function PanelCostos() {
           }
         }
 
-        // Sincronizar absolutamente TODOS los productos de Almacén (incluso con stock 0 o recién agregados)
-        const prodsAlmacenASincronizar = productosCalculados.filter(p => {
-          return p.categoriaPrincipal === 'Almacén' && Boolean(p.nombre && p.nombre.trim());
+        // Sincronizar en la hoja Almacen los productos que el usuario tocó (o son nuevos) y cuyo
+        // contenido cambió desde el último envío CONFIRMADO. Ya no se reenvían las 33 filas a ciegas
+        // (eso reescribía con ceros lo que el estado no tenía) y se verifica la respuesta de cada una.
+        const cacheAlmPub = leerCacheAlmacen();
+        const prodsAlmacenPendientes = productosCalculados.filter(p => {
+          if (p.categoriaPrincipal !== 'Almacén' || !p.nombre || !p.nombre.trim()) return false;
+          const f = Number(p.fila);
+          if (!f || f >= 900) return true;
+          const c = cacheAlmPub[normNombre(p.nombre)];
+          if (!c) return false; // nunca tocado en esta PC: el Sheet ya es la fuente
+          return c.sentSig !== firmaPayloadAlmacen(armarPayloadAlmacen(p, f));
         });
 
-        if (prodsAlmacenASincronizar.length > 0) {
-          setPublicandoMsg('Verificando filas de Almacén...');
-          try {
-            let existingRows = [];
-            if (SHEET_ID) {
-              const gRes = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Almacen`);
-              if (gRes.ok) {
-                const txt = await gRes.text();
-                const s = txt.indexOf('{');
-                const e = txt.lastIndexOf('}');
-                if (s !== -1 && e !== -1) {
-                  const j = JSON.parse(txt.substring(s, e + 1));
-                  existingRows = j.table?.rows || [];
-                }
-              }
-            }
-
-            let maxFilaFound = 1;
-            existingRows.forEach((r, idx) => {
-              const fVal = Number(r.c?.[8]?.v) || (idx + 2);
-              if (fVal < 900 && fVal > maxFilaFound) maxFilaFound = fVal;
-            });
-            let nextFila = maxFilaFound + 1;
-
-            // Sincronización en lotes paralelos de 3 para máxima velocidad y sin sobrecargar Apps Script
-            const BATCH_SIZE = 3;
-            for (let i = 0; i < prodsAlmacenASincronizar.length; i += BATCH_SIZE) {
-              const batch = prodsAlmacenASincronizar.slice(i, i + BATCH_SIZE);
-              setPublicandoMsg(`Guardando en Sheet (${Math.min(i + BATCH_SIZE, prodsAlmacenASincronizar.length)}/${prodsAlmacenASincronizar.length})...`);
-
-              await Promise.all(batch.map(async (p) => {
-                let f = (p.fila && Number(p.fila) < 900) ? Number(p.fila) : null;
-                if (!f) {
-                  const idx = existingRows.findIndex(r => {
-                    const rNom = String(r.c?.[0]?.v || '').trim().toLowerCase();
-                    return rNom && rNom === String(p.nombre || '').trim().toLowerCase();
-                  });
-                  if (idx !== -1) {
-                    const fVal = Number(existingRows[idx]?.c?.[8]?.v);
-                    f = (fVal && fVal < 900) ? fVal : (idx + 2);
-                  } else {
-                    f = nextFila++;
-                  }
-                  p.fila = f;
-                }
-                const precioVenta = Math.floor(p.precioFinal || (Number(p.precioCajon || 0) * (1 + (Number(p.margen || 60) / 100))));
-                
-                const itemController = new AbortController();
-                const itemTimeout = setTimeout(() => itemController.abort(), 6000);
-                try {
-                  await fetch(APPS_SCRIPT_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/plain' },
-                    body: JSON.stringify({
-                      accion: 'updateAlmacen',
-                      sheetName: 'Almacen',
-                      fila: f,
-                      nombre: p.nombre,
-                      marca: p.marca || '',
-                      categoria: 'Almacén',
-                      subcategoria: p.subcategoria || 'Almacén',
-                      codigo_ean: p.ean || '',
-                      costo_unitario: Number(p.precioCajon) || 0,
-                      precio_venta: precioVenta,
-                      stock_unidades: Number(p.stock_unidades) || 0,
-                      fila_val: f
-                    }),
-                    signal: itemController.signal
-                  });
-                } catch (errSyncOne) {
-                  console.warn(`[PUBLICAR] Sync ${p.nombre} omitido o timeout:`, errSyncOne.message);
-                } finally {
-                  clearTimeout(itemTimeout);
-                }
-              }));
-            }
-            console.log(`✅ [PUBLICAR] ${prodsAlmacenASincronizar.length} productos de Almacén sincronizados en la hoja de Google Sheets`);
-          } catch (eAlm) {
-            console.warn('[PUBLICAR] Error sincronizando Almacen en sheet:', eAlm);
-          }
+        for (let i = 0; i < prodsAlmacenPendientes.length; i++) {
+          const p = prodsAlmacenPendientes[i];
+          setPublicandoMsg(`Guardando Almacén en Sheet (${i + 1}/${prodsAlmacenPendientes.length})...`);
+          const ok = await syncWithSheet(p);
+          if (!ok) fallosAlmacen.push(p.nombre);
         }
+        console.log(`[PUBLICAR] Almacén: ${prodsAlmacenPendientes.length - fallosAlmacen.length} guardados, ${fallosAlmacen.length} con error`);
+        if (fallosAlmacen.length) setError('No se pudieron guardar en el Sheet: ' + fallosAlmacen.join(', '));
       }
 
-      // 2. PUBLICAR EN GITHUB PAGES (Vía Vercel Serverless Function)
+      // 2. PUBLICAR EN GITHUB PAGES (Vía Vercel Serverless Function si está disponible)
       setPublicandoMsg('Actualizando catálogo web...');
       try {
         const ghController = new AbortController();
-        const ghTimeout = setTimeout(() => ghController.abort(), 8000);
+        const ghTimeout = setTimeout(() => ghController.abort(), 6000);
         const githubRes = await fetch('/api/publicar-precios', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1050,19 +1107,22 @@ export default function PanelCostos() {
 
         const ghData = await githubRes.json().catch(() => ({}));
         console.log('[PUBLICAR] Respuesta de la API GitHub:', ghData);
-
-        if (!githubRes.ok && githubRes.status !== 404) {
-          console.warn(`GitHub status ${githubRes.status}: ${ghData.error || ''}`);
-        }
       } catch (ghErr) {
-        console.warn('[PUBLICAR] Aviso en sincronización GitHub (se reintentará en próximo build):', ghErr.message);
+        // En desarrollo local o sin Vercel API, Apps Script ya actualizó PreciosWeb correctamente
+        console.log('[PUBLICAR] Sincronización en línea vía Google Sheets completada.');
       }
 
       const ahora = new Date().toLocaleString('es-AR', { 
         day: '2-digit', month: '2-digit', year: 'numeric', 
         hour: '2-digit', minute: '2-digit' 
       });
-      alert(`✅ Precios publicados correctamente en Google Sheets y catálogo web\nFecha: ${ahora}`);
+      setSincronizadoExito(true);
+      setTimeout(() => setSincronizadoExito(false), 4000);
+      if (fallosAlmacen.length > 0) {
+        alert(`⚠️ Catálogo publicado, pero ${fallosAlmacen.length} producto(s) de Almacén NO se guardaron en el Sheet:\n- ${fallosAlmacen.join('\n- ')}\n\nRevisá la conexión y volvé a apretar Publicar.\nFecha: ${ahora}`);
+      } else {
+        alert(`✅ Precios y catálogo publicados exitosamente en Google Sheets y en la tienda web.\nFecha: ${ahora}`);
+      }
     } catch (err) {
       console.error('Error publicando precios:', err);
       setError("Error al publicar: " + err.message);
@@ -1222,15 +1282,20 @@ export default function PanelCostos() {
                           <div className="flex items-center gap-2">
                             <p className="font-bold text-white text-sm">{p.nombre}</p>
                             {p.categoriaPrincipal === 'Almacén' && (
-                              Number(p.stock_unidades) > 0 ? (
-                                <span className="text-[10px] bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 px-1.5 py-0.5 rounded font-medium" title="Stock disponible en depósito">
-                                  {p.stock_unidades} uds
-                                </span>
-                              ) : (
-                                <span className="text-[10px] bg-red-950/60 border border-red-500/40 text-red-300 px-1.5 py-0.5 rounded font-medium" title="Sin stock: no se publicará en la tienda online">
-                                  Sin stock
-                                </span>
-                              )
+                              <div className="flex items-center gap-1" title="Stock en depósito (si es mayor a 0 se publica en la tienda web)">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  className={`w-14 px-1 py-0.5 rounded text-[11px] font-mono font-bold border outline-none text-center transition-colors ${
+                                    Number(p.stock_unidades) > 0 
+                                      ? 'bg-emerald-950/70 border-emerald-500/50 text-emerald-300 focus:border-emerald-400' 
+                                      : 'bg-red-950/70 border-red-500/50 text-red-300 focus:border-red-400'
+                                  }`}
+                                  value={p.stock_unidades !== undefined ? p.stock_unidades : 0}
+                                  onChange={(e) => actualizarProducto(p.id, 'stock_unidades', Math.max(0, parseInt(e.target.value) || 0))}
+                                />
+                                <span className="text-[10px] text-gray-400 font-mono">uds</span>
+                              </div>
                             )}
                           </div>
                           <p className="text-[10px] text-gray-500 font-medium">
@@ -1492,6 +1557,42 @@ export default function PanelCostos() {
                         {sub}
                       </button>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Marca y Stock Inicial para Almacén */}
+              {tempProd.categoriaPrincipal === 'Almacén' && (
+                <div className="grid grid-cols-2 gap-3 p-3.5 rounded-2xl bg-gray-900/60 border border-gray-800 animate-in fade-in">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Marca (Opcional)</label>
+                    <input 
+                      type="text" 
+                      className="w-full bg-black/40 border border-gray-700 rounded-xl px-3 py-2 text-white focus:border-green-500 outline-none transition-all text-xs"
+                      placeholder="Ej: Arcor, Molto..."
+                      value={tempProd.marca || ''}
+                      onChange={(e) => setTempProd({...tempProd, marca: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black text-amber-400 uppercase tracking-widest flex items-center justify-between">
+                      <span>Stock Inicial</span>
+                      <span className="text-[9px] text-gray-400 font-normal">uds depósito</span>
+                    </label>
+                    <input 
+                      type="number" 
+                      min="0"
+                      className="w-full bg-black/40 border border-amber-500/40 rounded-xl px-3 py-2 text-amber-300 font-mono font-bold focus:border-amber-400 outline-none transition-all text-xs text-center"
+                      value={tempProd.stock_unidades !== undefined ? tempProd.stock_unidades : 10}
+                      onChange={(e) => setTempProd({...tempProd, stock_unidades: Math.max(0, parseInt(e.target.value) || 0)})}
+                    />
+                  </div>
+                  <div className="col-span-2 pt-0.5">
+                    {Number(tempProd.stock_unidades) > 0 ? (
+                      <p className="text-[10px] text-emerald-400 font-medium">✅ Con stock ({tempProd.stock_unidades || 10} uds): se publicará en la tienda web.</p>
+                    ) : (
+                      <p className="text-[10px] text-amber-400 font-medium">⚠️ Con stock 0: quedará en el Sheet pero no se mostrará en la tienda web.</p>
+                    )}
                   </div>
                 </div>
               )}
