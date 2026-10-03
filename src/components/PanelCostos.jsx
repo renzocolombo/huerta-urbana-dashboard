@@ -703,7 +703,21 @@ export default function PanelCostos() {
     let editado = null;
     const nuevosProductos = productos.map(p => {
       if (p.id === id) {
-        const updated = { ...p, [campo]: valor };
+        let updated = { ...p, [campo]: valor };
+        
+        // Sincronización automática de stock para Almacén:
+        // Cuando el usuario ingresa la cantidad de unidades compradas (lote),
+        // se actualiza automáticamente el stock en depósito para que no quede en 0
+        // y se publique de inmediato en la tienda web y en el Sheet.
+        if (p.categoriaPrincipal === 'Almacén') {
+          if (campo === 'cantidadCajon') {
+            const cant = Math.max(1, Number(valor) || 1);
+            updated.stock_unidades = cant;
+          } else if (campo === 'precioCajon' && (!updated.stock_unidades || Number(updated.stock_unidades) <= 0)) {
+            updated.stock_unidades = Math.max(1, Number(updated.cantidadCajon) || 1);
+          }
+        }
+
         editado = updated;
         return updated;
       }
@@ -712,6 +726,9 @@ export default function PanelCostos() {
     if (editado) {
       // 1) lo editado queda protegido contra recargas en vuelo hasta que el Sheet lo confirme
       marcarPendiente(editado.nombre, campo, valor);
+      if (editado.stock_unidades !== undefined) {
+        marcarPendiente(editado.nombre, 'stock_unidades', editado.stock_unidades);
+      }
       // 2) Almacén: se guarda de inmediato costo, cantidad, margen, tope y stock en el registro local
       if (editado.categoriaPrincipal === 'Almacén') persistirEconomiaAlmacen(editado);
       // 3) envío al Sheet en orden y con confirmación
@@ -1077,9 +1094,10 @@ export default function PanelCostos() {
           if (p.categoriaPrincipal !== 'Almacén' || !p.nombre || !p.nombre.trim()) return false;
           const f = Number(p.fila);
           if (!f || f >= 900) return true;
+          const tieneDatos = Number(p.precioCajon) > 0 || Number(p.stock_unidades) > 0;
           const c = cacheAlmPub[normNombre(p.nombre)];
-          if (!c) return false; // nunca tocado en esta PC: el Sheet ya es la fuente
-          return c.sentSig !== firmaPayloadAlmacen(armarPayloadAlmacen(p, f));
+          if (!c && !tieneDatos) return false; // si no tiene datos ni cache, no hace falta tocar el Sheet
+          return !c || c.sentSig !== firmaPayloadAlmacen(armarPayloadAlmacen(p, f));
         });
 
         for (let i = 0; i < prodsAlmacenPendientes.length; i++) {
