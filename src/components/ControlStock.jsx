@@ -25,7 +25,7 @@ import { leerCacheAlmacen, guardarCacheAlmacen, calcularPrecioAlmacen, firmaPayl
 // Configuración de entorno
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
 const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_KEY || import.meta.env.VITE_GOOGLE_API_KEY;
-const APPS_SCRIPT_URL = import.meta.env.VITE_APPS_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbzWSEDWrGAkLRPj_ugVL6ZIm9qZBxLu93VemH6eSXv0xx6RNSyakn-4q2T7Ik6TpyX7/exec';
+import { APPS_SCRIPT_URL } from '../utils/appsScriptUrl';
 
 const COSTOS_KEY = 'huerta_data_costos_v1_productos';
 const LIQUIDACION_KEY = 'huerta_data_stock_liquidacion_v1';
