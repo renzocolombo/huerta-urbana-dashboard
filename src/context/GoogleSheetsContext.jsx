@@ -335,17 +335,59 @@ export function GoogleSheetsProvider({ children }) {
     if (!SHEET_ID) return;
     try {
       const rows = await fetchRowsFromSheet('ControlStock');
-      if (!rows || rows.length < 2) return;
+      const parsedRows = [];
+      if (rows && rows.length >= 2) {
+        const headers = rows[0].map(h => String(h || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ /g, '_'));
+        rows.slice(1).forEach((row, index) => {
+          const obj = { fila: index + 2 };
+          headers.forEach((h, i) => { obj[h] = row[i] || ''; });
+          parsedRows.push(obj);
+        });
+      }
 
-      const headers = rows[0].map(h => String(h || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ /g, '_'));
-      const parsedRows = rows.slice(1).map((row, index) => {
-        const obj = { fila: index + 2 };
-        headers.forEach((h, i) => { obj[h] = row[i] || ''; });
-        return obj;
-      });
+      // También leer la pestaña Almacen del Google Sheet para incluir productos de almacén
+      try {
+        const rowsAlm = await fetchRowsFromSheet('Almacen');
+        if (rowsAlm && rowsAlm.length > 0) {
+          const isHeader = String(rowsAlm[0]?.[0] || '').toLowerCase() === 'nombre';
+          const dataSlice = isHeader ? rowsAlm.slice(1) : rowsAlm;
+          dataSlice.forEach((r, idx) => {
+            const nombreP = String(r[0] || '').trim();
+            if (!nombreP) return;
+            const filaCol = Number(r[8]);
+            const filaP = (filaCol && filaCol < 900) ? filaCol : (isHeader ? (idx + 3) : (idx + 2));
+            const marcaP = String(r[1] || '').trim();
+            const catP = String(r[2] || 'Almacén').trim();
+            const subCatP = String(r[3] || 'Almacén').trim();
+            const eanP = String(r[4] || '').trim();
+            const costoP = Number(r[5]) || 0;
+            const precioVentaP = Number(r[6]) || 0;
+            const stockUdsP = Number(r[7]) || 0;
+
+            parsedRows.push({
+              fila: filaP,
+              producto: nombreP,
+              nombre: nombreP,
+              marca: marcaP,
+              tipo: 'otros',
+              categoriaPrincipal: 'Almacén',
+              subcategoria: subCatP,
+              codigo_ean: eanP,
+              costo_unitario: costoP,
+              precio_venta: precioVentaP,
+              stock_500g: 0,
+              stock_1kg: stockUdsP,
+              stock_unidades: stockUdsP,
+              unidades: stockUdsP,
+              esUnidad: true
+            });
+          });
+        }
+      } catch (eAlm) {
+        console.warn('[SHEETS-STOCK] No se pudo leer Almacen:', eAlm);
+      }
       
-      // Nota: Aquí se guarda como Array crudo del Sheet.
-      // ControlStock.jsx se encargará de indexarlo como objeto si es necesario.
+      // Guardar lista unificada en el contexto
       setStockData(parsedRows);
     } catch (e) {
       console.error('[SHEETS-STOCK] Error:', e);

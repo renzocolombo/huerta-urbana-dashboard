@@ -402,6 +402,12 @@ export default function ControlStock() {
     return () => clearInterval(interval);
   }, [refocusScanner, stockSubTab]);
 
+  useEffect(() => {
+    if (stockSubTab === 'identificar') {
+      cargarStockDesdeSheet();
+    }
+  }, [stockSubTab]);
+
   // ── Scanner: procesar código escaneado ───────────────────────────────────
   const procesarEscaneo = useCallback((rawCode) => {
     if (!rawCode) return;
@@ -2121,9 +2127,14 @@ export default function ControlStock() {
         </button>
       </div>
 
-      {/* ── SUB-PESTAÑA: PRODUCTOS A ESCANEAR (identificación EAN, no toca stock) ── */}
+      {/* ── SUB-PESTAÑA: PENDIENTES DE ALMACÉN (escaneo e ingreso al stock real) ── */}
       {stockSubTab === 'identificar' && (
-        <PendientesIdentificar stockData={stockData} />
+        <PendientesIdentificar
+          stockData={stockData}
+          setStockData={setStockData}
+          syncWithSheet={syncWithSheet}
+          cargarStockDesdeSheet={cargarStockDesdeSheet}
+        />
       )}
 
       {/* ── SUB-PESTAÑA: PESAR Y ETIQUETAR ──────────────────────────────── */}

@@ -36,10 +36,11 @@ export function extraerCodigos(raw) {
 }
 
 /**
- * Productos a escanear: muestra cuántas unidades del stock oficial (definido en
- * Panel de Costos) ya fueron identificadas con un EAN.
+ * Pendientes de Almacén: muestra los productos cargados en Panel de Costos
+ * y permite escanear cada unidad (individualmente o por lote de códigos)
+ * para que ingrese directamente al stock real del depósito.
  */
-export default function PendientesIdentificar({ stockData }) {
+export default function PendientesIdentificar({ stockData, setStockData, syncWithSheet, cargarStockDesdeSheet }) {
   const [version, setVersion] = useState(0);
   const [abierto, setAbierto] = useState(null); // nombre normalizado
   const [filtro, setFiltro] = useState('pendientes');
@@ -47,18 +48,94 @@ export default function PendientesIdentificar({ stockData }) {
   const [feedback, setFeedback] = useState(null); // { tipo: 'ok'|'error', texto }
   const [excedido, setExcedido] = useState(null); // { codigos: [] }
   const [codigoInput, setCodigoInput] = useState('');
+  const [refrescando, setRefrescando] = useState(false);
   const inputRef = useRef(null);
 
+  // Lista unificada: stockData + productos recién cargados en Panel de Costos
   const productos = useMemo(() => {
     const ident = getIdentificaciones();
-    return Object.values(stockData || {})
+    const map = new Map();
+
+    // 1. Productos en stockData
+    Object.values(stockData || {})
       .filter(esProductoAlmacenUnidad)
-      .map((p) => {
+      .forEach((p) => {
+        const k = normNombre(p.nombre);
         const total = stockOficialUnidades(p);
-        const scans = ident[normNombre(p.nombre)]?.scans || [];
-        return { prod: p, total, identificadas: scans.length, scans, key: normNombre(p.nombre) };
-      })
-      .sort((a, b) => a.prod.nombre.localeCompare(b.prod.nombre));
+        const scans = ident[k]?.scans || [];
+        map.set(k, {
+          prod: p,
+          total,
+          identificadas: scans.length,
+          scans,
+          key: k
+        });
+      });
+
+    // 2. Productos guardados en Panel de Costos (para que aparezcan de inmediato apenas se carguen)
+    try {
+      const guardados = JSON.parse(
+        localStorage.getItem('huerta_data_costos_v31_productos') ||
+        localStorage.getItem('huerta_data_costos_v1_productos') ||
+        '[]'
+      );
+      guardados.forEach((cp) => {
+        if (!cp || !cp.nombre) return;
+        const esAlm = cp.categoriaPrincipal === 'Almacén' || cp.esUnidad || (cp.id && String(cp.id).startsWith('alm_'));
+        if (!esAlm) return;
+        const k = normNombre(cp.nombre);
+        const totalCostos = Math.max(0, Math.round(Number(cp.stock_unidades ?? cp.cantidadCajon) || 0));
+        const scans = ident[k]?.scans || [];
+
+        if (map.has(k)) {
+          const entry = map.get(k);
+          if (totalCostos > entry.total) {
+            entry.total = totalCostos;
+          }
+        } else if (totalCostos > 0 || scans.length > 0) {
+          map.set(k, {
+            prod: {
+              ...cp,
+              stock: { '500g': 0, '1kg': scans.length, unidades: scans.length },
+              originalLoad: { '500g': 0, '1kg': totalCostos, unidades: totalCostos }
+            },
+            total: totalCostos,
+            identificadas: scans.length,
+            scans,
+            key: k
+          });
+        }
+      });
+    } catch (e) {}
+
+    // 3. Productos custom de almacén
+    try {
+      const customSaved = JSON.parse(localStorage.getItem('huerta_custom_almacen_prods_v1') || '[]');
+      customSaved.forEach((cp) => {
+        if (!cp || !cp.nombre) return;
+        const k = normNombre(cp.nombre);
+        const totalCostos = Math.max(0, Math.round(Number(cp.stock_unidades ?? cp.cantidadCajon) || 0));
+        const scans = ident[k]?.scans || [];
+        if (map.has(k)) {
+          const entry = map.get(k);
+          if (totalCostos > entry.total) entry.total = totalCostos;
+        } else if (totalCostos > 0 || scans.length > 0) {
+          map.set(k, {
+            prod: {
+              ...cp,
+              stock: { '500g': 0, '1kg': scans.length, unidades: scans.length },
+              originalLoad: { '500g': 0, '1kg': totalCostos, unidades: totalCostos }
+            },
+            total: totalCostos,
+            identificadas: scans.length,
+            scans,
+            key: k
+          });
+        }
+      });
+    } catch (e) {}
+
+    return Array.from(map.values()).sort((a, b) => a.prod.nombre.localeCompare(b.prod.nombre));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stockData, version]);
 
@@ -82,103 +159,73 @@ export default function PendientesIdentificar({ stockData }) {
     return () => clearInterval(t);
   }, [actual?.key, enfocar]);
 
-  const procesar = (raw, forzar = false) => {
-    const codigos = extraerCodigos(raw);
-    if (codigos.length === 0 || !actual) return;
+  // Suma unidades ingresadas directamente al stock real y al Sheet
+  const sumarAlStockReal = (cantidad) => {
+    if (!actual || cantidad <= 0) return;
+    const k = actual.key;
+    const prodRef = actual.prod;
 
-    let exitosos = 0;
-    let ultimoRes = null;
-    const errores = [];
-    const excedentesPendientes = [];
+    // 1. Actualizar stockData local y sincronizar con Sheet
+    if (setStockData) {
+      setStockData((prev) => {
+        const next = { ...(prev || {}) };
+        let targetId = prodRef.id && next[prodRef.id] ? prodRef.id : null;
+        if (!targetId) {
+          targetId = Object.keys(next).find((id) => normNombre(next[id]?.nombre) === k);
+        }
 
-    for (const code of codigos) {
-      if (!esCodigoEan(code)) {
-        errores.push(`"${code}" no es un código EAN válido`);
-        continue;
-      }
-      const otro = productoDeCodigo(code, actual.prod.nombre);
-      if (otro) {
-        errores.push(`Código ${code} ya asociado a "${otro}"`);
-        continue;
-      }
-
-      const res = registrarEscaneo(actual.prod, code, { forzar });
-      if (res.status === 'excedido') {
-        excedentesPendientes.push(code);
-        continue;
-      }
-
-      exitosos++;
-      ultimoRes = res;
-    }
-
-    if (excedentesPendientes.length > 0) {
-      setExcedido({ codigos: excedentesPendientes, code: excedentesPendientes[0] });
-    } else {
-      setExcedido(null);
-    }
-
-    if (exitosos > 0) {
-      setVersion((v) => v + 1);
-    }
-
-    // Feedback claro según cantidad de códigos
-    if (exitosos > 0 && errores.length === 0 && excedentesPendientes.length === 0) {
-      if (codigos.length === 1) {
-        setFeedback({
-          tipo: 'ok',
-          texto: ultimoRes?.completo
-            ? `✅ ${actual.prod.nombre}: ${ultimoRes.identificadas} de ${ultimoRes.total} — ¡todas las unidades identificadas!`
-            : `✅ Código ${codigos[0]} cargado (+1 producto). ${ultimoRes?.identificadas || 0} de ${ultimoRes?.total || 0} identificadas.`
-        });
-      } else {
-        setFeedback({
-          tipo: 'ok',
-          texto: `✅ Se cargaron ${exitosos} códigos (cada uno contó como 1 producto). ${ultimoRes?.identificadas || 0} de ${ultimoRes?.total || 0} identificadas.`
-        });
-      }
-    } else if (exitosos > 0) {
-      setFeedback({
-        tipo: 'ok',
-        texto: `✅ Se cargaron ${exitosos} producto(s). ${errores.length ? '⚠️ Omitidos: ' + errores.join(', ') : ''} ${excedentesPendientes.length ? `(${excedentesPendientes.length} exceden stock)` : ''}`
-      });
-    } else if (errores.length > 0) {
-      setFeedback({
-        tipo: 'error',
-        texto: errores.join(' | ')
+        if (targetId && next[targetId]) {
+          const item = next[targetId];
+          const stockActual = Number(item.stock?.unidades ?? item.stock?.['1kg']) || 0;
+          const nuevoStock = stockActual + cantidad;
+          const updated = {
+            ...item,
+            stock: {
+              ...item.stock,
+              '1kg': nuevoStock,
+              unidades: nuevoStock
+            },
+            originalLoad: {
+              ...item.originalLoad,
+              '1kg': Math.max(Number(item.originalLoad?.unidades ?? item.originalLoad?.['1kg']) || 0, actual.total, nuevoStock),
+              unidades: Math.max(Number(item.originalLoad?.unidades ?? item.originalLoad?.['1kg']) || 0, actual.total, nuevoStock)
+            }
+          };
+          next[targetId] = updated;
+          if (syncWithSheet) syncWithSheet(updated);
+          return next;
+        } else {
+          const nuevoId = prodRef.id || `alm_${k.replace(/\s+/g, '_')}`;
+          const updated = {
+            ...prodRef,
+            id: nuevoId,
+            stock: { '500g': 0, '1kg': cantidad, unidades: cantidad },
+            originalLoad: { '500g': 0, '1kg': Math.max(actual.total, cantidad), unidades: Math.max(actual.total, cantidad) },
+            esUnidad: true,
+            categoriaPrincipal: 'Almacén'
+          };
+          next[nuevoId] = updated;
+          if (syncWithSheet) syncWithSheet(updated);
+          return next;
+        }
       });
     }
-  };
 
-  const ejecutarCarga = (texto) => {
-    const valor = texto !== undefined ? texto : codigoInput;
-    if (!valor || !valor.trim()) return;
-    setCodigoInput('');
-    procesar(valor);
-    enfocar();
-  };
-
-  const onKeyDown = (e) => {
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    ejecutarCarga(codigoInput);
-  };
-
-  const forzarExcedentes = () => {
-    if (!excedido) return;
-    const lista = excedido.codigos || [excedido.code];
-    procesar(lista.join(' '), true);
-    setExcedido(null);
-    enfocar();
-  };
-
-  const deshacer = () => {
-    if (!actual) return;
-    deshacerUltimoEscaneo(actual.prod);
-    setExcedido(null);
-    setFeedback(null);
-    setVersion((v) => v + 1);
-    enfocar();
+    // 2. Persistir en huerta_stock_units_cache_v1
+    try {
+      const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
+      const prevStock = Number(unitsCache[k]?.stock) || 0;
+      const nuevoStock = prevStock + cantidad;
+      unitsCache[k] = {
+        ...(unitsCache[k] || {}),
+        stock: nuevoStock,
+        originalLoad: Math.max(Number(unitsCache[k]?.originalLoad) || 0, actual.total, nuevoStock),
+        subcategoria: prodRef.subcategoria || 'Almacén',
+        unidad: prodRef.unidad || 'unidad',
+        fecha: new Date().toISOString().split('T')[0]
+      };
+      localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
+    } catch (e) {}
   };
 
   // ── Vista de detalle de un producto ───────────────────────────────────────
@@ -320,11 +367,22 @@ export default function PendientesIdentificar({ stockData }) {
   // ── Lista ─────────────────────────────────────────────────────────────────
   return (
     <div className="bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 border border-white/10 rounded-3xl p-5 space-y-4">
-      <div>
-        <h3 className="text-white font-black text-sm uppercase tracking-wider">Productos a escanear</h3>
-        <p className="text-[11px] text-gray-500 mt-0.5">
-          El stock lo define Panel de Costos. Acá identificás cada unidad con su código EAN.
-        </p>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-white font-black text-sm uppercase tracking-wider">Productos por ingresar al stock</h3>
+          <p className="text-[11px] text-gray-500 mt-0.5">
+            Cargá los códigos EAN para que las unidades compradas en Panel de Costos ingresen al stock real.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={refrescarManual}
+          disabled={refrescando}
+          className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition cursor-pointer"
+          title="Refrescar datos del Sheet y Costos"
+        >
+          <RotateCcw size={14} className={refrescando ? 'animate-spin text-green-400' : ''} />
+        </button>
       </div>
 
       <div className="flex gap-2">
@@ -351,7 +409,7 @@ export default function PendientesIdentificar({ stockData }) {
       {visibles.length === 0 ? (
         <div className="py-10 text-center text-gray-500 text-xs font-bold flex flex-col items-center gap-2">
           <Package size={28} className="text-gray-600" />
-          {filtro === 'pendientes' ? 'No hay productos pendientes de identificar 🎉' : 'No hay productos de Almacén.'}
+          {filtro === 'pendientes' ? 'No hay productos pendientes de ingresar 🎉' : 'No hay productos de Almacén cargados.'}
         </div>
       ) : (
         <div className="space-y-2">
@@ -363,12 +421,12 @@ export default function PendientesIdentificar({ stockData }) {
                 className="w-full text-left p-3.5 rounded-2xl bg-black/30 hover:bg-black/50 border border-white/5 hover:border-green-500/30 transition cursor-pointer">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-white text-sm font-bold truncate">{prod.nombre}</span>
-                  <span className={`text-xs font-black font-mono shrink-0 ${identificadas > total ? 'text-amber-400' : completo ? 'text-emerald-400' : 'text-gray-300'}`}>
-                    {total === 0 ? 'Sin stock' : `${identificadas} de ${total} identificadas`}
+                  <span className={`text-xs font-black font-mono shrink-0 ${identificadas > total ? 'text-amber-400' : completo ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {total === 0 ? 'Sin cantidad cargada' : `${identificadas} de ${total} ingresadas`}
                   </span>
                 </div>
                 <div className="h-1.5 mt-2 rounded-full bg-black/50 overflow-hidden">
-                  <div className={`h-full ${completo ? 'bg-emerald-500' : 'bg-green-600'}`} style={{ width: `${pct}%` }} />
+                  <div className={`h-full ${completo ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${pct}%` }} />
                 </div>
               </button>
             );
