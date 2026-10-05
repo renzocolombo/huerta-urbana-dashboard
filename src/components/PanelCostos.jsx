@@ -15,7 +15,7 @@ const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
 import { 
   getTipoByNombre, getUnidadByNombre, pluralizar, 
   getCategoriaPrincipal, CATEGORIAS_PRINCIPALES, SUBCATEGORIAS_ALMACEN,
-  ALMACEN_PRESETS, getSubcategoriaAlmacen
+  ALMACEN_PRESETS, getSubcategoriaAlmacen, saveTipoOverride
 } from '../data/productUtils';
 import {
   normNombre, leerCacheAlmacen, guardarCacheAlmacen, aplicarCacheAProducto,
@@ -1323,6 +1323,22 @@ export default function PanelCostos() {
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-2">
                             <p className="font-bold text-white text-sm">{p.nombre}</p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nuevoTipo = p.categoria === 'duro' ? 'blando' : 'duro';
+                                saveTipoOverride(p.nombre, nuevoTipo);
+                                actualizarProducto(p.id, 'categoria', nuevoTipo);
+                              }}
+                              className={`px-1.5 py-0.5 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer flex items-center gap-1 select-none border shrink-0 ${
+                                p.categoria === 'duro'
+                                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30'
+                                  : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30'
+                              }`}
+                              title={`Clasificado como ${p.categoria === 'duro' ? 'DURO' : 'BLANDO'}. Hacé clic para alternar`}
+                            >
+                              <span>{p.categoria === 'duro' ? '🥔 Duro' : '🥬 Blando'}</span>
+                            </button>
                             {p.categoriaPrincipal === 'Almacén' && (
                               <div className="flex items-center gap-1" title="Stock en depósito (si es mayor a 0 se publica en la tienda web)">
                                 <input
