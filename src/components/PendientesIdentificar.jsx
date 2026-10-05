@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { ScanBarcode, ArrowLeft, AlertTriangle, CheckCircle2, Search, RotateCcw, Package } from 'lucide-react';
+import { ScanBarcode, ArrowLeft, AlertTriangle, CheckCircle2, Search, RotateCcw, Package, PlusCircle, ArrowRight } from 'lucide-react';
 import { esCodigoEan } from '../data/productUtils';
 import {
   getIdentificaciones, esProductoAlmacenUnidad, stockOficialUnidades, normNombre,
@@ -10,8 +10,34 @@ const limpiar = (raw) =>
   String(raw || '').replace(/[\r\n\x00-\x1F]/g, '').trim().replace(/^\][a-zA-Z0-9]{2,3}/, '').replace(/^\*+|\*+$/g, '').trim();
 
 /**
+ * Extrae uno o varios códigos EAN ingresados juntos (separados por espacios, comas, saltos de línea o pegados).
+ */
+export function extraerCodigos(raw) {
+  if (!raw) return [];
+  const str = String(raw).trim();
+  const piezas = str.split(/[\r\n\t,;\s]+/).map(limpiar).filter(Boolean);
+  const resultado = [];
+
+  for (const pieza of piezas) {
+    // Si vienen pegados de a 13 dígitos
+    if (pieza.length % 13 === 0 && pieza.length >= 26 && /^\d+$/.test(pieza)) {
+      for (let i = 0; i < pieza.length; i += 13) {
+        resultado.push(pieza.slice(i, i + 13));
+      }
+    } else if (pieza.length % 14 === 0 && pieza.length >= 28 && /^\d+$/.test(pieza)) {
+      for (let i = 0; i < pieza.length; i += 14) {
+        resultado.push(pieza.slice(i, i + 14));
+      }
+    } else {
+      resultado.push(pieza);
+    }
+  }
+  return resultado;
+}
+
+/**
  * Productos a escanear: muestra cuántas unidades del stock oficial (definido en
- * Panel de Costos) ya fueron identificadas con un EAN. Escanear NO modifica stock.
+ * Panel de Costos) ya fueron identificadas con un EAN.
  */
 export default function PendientesIdentificar({ stockData }) {
   const [version, setVersion] = useState(0);
@@ -19,7 +45,8 @@ export default function PendientesIdentificar({ stockData }) {
   const [filtro, setFiltro] = useState('pendientes');
   const [busqueda, setBusqueda] = useState('');
   const [feedback, setFeedback] = useState(null); // { tipo: 'ok'|'error', texto }
-  const [excedido, setExcedido] = useState(null); // { code }
+  const [excedido, setExcedido] = useState(null); // { codigos: [] }
+  const [codigoInput, setCodigoInput] = useState('');
   const inputRef = useRef(null);
 
   const productos = useMemo(() => {
@@ -56,39 +83,93 @@ export default function PendientesIdentificar({ stockData }) {
   }, [actual?.key, enfocar]);
 
   const procesar = (raw, forzar = false) => {
-    const code = limpiar(raw);
-    if (!code || !actual) return;
-    if (!esCodigoEan(code)) {
-      setFeedback({ tipo: 'error', texto: `"${code}" no parece un código EAN de producto (8 a 14 dígitos).` });
-      return;
+    const codigos = extraerCodigos(raw);
+    if (codigos.length === 0 || !actual) return;
+
+    let exitosos = 0;
+    let ultimoRes = null;
+    const errores = [];
+    const excedentesPendientes = [];
+
+    for (const code of codigos) {
+      if (!esCodigoEan(code)) {
+        errores.push(`"${code}" no es un código EAN válido`);
+        continue;
+      }
+      const otro = productoDeCodigo(code, actual.prod.nombre);
+      if (otro) {
+        errores.push(`Código ${code} ya asociado a "${otro}"`);
+        continue;
+      }
+
+      const res = registrarEscaneo(actual.prod, code, { forzar });
+      if (res.status === 'excedido') {
+        excedentesPendientes.push(code);
+        continue;
+      }
+
+      exitosos++;
+      ultimoRes = res;
     }
-    const otro = productoDeCodigo(code, actual.prod.nombre);
-    if (otro) {
-      setFeedback({ tipo: 'error', texto: `El código ${code} ya está asociado a "${otro}". No se asoció a este producto.` });
-      return;
+
+    if (excedentesPendientes.length > 0) {
+      setExcedido({ codigos: excedentesPendientes, code: excedentesPendientes[0] });
+    } else {
+      setExcedido(null);
     }
-    const res = registrarEscaneo(actual.prod, code, { forzar });
-    if (res.status === 'excedido') {
-      setExcedido({ code });
-      setFeedback(null);
-      return;
+
+    if (exitosos > 0) {
+      setVersion((v) => v + 1);
     }
-    setExcedido(null);
-    setVersion((v) => v + 1);
-    setFeedback({
-      tipo: 'ok',
-      texto: res.completo
-        ? `✅ ${actual.prod.nombre}: ${res.identificadas} de ${res.total} — todas identificadas`
-        : `${code} asociado — ${res.identificadas} de ${res.total}`
-    });
+
+    // Feedback claro según cantidad de códigos
+    if (exitosos > 0 && errores.length === 0 && excedentesPendientes.length === 0) {
+      if (codigos.length === 1) {
+        setFeedback({
+          tipo: 'ok',
+          texto: ultimoRes?.completo
+            ? `✅ ${actual.prod.nombre}: ${ultimoRes.identificadas} de ${ultimoRes.total} — ¡todas las unidades identificadas!`
+            : `✅ Código ${codigos[0]} cargado (+1 producto). ${ultimoRes?.identificadas || 0} de ${ultimoRes?.total || 0} identificadas.`
+        });
+      } else {
+        setFeedback({
+          tipo: 'ok',
+          texto: `✅ Se cargaron ${exitosos} códigos (cada uno contó como 1 producto). ${ultimoRes?.identificadas || 0} de ${ultimoRes?.total || 0} identificadas.`
+        });
+      }
+    } else if (exitosos > 0) {
+      setFeedback({
+        tipo: 'ok',
+        texto: `✅ Se cargaron ${exitosos} producto(s). ${errores.length ? '⚠️ Omitidos: ' + errores.join(', ') : ''} ${excedentesPendientes.length ? `(${excedentesPendientes.length} exceden stock)` : ''}`
+      });
+    } else if (errores.length > 0) {
+      setFeedback({
+        tipo: 'error',
+        texto: errores.join(' | ')
+      });
+    }
+  };
+
+  const ejecutarCarga = (texto) => {
+    const valor = texto !== undefined ? texto : codigoInput;
+    if (!valor || !valor.trim()) return;
+    setCodigoInput('');
+    procesar(valor);
+    enfocar();
   };
 
   const onKeyDown = (e) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    const v = e.currentTarget.value;
-    e.currentTarget.value = '';
-    procesar(v);
+    ejecutarCarga(codigoInput);
+  };
+
+  const forzarExcedentes = () => {
+    if (!excedido) return;
+    const lista = excedido.codigos || [excedido.code];
+    procesar(lista.join(' '), true);
+    setExcedido(null);
+    enfocar();
   };
 
   const deshacer = () => {
@@ -109,7 +190,7 @@ export default function PendientesIdentificar({ stockData }) {
       <div className="bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 border border-white/10 rounded-3xl p-5 space-y-4">
         <button
           type="button"
-          onClick={() => { setAbierto(null); setFeedback(null); setExcedido(null); }}
+          onClick={() => { setAbierto(null); setFeedback(null); setExcedido(null); setCodigoInput(''); }}
           className="flex items-center gap-1.5 text-xs font-bold text-gray-400 hover:text-white cursor-pointer"
         >
           <ArrowLeft size={14} /> Volver a la lista
@@ -142,47 +223,70 @@ export default function PendientesIdentificar({ stockData }) {
         )}
 
         {excedido && (
-          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/40 text-amber-200 text-xs space-y-2">
+          <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/40 text-amber-200 text-xs space-y-2.5">
             <div className="flex items-start gap-2 font-semibold">
-              <AlertTriangle size={15} className="shrink-0 mt-0.5 text-amber-400" />
+              <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-400" />
               <span>
-                Ya están identificadas las {total} unidades de stock oficial. Si entró mercadería nueva,
-                actualizá primero Panel de Costos. ¿Registrar el código {excedido.code} igual como excedente?
+                Ya están identificadas las {total} unidades del stock oficial. ¿Registrar {excedido.codigos?.length > 1 ? `los ${excedido.codigos.length} códigos restantes` : `el código ${excedido.code}`} de todos modos como excedente?
               </span>
             </div>
             <div className="flex gap-2">
-              <button type="button" onClick={() => { procesar(excedido.code, true); enfocar(); }}
-                className="px-3 py-1.5 rounded-lg bg-amber-500 text-black font-bold cursor-pointer">Registrar igual</button>
+              <button type="button" onClick={forzarExcedentes}
+                className="px-3.5 py-1.5 rounded-xl bg-amber-500 text-black font-black text-xs cursor-pointer shadow-md hover:bg-amber-400 transition">
+                Registrar igual
+              </button>
               <button type="button" onClick={() => { setExcedido(null); enfocar(); }}
-                className="px-3 py-1.5 rounded-lg bg-white/10 text-gray-200 font-bold cursor-pointer">Cancelar</button>
+                className="px-3.5 py-1.5 rounded-xl bg-white/10 text-gray-200 font-bold text-xs cursor-pointer hover:bg-white/20 transition">
+                Cancelar
+              </button>
             </div>
           </div>
         )}
 
         {feedback && (
-          <div className={`p-3 rounded-xl border text-xs font-semibold ${feedback.tipo === 'ok'
+          <div className={`p-3.5 rounded-2xl border text-xs font-semibold leading-relaxed ${feedback.tipo === 'ok'
             ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
             : 'bg-red-500/10 border-red-500/30 text-red-300'}`}>
             {feedback.texto}
           </div>
         )}
 
-        <div className="relative">
-          <ScanBarcode size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-green-400" />
-          <input
-            ref={inputRef}
-            type="text"
-            onKeyDown={onKeyDown}
-            onBlur={() => setTimeout(enfocar, 150)}
-            placeholder={`🔫 Escaneá una unidad de "${prod.nombre}"`}
-            className="w-full bg-black/40 border border-green-500/40 focus:border-green-400 text-white text-sm font-mono rounded-2xl pl-11 pr-4 py-3.5 outline-none"
-            autoComplete="off"
-            spellCheck={false}
-          />
+        {/* ── CAMPO DE ENTRADA CON BOTÓN VISIBLE DE CARGA ────────────────── */}
+        <div className="space-y-1.5">
+          <div className="flex gap-2 items-stretch">
+            <div className="relative flex-1">
+              <ScanBarcode size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-emerald-400" />
+              <input
+                ref={inputRef}
+                type="text"
+                value={codigoInput}
+                onChange={(e) => setCodigoInput(e.target.value)}
+                onKeyDown={onKeyDown}
+                onBlur={() => setTimeout(enfocar, 150)}
+                placeholder={`🔫 Escaneá o ingresá código(s) de "${prod.nombre}"`}
+                className="w-full bg-black/40 border border-emerald-500/40 focus:border-emerald-400 text-white text-sm font-mono rounded-2xl pl-12 pr-4 py-3.5 outline-none transition shadow-inner"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => ejecutarCarga()}
+              disabled={!codigoInput.trim()}
+              className={`px-5 py-3.5 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all duration-200 cursor-pointer shadow-lg select-none ${
+                codigoInput.trim()
+                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950/50 scale-[1.02] active:scale-[0.98]'
+                  : 'bg-white/5 text-gray-500 border border-white/5 opacity-50 cursor-not-allowed'
+              }`}
+            >
+              <PlusCircle size={16} />
+              <span>Cargar</span>
+            </button>
+          </div>
+          <p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest px-1">
+            Podés escanear con pistola (Enter automático), escribir o pegar varios códigos: cada código suma 1 producto.
+          </p>
         </div>
-        <p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">
-          Escanear solo identifica: no suma ni resta stock.
-        </p>
 
         {scans.length > 0 && (
           <div className="space-y-1.5">

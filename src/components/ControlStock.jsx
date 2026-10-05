@@ -1519,6 +1519,25 @@ export default function ControlStock() {
       }
     });
 
+    // Productos de Almacén que existen en el Sheet (cargados desde Panel de Costos,
+    // incluso desde otro dispositivo) pero no están en el catálogo local: se agregan
+    // para que aparezcan en "Por identificar" y en el stock real.
+    (remoteData || []).forEach(r => {
+      const nom = String(r.producto || r.nombre || '').trim();
+      if (!nom || !r.esUnidad) return;
+      if (catalog.some(p => norm(p.nombre) === norm(nom))) return;
+      catalog.push({
+        id: `alm_sheet_${norm(nom).replace(/\s+/g, '_')}`,
+        nombre: nom,
+        marca: r.marca || '',
+        fila: r.fila,
+        categoriaPrincipal: 'Almacén',
+        subcategoria: r.subcategoria || 'Almacén',
+        unidad: 'unidad',
+        tipo: 'otros'
+      });
+    });
+
     // Leer cache local de unidades cargadas para persistir entre sesiones
     let unitsCache = {};
     try {
@@ -1551,8 +1570,15 @@ export default function ControlStock() {
         let orig_unidades = orig_1k;
 
         if (cachedUnits && esUnidad) {
-          stock_unidades = cachedUnits.stock;
-          orig_unidades = cachedUnits.originalLoad || stock_unidades;
+          const remoteStockUds = remoteInfo.stock_unidades !== undefined ? Number(remoteInfo.stock_unidades) : null;
+          // Si el Sheet o Panel de Costos trae stock mayor a 0 y el cache local tenía 0, priorizar el stock del Sheet
+          if (remoteStockUds !== null && remoteStockUds > 0 && (!cachedUnits.stock || Number(cachedUnits.stock) <= 0)) {
+            stock_unidades = remoteStockUds;
+            orig_unidades = Math.max(stock_unidades, Number(cachedUnits.originalLoad) || stock_unidades);
+          } else {
+            stock_unidades = cachedUnits.stock !== undefined ? Number(cachedUnits.stock) : (remoteStockUds ?? stock_1k);
+            orig_unidades = cachedUnits.originalLoad || stock_unidades;
+          }
         }
 
         newStockData[p.id] = {

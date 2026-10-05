@@ -64,7 +64,7 @@ export function registrarEscaneo(prod, code, { forzar = false } = {}) {
   entry.scans = [...entry.scans, { code: c, ts: new Date().toISOString(), excedente: entry.scans.length >= total }];
   data[key] = entry;
   saveIdentificaciones(data);
-  sincronizarMapaEan(prod, entry, total);
+  sincronizarMapaEan(prod, entry);
   return { status: 'ok', identificadas: entry.scans.length, total, completo: entry.scans.length >= total };
 }
 
@@ -81,11 +81,11 @@ export function deshacerUltimoEscaneo(prod) {
 }
 
 /**
- * Cuando el producto queda 100% identificado, todos sus códigos pasan al mapa EAN
- * global, que es el que usa el armado de pedidos para reconocerlo automáticamente.
+ * Asocia todos los códigos escaneados al mapa EAN global para que el armado
+ * de pedidos y el escaneo general lo reconozcan de inmediato.
  */
-function sincronizarMapaEan(prod, entry, total) {
-  if (total <= 0 || entry.scans.length < total) return;
+function sincronizarMapaEan(prod, entry) {
+  if (!entry?.scans || entry.scans.length === 0) return;
   const codigos = new Set(entry.scans.map((s) => s.code));
   codigos.forEach((code) => {
     asociarEanAProducto(code, {
