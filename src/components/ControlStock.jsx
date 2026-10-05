@@ -3634,21 +3634,19 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd, onOp
           <h4 className="font-black text-white text-[14px] uppercase tracking-wide truncate leading-tight flex-1" title={product.nombre}>{product.nombre}</h4>
           
           {/* Botón rápido 1-clic para alternar Duro / Blando */}
-          {!esUnidad && (
-            <button
-              type="button"
-              onClick={toggleTipoDirecto}
-              className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer border flex items-center gap-1 select-none shrink-0 shadow-sm ${
-                product.tipo === 'duro'
-                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 hover:bg-amber-500/30'
-                  : 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/30'
-              }`}
-              title={`Clasificado como ${product.tipo === 'duro' ? 'DURO' : 'BLANDO'}. Hacé clic para cambiar a ${product.tipo === 'duro' ? 'BLANDO' : 'DURO'}`}
-            >
-              <span>{product.tipo === 'duro' ? '🥔' : '🥬'}</span>
-              <span>{product.tipo === 'duro' ? 'Duro' : 'Blando'}</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={toggleTipoDirecto}
+            className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer border flex items-center gap-1 select-none shrink-0 shadow-sm ${
+              product.tipo === 'duro'
+                ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 hover:bg-amber-500/30'
+                : 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/30'
+            }`}
+            title={`Clasificado como ${product.tipo === 'duro' ? 'DURO' : 'BLANDO'}. Hacé clic para cambiar a ${product.tipo === 'duro' ? 'BLANDO' : 'DURO'}`}
+          >
+            <span>{product.tipo === 'duro' ? '🥔' : '🥬'}</span>
+            <span>{product.tipo === 'duro' ? 'Duro' : 'Blando'}</span>
+          </button>
         </div>
 
         <div className="space-y-3">
