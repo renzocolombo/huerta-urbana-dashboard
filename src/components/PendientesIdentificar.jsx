@@ -167,7 +167,8 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
         const guardados = Array.isArray(parsed) ? parsed : [];
         guardados.forEach((cp) => {
           if (!cp || !cp.nombre) return;
-          const esAlm = cp.categoriaPrincipal === 'Almacén' || cp.esUnidad || (cp.id && String(cp.id).startsWith('alm_'));
+          const catP = cp.categoriaPrincipal || getCategoriaPrincipal(cp.nombre);
+          const esAlm = catP !== 'Verduras' && catP !== 'Frutas' && (catP === 'Almacén' || (cp.id && String(cp.id).startsWith('alm_')));
           if (!esAlm) return;
           const k = normNombre(cp.nombre);
           if (!k) return;

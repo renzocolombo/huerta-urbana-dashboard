@@ -240,16 +240,22 @@ export function GoogleSheetsProvider({ children }) {
                   const stockUdsP = Number(r.c?.[7]?.v) || 0;
                   const cacheAlm = leerCacheAlmacen()[normNombre(nombreP)];
 
+                  const catAuto = getCategoriaPrincipal(nombreP);
                   const existing = mapped.find(p => p.nombre?.toLowerCase().trim() === nombreP.toLowerCase());
                   if (existing) {
-                    existing.fila = filaP;
-                    existing.categoriaPrincipal = 'Almacén';
-                    existing.subcategoria = subCatP;
-                    existing.marca = marcaP;
-                    existing.ean = eanP;
-                    existing.stock_unidades = stockUdsP;
-                    aplicarCacheAProducto(existing, cacheAlm, costoP);
-                  } else {
+                    if (catAuto === 'Verduras' || catAuto === 'Frutas') {
+                      existing.categoriaPrincipal = catAuto;
+                      existing.subcategoria = '';
+                    } else {
+                      existing.fila = filaP;
+                      existing.categoriaPrincipal = 'Almacén';
+                      existing.subcategoria = subCatP;
+                      existing.marca = marcaP;
+                      existing.ean = eanP;
+                      existing.stock_unidades = stockUdsP;
+                      aplicarCacheAProducto(existing, cacheAlm, costoP);
+                    }
+                  } else if (catAuto !== 'Verduras' && catAuto !== 'Frutas') {
                     const nuevoAlm = ({
                       id: `alm_${filaP}`,
                       fila: filaP,

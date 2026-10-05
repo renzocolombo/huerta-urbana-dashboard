@@ -468,15 +468,16 @@ export default function ControlStock() {
         stockDataRef.current = newData;
         syncWithSheet(updatedProd);
       } else {
-        const catPrincipal = pf.categoriaPrincipal || getCategoriaPrincipal(pf.nombre) || 'Almacén';
-        const subCat = normalizeSubcategoriaAlmacen(pf.subcategoria || 'Almacén');
-        const isAlm = catPrincipal === 'Almacén' || subCat !== '';
+        const autoCat = getCategoriaPrincipal(pf.nombre);
+        const catPrincipal = (autoCat === 'Verduras' || autoCat === 'Frutas') ? autoCat : (pf.categoriaPrincipal || autoCat || 'Almacén');
+        const subCat = catPrincipal === 'Almacén' ? normalizeSubcategoriaAlmacen(pf.subcategoria || 'Almacén') : '';
+        const isAlm = catPrincipal === 'Almacén';
         
         let assignedFila = pf.fila;
         if (!assignedFila && isAlm) {
           let maxF = 1;
           Object.values(current).forEach(p => {
-            if (p.categoriaPrincipal === 'Almacén' || p.esUnidad || (p.id && String(p.id).startsWith('alm_'))) {
+            if ((p.categoriaPrincipal === 'Almacén' || (p.id && String(p.id).startsWith('alm_'))) && p.categoriaPrincipal !== 'Verduras' && p.categoriaPrincipal !== 'Frutas') {
               const f = Number(p.fila);
               if (f && f < 900 && f > maxF) maxF = f;
             }
@@ -491,16 +492,16 @@ export default function ControlStock() {
           nombre: pf.nombre,
           marca: pf.marca || '',
           fila: assignedFila || null,
-          categoriaPrincipal: 'Almacén',
+          categoriaPrincipal: catPrincipal,
           subcategoria: subCat,
-          tipo: 'otros',
-          unidad: 'unidad',
+          tipo: isAlm ? 'otros' : (getTipoOverride(pf.nombre) || getTipoByNombre(pf.nombre)),
+          unidad: pf.unidad || getUnidadByNombre(pf.nombre),
           esUnidad: true,
           stock: { '500g': 0, '1kg': nuevoStock, unidades: nuevoStock },
           originalLoad: { '500g': 0, '1kg': nuevoStock, unidades: nuevoStock },
           mermaKg: 0,
-          totalDays: 30,
-          urgentDays: 5
+          totalDays: isAlm ? 30 : 15,
+          urgentDays: isAlm ? 5 : 2
         };
         const newData = { ...current, [newPid]: updatedProd };
         setStockData(newData);
@@ -861,7 +862,9 @@ export default function ControlStock() {
   const syncWithSheet = async (updatedProduct) => {
     if (!APPS_SCRIPT_URL) return;
 
-    const isAlmacen = updatedProduct.categoriaPrincipal === 'Almacén' || updatedProduct.esUnidad || (updatedProduct.id && String(updatedProduct.id).startsWith('alm_'));
+    const autoCatSync = getCategoriaPrincipal(updatedProduct.nombre);
+    const esVerduraOFruta = autoCatSync === 'Verduras' || autoCatSync === 'Frutas' || updatedProduct.categoriaPrincipal === 'Verduras' || updatedProduct.categoriaPrincipal === 'Frutas';
+    const isAlmacen = !esVerduraOFruta && (updatedProduct.categoriaPrincipal === 'Almacén' || (updatedProduct.id && String(updatedProduct.id).startsWith('alm_')));
 
     if (isAlmacen) {
       let filaDestino = (updatedProduct.fila && Number(updatedProduct.fila) < 900) ? Number(updatedProduct.fila) : null;
@@ -873,7 +876,7 @@ export default function ControlStock() {
         // 1. Revisar estado actual en memoria (solo Almacén)
         const currentData = stockDataRef.current || {};
         Object.values(currentData).forEach(p => {
-          const isAlmP = p.categoriaPrincipal === 'Almacén' || p.esUnidad || (p.id && String(p.id).startsWith('alm_'));
+          const isAlmP = !esVerduraOFruta && (p.categoriaPrincipal === 'Almacén' || (p.id && String(p.id).startsWith('alm_')));
           if (isAlmP) {
             const f = Number(p.fila);
             if (f && f < 900 && f > maxFilaEncontrada) maxFilaEncontrada = f;
@@ -1559,7 +1562,10 @@ export default function ControlStock() {
       const autoUnidad = getUnidadByNombre(p.nombre);
       const unidad = p.unidad || autoUnidad;
       const esUnidad = unidad === 'unidad';
-      const catPrincipal = p.categoriaPrincipal || p.categoria || remoteInfo?.categoria || autoCat;
+      let catPrincipal = p.categoriaPrincipal || p.categoria || remoteInfo?.categoria || autoCat;
+      if (autoCat === 'Verduras' || autoCat === 'Frutas') {
+        catPrincipal = autoCat;
+      }
       const subCat = catPrincipal === 'Almacén'
         ? normalizeSubcategoriaAlmacen(p.subcategoria || remoteInfo?.subcategoria || getSubcategoriaAlmacen(p.nombre))
         : '';
@@ -1774,7 +1780,7 @@ export default function ControlStock() {
 
       // 1. Revisar memoria activa de stockData (solo Almacén)
       Object.values(current).forEach(p => {
-        const isAlmP = p.categoriaPrincipal === 'Almacén' || p.esUnidad || (p.id && String(p.id).startsWith('alm_'));
+        const isAlmP = (p.categoriaPrincipal === 'Almacén' || (p.id && String(p.id).startsWith('alm_'))) && p.categoriaPrincipal !== 'Verduras' && p.categoriaPrincipal !== 'Frutas';
         if (isAlmP) {
           const f = Number(p.fila);
           if (f && f < 900 && f > maxFilaLocal) maxFilaLocal = f;

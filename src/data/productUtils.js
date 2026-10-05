@@ -56,12 +56,47 @@ export const ALMACEN_PRESETS = [
   { id: 9152, nombre: 'Snack papas fritas', subcategoria: 'Golosinas', categoriaPrincipal: 'Almacén', unidad: 'unidad', tipo: 'otros' }
 ];
 
+export const CATEGORIA_OVERRIDES_KEY = 'huerta_categoria_overrides_v1';
+
+export function getCategoriaOverride(nombre) {
+  if (!nombre) return null;
+  try {
+    const raw = localStorage.getItem(CATEGORIA_OVERRIDES_KEY);
+    const map = raw ? JSON.parse(raw) : {};
+    const k = (nombre || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return map[k] || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function saveCategoriaOverride(nombre, categoria) {
+  if (!nombre) return;
+  try {
+    const raw = localStorage.getItem(CATEGORIA_OVERRIDES_KEY);
+    const map = raw ? JSON.parse(raw) : {};
+    const k = (nombre || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    map[k] = categoria;
+    localStorage.setItem(CATEGORIA_OVERRIDES_KEY, JSON.stringify(map));
+  } catch (e) {}
+}
+
 export function getCategoriaPrincipal(nombre) {
   if (!nombre) return 'Verduras';
+  const override = getCategoriaOverride(nombre);
+  if (override) return override;
+
   const n = nombre.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-  // Tomate y Tomate cherry SIEMPRE en Verduras
-  if (n.includes('tomate')) return 'Verduras';
+  // 1. Verduras prioritarias (Brócoli, Ajo, Choclo, etc. SIEMPRE Verduras, NUNCA Almacén)
+  const verduras = [
+    'brocoli', 'brócoli', 'ajo', 'choclo', 'remolacha', 'cebolla', 'papa', 'zanahoria',
+    'zapallo', 'zapallito', 'cabutia', 'acelga', 'espinaca', 'lechuga', 'rucula', 'rúcula',
+    'perejil', 'albahaca', 'apio', 'puerro', 'verdeo', 'pepino', 'berenjena', 'morron', 'morrón',
+    'chaucha', 'coliflor', 'repollo', 'alcaucil', 'esparrago', 'espárrago', 'rabano', 'rábano',
+    'radicheta', 'ciboulette', 'hinojo', 'boniato', 'batata', 'mandioca', 'tomate'
+  ];
+  if (verduras.some(v => n.includes(v))) return 'Verduras';
 
   // Carnes
   const carnes = ['carne', 'pollo', 'cerdo', 'vaca', 'picada', 'bife', 'asado', 'pechuga', 'muslo', 'milanesa', 'chorizo', 'morcilla', 'costilla'];

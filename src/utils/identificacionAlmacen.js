@@ -26,7 +26,7 @@ function saveIdentificaciones(data) {
 }
 
 export const esProductoAlmacenUnidad = (p) =>
-  !!p && (p.categoriaPrincipal === 'Almacén' || p.esUnidad || (p.id && String(p.id).startsWith('alm_')));
+  !!p && p.categoriaPrincipal !== 'Verduras' && p.categoriaPrincipal !== 'Frutas' && (p.categoriaPrincipal === 'Almacén' || (p.id && String(p.id).startsWith('alm_')));
 
 export const stockOficialUnidades = (p) =>
   Math.max(0, Math.round(Number(p?.stock?.unidades ?? p?.stock?.['1kg']) || 0));

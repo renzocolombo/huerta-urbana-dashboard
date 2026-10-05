@@ -357,16 +357,22 @@ export default function PanelCostos() {
                   // cantidad por lote, margen, tope y costo total no existen en el Sheet: salen del registro local
                   const cacheAlm = leerCacheAlmacen()[normNombre(nombreP)];
 
+                  const catAuto = getCategoriaPrincipal(nombreP);
                   const existing = mapped.find(p => p.nombre?.toLowerCase().trim() === nombreP.toLowerCase());
                   if (existing) {
-                    existing.fila = filaP;
-                    existing.categoriaPrincipal = 'Almacén';
-                    existing.subcategoria = subCatP;
-                    existing.marca = marcaP;
-                    existing.ean = eanP;
-                    existing.stock_unidades = stockUdsP;
-                    aplicarCacheAProducto(existing, cacheAlm, costoP);
-                  } else {
+                    if (catAuto === 'Verduras' || catAuto === 'Frutas') {
+                      existing.categoriaPrincipal = catAuto;
+                      existing.subcategoria = '';
+                    } else {
+                      existing.fila = filaP;
+                      existing.categoriaPrincipal = 'Almacén';
+                      existing.subcategoria = subCatP;
+                      existing.marca = marcaP;
+                      existing.ean = eanP;
+                      existing.stock_unidades = stockUdsP;
+                      aplicarCacheAProducto(existing, cacheAlm, costoP);
+                    }
+                  } else if (catAuto !== 'Verduras' && catAuto !== 'Frutas') {
                     const nuevoAlm = {
                       id: `alm_${filaP}`,
                       fila: filaP,
@@ -635,7 +641,10 @@ export default function PanelCostos() {
 
       const margenReal = precioFinal > 0 ? ((precioFinal - costoUnitario) / precioFinal) * 100 : 0;
       const gananciaUnidad = precioFinal - costoUnitario;
-      const categoriaPrincipal = p.categoriaPrincipal || getCategoriaPrincipal(p.nombre);
+      const catCalculada = getCategoriaPrincipal(p.nombre);
+      const categoriaPrincipal = (catCalculada === 'Verduras' || catCalculada === 'Frutas')
+        ? catCalculada
+        : (p.categoriaPrincipal || catCalculada);
 
       return { 
         ...p, 
