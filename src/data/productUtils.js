@@ -90,8 +90,35 @@ export function getCategoriaPrincipal(nombre) {
   return 'Verduras';
 }
 
+export const TIPO_OVERRIDES_KEY = 'huerta_tipo_overrides_v1';
+
+export function getTipoOverride(nombre) {
+  if (!nombre) return null;
+  try {
+    const raw = localStorage.getItem(TIPO_OVERRIDES_KEY);
+    const map = raw ? JSON.parse(raw) : {};
+    const k = (nombre || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return map[k] || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function saveTipoOverride(nombre, tipo) {
+  if (!nombre) return;
+  try {
+    const raw = localStorage.getItem(TIPO_OVERRIDES_KEY);
+    const map = raw ? JSON.parse(raw) : {};
+    const k = (nombre || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    map[k] = tipo;
+    localStorage.setItem(TIPO_OVERRIDES_KEY, JSON.stringify(map));
+  } catch (e) {}
+}
+
 export function getTipoByNombre(nombre) {
   if (!nombre) return 'hoja verde';
+  const override = getTipoOverride(nombre);
+  if (override) return override;
   const n = nombre.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   if (PRODUCT_DATABASE['hoja verde'].some(p => n.includes(p))) return 'hoja verde';
   if (PRODUCT_DATABASE['blando'].some(p => n.includes(p))) return 'blando';

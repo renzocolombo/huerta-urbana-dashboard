@@ -18,7 +18,9 @@ import {
   esCodigoEan,
   getSubcategoriaAlmacen,
   normalizeSubcategoriaAlmacen,
-  ALMACEN_PRESETS
+  ALMACEN_PRESETS,
+  getTipoOverride,
+  saveTipoOverride
 } from '../data/productUtils';
 import PendientesIdentificar from './PendientesIdentificar';
 import { leerCacheAlmacen, guardarCacheAlmacen, calcularPrecioAlmacen, firmaPayloadAlmacen } from '../utils/almacenCache';
@@ -4696,6 +4698,28 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
   const productoSeleccionado = useMemo(() => {
     return productList.find(p => p.id === selectedId) || null;
   }, [productList, selectedId]);
+
+  const cambiarTipoProducto = (id, nuevoTipo) => {
+    if (!id || !stockData || !stockData[id]) return;
+    const prod = stockData[id];
+    saveTipoOverride(prod.nombre, nuevoTipo);
+
+    const updated = {
+      ...prod,
+      tipo: nuevoTipo
+    };
+
+    if (setStockData) {
+      setStockData(prev => ({
+        ...prev,
+        [id]: updated
+      }));
+    }
+
+    if (typeof syncWithSheet === 'function') {
+      syncWithSheet(updated);
+    }
+  };
   // ── Estado de peso dual-mode ─────────────────────────────────────────────
   // modoLiteral=false → modo calculadora: el usuario escribe solo dígitos,
   //   el punto decimal se inserta automáticamente antes de los últimos 3.
@@ -5124,16 +5148,46 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
         </div>
       )}
 
-      {/* 1. Selector de producto arriba */}
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
+      {/* 1. Selector de producto arriba con selector rápido Duro / Blando */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
             Producto para Pesar y Etiquetar
           </label>
+          
           {productoSeleccionado && (
-            <span className="text-[10px] font-bold text-purple-400 font-mono bg-purple-950/50 border border-purple-500/30 px-2.5 py-0.5 rounded-lg">
-              {productoSeleccionado.tipo === 'duro' ? '🥔 Duro' : '🥬 Blando'} · {productoSeleccionado.categoria}
-            </span>
+            <div className="flex items-center gap-1.5 bg-black/60 border border-white/10 rounded-xl p-1 shadow-sm">
+              <span className="text-[9px] text-gray-400 font-bold uppercase px-1">Clasificación:</span>
+              <button
+                type="button"
+                onClick={() => cambiarTipoProducto(selectedId, 'duro')}
+                className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-all cursor-pointer select-none flex items-center gap-1 ${
+                  productoSeleccionado.tipo === 'duro'
+                    ? 'bg-amber-500 text-black shadow-md shadow-amber-500/20 font-black'
+                    : 'bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white'
+                }`}
+                title="Mover este producto a la lista de DUROS"
+              >
+                <span>🥔</span>
+                <span>Duro</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => cambiarTipoProducto(selectedId, 'blando')}
+                className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-all cursor-pointer select-none flex items-center gap-1 ${
+                  productoSeleccionado.tipo !== 'duro'
+                    ? 'bg-emerald-500 text-black shadow-md shadow-emerald-500/20 font-black'
+                    : 'bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white'
+                }`}
+                title="Mover este producto a la lista de BLANDOS"
+              >
+                <span>🥬</span>
+                <span>Blando</span>
+              </button>
+              <span className="text-[9px] text-purple-400/80 font-mono px-1 font-bold">
+                ({productoSeleccionado.categoria})
+              </span>
+            </div>
           )}
         </div>
         <select
