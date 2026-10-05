@@ -4623,15 +4623,79 @@ function extraerPesoSystel(trama) {
 // COMPONENTE: Pesar y Etiquetar
 // ─────────────────────────────────────────────────────────────────────────────
 function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
-  const productList = useMemo(() => {
+  const productGroups = useMemo(() => {
     if (!stockData || typeof stockData !== 'object') return [];
-    return Object.entries(stockData)
-      .map(([id, p]) => ({ id, nombre: p.nombre }))
-      .filter(p => p.nombre)
-      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+
+    const durosVerduras = [];
+    const durosFrutas = [];
+    const blandosVerduras = [];
+    const blandosFrutas = [];
+
+    Object.entries(stockData).forEach(([id, p]) => {
+      if (!p || !p.nombre) return;
+      const nombre = String(p.nombre).trim();
+      const cat = p.categoriaPrincipal || getCategoriaPrincipal(nombre);
+
+      // 1. Filtrar: Dejar SOLO productos de Frutas y Verduras (excluir Almacén, Extras, Carnes)
+      if (cat !== 'Verduras' && cat !== 'Frutas') return;
+
+      const tipo = p.tipo || getTipoByNombre(nombre);
+      const esDuro = tipo === 'duro';
+      const item = { id, nombre, categoria: cat, tipo };
+
+      // 2. Agrupados por DUROS primero y BLANDOS después, y dentro de eso subgrupo Frutas y Verduras
+      if (esDuro) {
+        if (cat === 'Verduras') durosVerduras.push(item);
+        else durosFrutas.push(item);
+      } else {
+        if (cat === 'Verduras') blandosVerduras.push(item);
+        else blandosFrutas.push(item);
+      }
+    });
+
+    const sortFn = (a, b) => a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base' });
+    durosVerduras.sort(sortFn);
+    durosFrutas.sort(sortFn);
+    blandosVerduras.sort(sortFn);
+    blandosFrutas.sort(sortFn);
+
+    const grupos = [];
+    if (durosVerduras.length > 0) {
+      grupos.push({ id: 'duros-verduras', label: '🥔 DUROS — VERDURAS', items: durosVerduras });
+    }
+    if (durosFrutas.length > 0) {
+      grupos.push({ id: 'duros-frutas', label: '🍎 DUROS — FRUTAS', items: durosFrutas });
+    }
+    if (blandosVerduras.length > 0) {
+      grupos.push({ id: 'blandos-verduras', label: '🥬 BLANDOS — VERDURAS', items: blandosVerduras });
+    }
+    if (blandosFrutas.length > 0) {
+      grupos.push({ id: 'blandos-frutas', label: '🍌 BLANDOS — FRUTAS', items: blandosFrutas });
+    }
+
+    return grupos;
   }, [stockData]);
 
+  // Lista plana de todos los productos habilitados para pesaje
+  const productList = useMemo(() => {
+    return productGroups.flatMap(g => g.items);
+  }, [productGroups]);
+
   const [selectedId, setSelectedId] = useState('');
+
+  // Seleccionar automáticamente el primer producto válido si no hay ninguno seleccionado o cambió la lista
+  useEffect(() => {
+    if (productList.length > 0) {
+      const existe = productList.some(p => p.id === selectedId);
+      if (!existe) {
+        setSelectedId(productList[0].id);
+      }
+    }
+  }, [productList, selectedId]);
+
+  const productoSeleccionado = useMemo(() => {
+    return productList.find(p => p.id === selectedId) || null;
+  }, [productList, selectedId]);
   // ── Estado de peso dual-mode ─────────────────────────────────────────────
   // modoLiteral=false → modo calculadora: el usuario escribe solo dígitos,
   //   el punto decimal se inserta automáticamente antes de los últimos 3.
@@ -5062,18 +5126,29 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
 
       {/* 1. Selector de producto arriba */}
       <div className="space-y-1.5">
-        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-          Producto
-        </label>
+        <div className="flex items-center justify-between">
+          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+            Producto para Pesar y Etiquetar
+          </label>
+          {productoSeleccionado && (
+            <span className="text-[10px] font-bold text-purple-400 font-mono bg-purple-950/50 border border-purple-500/30 px-2.5 py-0.5 rounded-lg">
+              {productoSeleccionado.tipo === 'duro' ? '🥔 Duro' : '🥬 Blando'} · {productoSeleccionado.categoria}
+            </span>
+          )}
+        </div>
         <select
           value={selectedId}
           onChange={e => setSelectedId(e.target.value)}
-          className="w-full bg-black/50 border border-white/10 focus:border-purple-500/60 text-white text-sm font-bold rounded-2xl px-4 py-3 outline-none transition-all appearance-none cursor-pointer hover:border-purple-500/30"
+          className="w-full bg-black/50 border border-white/10 focus:border-purple-500/60 text-white text-sm font-bold rounded-2xl px-4 py-3 outline-none transition-all cursor-pointer hover:border-purple-500/30 shadow-inner"
         >
-          {productList.map(p => (
-            <option key={p.id} value={p.id} className="bg-gray-900">
-              {p.nombre.toUpperCase()}
-            </option>
+          {productGroups.map(g => (
+            <optgroup key={g.id} label={g.label} className="bg-gray-950 font-black text-purple-400 py-1.5">
+              {g.items.map(p => (
+                <option key={p.id} value={p.id} className="bg-gray-900 text-white font-bold py-1">
+                  {p.nombre.toUpperCase()}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </div>
