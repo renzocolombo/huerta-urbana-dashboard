@@ -20,7 +20,9 @@ import {
   normalizeSubcategoriaAlmacen,
   ALMACEN_PRESETS,
   getTipoOverride,
-  saveTipoOverride
+  saveTipoOverride,
+  getUnidadOverride,
+  saveUnidadOverride
 } from '../data/productUtils';
 import PendientesIdentificar from './PendientesIdentificar';
 import { leerCacheAlmacen, guardarCacheAlmacen, calcularPrecioAlmacen, firmaPayloadAlmacen } from '../utils/almacenCache';
@@ -4679,8 +4681,10 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
       if (cat !== 'Verduras' && cat !== 'Frutas') return;
 
       const tipo = p.tipo || getTipoByNombre(nombre);
+      const autoUnidad = p.unidad || getUnidadOverride(nombre) || getUnidadByNombre(nombre);
+      const esUnidadProd = Boolean(p.esUnidad || autoUnidad === 'unidad');
       const esDuro = tipo === 'duro';
-      const item = { id, nombre, categoria: cat, tipo };
+      const item = { id, nombre, categoria: cat, tipo, esUnidad: esUnidadProd, unidad: autoUnidad };
 
       // 2. Agrupados por DUROS primero y BLANDOS después, y dentro de eso subgrupo Frutas y Verduras
       if (esDuro) {
@@ -4736,6 +4740,24 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
     return productList.find(p => p.id === selectedId) || null;
   }, [productList, selectedId]);
 
+  const esUnidad = useMemo(() => {
+    if (!productoSeleccionado) return false;
+    const ov = getUnidadOverride(productoSeleccionado.nombre);
+    if (ov) return ov === 'unidad';
+    return Boolean(
+      productoSeleccionado.esUnidad ||
+      productoSeleccionado.unidad === 'unidad' ||
+      getUnidadByNombre(productoSeleccionado.nombre) === 'unidad'
+    );
+  }, [productoSeleccionado]);
+
+  const [unidadesInput, setUnidadesInput] = useState(1);
+
+  // Resetear unidades a 1 al cambiar de producto seleccionado
+  useEffect(() => {
+    setUnidadesInput(1);
+  }, [selectedId]);
+
   const cambiarTipoProducto = (id, nuevoTipo) => {
     if (!id || !stockData || !stockData[id]) return;
     const prod = stockData[id];
@@ -4744,6 +4766,29 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
     const updated = {
       ...prod,
       tipo: nuevoTipo
+    };
+
+    if (setStockData) {
+      setStockData(prev => ({
+        ...prev,
+        [id]: updated
+      }));
+    }
+
+    if (typeof syncWithSheet === 'function') {
+      syncWithSheet(updated);
+    }
+  };
+
+  const cambiarUnidadProducto = (id, nuevaUnidad) => {
+    if (!id || !stockData || !stockData[id]) return;
+    const prod = stockData[id];
+    saveUnidadOverride(prod.nombre, nuevaUnidad);
+
+    const updated = {
+      ...prod,
+      unidad: nuevaUnidad,
+      esUnidad: nuevaUnidad === 'unidad'
     };
 
     if (setStockData) {
@@ -4991,30 +5036,40 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
     }
   }, [productList, selectedId]);
 
+  const unidadesValidas = Math.max(1, parseInt(unidadesInput, 10) || 1);
+  const puedeConfirmar = Boolean(selectedId && (esUnidad ? (unidadesValidas >= 1) : (pesoKgActual > 0)));
+
   const confirmarBolsa = useCallback(() => {
-    if (!selectedId || pesoKgActual <= 0) return;
+    const unidadesVal = Math.max(1, parseInt(unidadesInput, 10) || 1);
+    const puede = selectedId && (esUnidad ? (unidadesVal >= 1) : (pesoKgActual > 0));
+    if (!puede) return;
 
     const producto = productList.find(p => p.id === selectedId);
     if (!producto) return;
 
     // Generar identificador único alfanumérico por bolsa física (ej: E49A)
     const tagId = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const pesoFinal = Math.round(pesoKgActual * 1000) / 1000;
+    const unidadesFinal = esUnidad ? unidadesVal : 1;
 
     const nuevaBolsa = {
       id: Date.now().toString() + Math.random(),
       productId: selectedId,
       nombre: producto.nombre,
-      peso: Math.round(pesoKgActual * 1000) / 1000,
+      peso: pesoFinal,
+      unidades: unidadesFinal,
+      esUnidad: Boolean(esUnidad),
       tagId,
     };
 
     setSesion(prev => [...prev, nuevaBolsa]);
-    imprimirEtiqueta(producto.nombre, nuevaBolsa.peso, tagId);
+    imprimirEtiqueta(producto.nombre, pesoFinal, tagId, unidadesFinal, esUnidad);
 
     resetPeso();
+    setUnidadesInput(1);
     setTimeout(() => pesoRef.current?.focus(), 50);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, pesoKgActual, productList]);
+  }, [selectedId, pesoKgActual, productList, esUnidad, unidadesInput]);
 
   // ── Teclado: dual-mode y Enter para confirmar ─────────────────────────────
   const handleKeyDown = (e) => {
@@ -5077,13 +5132,27 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
 
     const current = { ...stockData };
     const grouped = sesion.reduce((acc, item) => {
-      if (!acc[item.productId]) acc[item.productId] = { nombre: item.nombre, bolsas: 0, pesoTotal: 0, items: [] };
+      if (!acc[item.productId]) {
+        acc[item.productId] = { 
+          nombre: item.nombre, 
+          bolsas: 0, 
+          pesoTotal: 0, 
+          unidadesTotal: 0, 
+          items: [] 
+        };
+      }
       acc[item.productId].bolsas += 1;
       acc[item.productId].pesoTotal += item.peso;
+      acc[item.productId].unidadesTotal += (item.unidades || 1);
       const prod = current[item.productId];
       const tipo = prod?.tipo || 'duro';
       const slot = determinarSlot(tipo, item.peso);
-      acc[item.productId].items.push({ slot, peso: item.peso });
+      acc[item.productId].items.push({ 
+        slot, 
+        peso: item.peso, 
+        unidades: item.unidades || 1, 
+        esUnidad: item.esUnidad 
+      });
       return acc;
     }, {});
 
@@ -5093,18 +5162,43 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
     for (const [id, group] of Object.entries(grouped)) {
       if (!newData[id]) continue;
       const prod = newData[id];
-      const slots500 = group.items.filter(i => i.slot === '500g').length;
-      const slots1kg = group.items.filter(i => i.slot === '1kg').length;
-      const newStock = {
-        '500g': prod.stock['500g'] + slots500,
-        '1kg': prod.stock['1kg'] + slots1kg,
-      };
-      const newOriginalLoad = {
-        '500g': Math.max(prod.originalLoad['500g'] || 0, newStock['500g']),
-        '1kg': Math.max(prod.originalLoad['1kg'] || 0, newStock['1kg']),
-      };
-      newData[id] = { ...prod, stock: newStock, originalLoad: newOriginalLoad, ultimoBandejeado: today };
-      syncWithSheet(newData[id]);
+      const esUnidadProd = Boolean(prod.esUnidad || prod.unidad === 'unidad' || group.items.some(i => i.esUnidad));
+
+      if (esUnidadProd) {
+        const totalUdsSum = group.unidadesTotal || group.bolsas;
+        const currentUds = Number(prod.stock?.unidades ?? prod.stock?.['1kg'] ?? 0);
+        const newUds = currentUds + totalUdsSum;
+        const currentOrig = Number(prod.originalLoad?.unidades ?? prod.originalLoad?.['1kg'] ?? 0);
+        const newStock = {
+          ...prod.stock,
+          '500g': prod.stock?.['500g'] || 0,
+          '1kg': newUds,
+          unidades: newUds,
+        };
+        const newOriginalLoad = {
+          ...prod.originalLoad,
+          '500g': prod.originalLoad?.['500g'] || 0,
+          '1kg': Math.max(currentOrig, newUds),
+          unidades: Math.max(currentOrig, newUds),
+        };
+        newData[id] = { ...prod, stock: newStock, originalLoad: newOriginalLoad, ultimoBandejeado: today };
+        syncWithSheet(newData[id]);
+      } else {
+        const slots500 = group.items.filter(i => i.slot === '500g').length;
+        const slots1kg = group.items.filter(i => i.slot === '1kg').length;
+        const newStock = {
+          ...prod.stock,
+          '500g': (prod.stock?.['500g'] || 0) + slots500,
+          '1kg': (prod.stock?.['1kg'] || 0) + slots1kg,
+        };
+        const newOriginalLoad = {
+          ...prod.originalLoad,
+          '500g': Math.max(prod.originalLoad?.['500g'] || 0, newStock['500g']),
+          '1kg': Math.max(prod.originalLoad?.['1kg'] || 0, newStock['1kg']),
+        };
+        newData[id] = { ...prod, stock: newStock, originalLoad: newOriginalLoad, ultimoBandejeado: today };
+        syncWithSheet(newData[id]);
+      }
     }
 
     setStockData(newData);
@@ -5221,6 +5315,20 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
                 <span>🥬</span>
                 <span>Blando</span>
               </button>
+              <div className="h-4 w-px bg-white/20 mx-0.5" />
+              <button
+                type="button"
+                onClick={() => cambiarUnidadProducto(selectedId, esUnidad ? 'kg' : 'unidad')}
+                className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-all cursor-pointer select-none flex items-center gap-1 ${
+                  esUnidad
+                    ? 'bg-cyan-500 text-black shadow-md shadow-cyan-500/20 font-black'
+                    : 'bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white'
+                }`}
+                title="Alternar entre Por Unidad y Por Kilo"
+              >
+                <span>{esUnidad ? '📦' : '⚖️'}</span>
+                <span>{esUnidad ? 'Unidad' : 'Kg'}</span>
+              </button>
               <span className="text-[9px] text-purple-400/80 font-mono px-1 font-bold">
                 ({productoSeleccionado.categoria})
               </span>
@@ -5236,7 +5344,7 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
             <optgroup key={g.id} label={g.label} className="bg-gray-950 font-black text-purple-400 py-1.5">
               {g.items.map(p => (
                 <option key={p.id} value={p.id} className="bg-gray-900 text-white font-bold py-1">
-                  {p.nombre.toUpperCase()}
+                  {p.nombre.toUpperCase()} {p.esUnidad ? '(UNIDAD)' : ''}
                 </option>
               ))}
             </optgroup>
@@ -5244,11 +5352,11 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
         </select>
       </div>
 
-      {/* 2. Campo de peso que recibe automáticamente el dato de la balanza + Botón OK */}
+      {/* 2. Campo de peso + Campo de Unidades al lado del peso + Botón OK */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-            Peso (kg)
+          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
+            <span>Peso (kg) {esUnidad && <span className="text-gray-500 font-normal lowercase">(opcional si es por unidad)</span>}</span>
           </label>
           {scaleConnected && (
             <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-400 flex items-center gap-1.5">
@@ -5257,21 +5365,73 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
             </span>
           )}
         </div>
-        <div className="flex gap-2">
-          <input
-            ref={pesoRef}
-            type="text"
-            inputMode="numeric"
-            value={pesoDisplay}
-            onChange={() => {}} // controlado por balanza o teclado
-            onKeyDown={handleKeyDown}
-            placeholder="0.000"
-            className="flex-1 bg-black/50 border border-white/10 focus:border-purple-500/60 text-white text-2xl font-black font-mono rounded-2xl px-4 py-3 outline-none transition-all placeholder:text-gray-700 focus:bg-black/70 focus:shadow-[0_0_20px_rgba(168,85,247,0.15)] text-center"
-          />
+        <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center">
+          <div className="flex-1 relative">
+            <input
+              ref={pesoRef}
+              type="text"
+              inputMode="numeric"
+              value={pesoDisplay}
+              onChange={() => {}} // controlado por balanza o teclado
+              onKeyDown={handleKeyDown}
+              placeholder="0.000"
+              className="w-full bg-black/50 border border-white/10 focus:border-purple-500/60 text-white text-2xl font-black font-mono rounded-2xl px-4 py-3 outline-none transition-all placeholder:text-gray-700 focus:bg-black/70 focus:shadow-[0_0_20px_rgba(168,85,247,0.15)] text-center h-[54px]"
+            />
+            <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-500 font-bold text-xs pointer-events-none uppercase">
+              kg
+            </span>
+          </div>
+
+          {/* Campo de unidades al lado del peso */}
+          {esUnidad && (
+            <div className="flex items-center bg-black/60 border border-emerald-500/40 rounded-2xl p-1 h-[54px] shadow-sm animate-in fade-in zoom-in-95 duration-200 shrink-0">
+              <button
+                type="button"
+                onClick={() => setUnidadesInput(prev => Math.max(1, (parseInt(prev, 10) || 1) - 1))}
+                className="w-10 h-full rounded-xl bg-white/5 hover:bg-emerald-500/20 text-emerald-400 text-lg font-black flex items-center justify-center transition-all active:scale-95 cursor-pointer"
+                title="Restar 1 unidad"
+              >
+                -
+              </button>
+              <div className="flex flex-col items-center justify-center px-2 min-w-[70px]">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={unidadesInput}
+                  onChange={e => setUnidadesInput(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      confirmarBolsa();
+                    }
+                  }}
+                  className="w-14 bg-transparent text-emerald-300 text-xl font-black font-mono text-center outline-none p-0 leading-none"
+                />
+                <span className="text-[9px] font-black uppercase tracking-wider text-emerald-400/80 leading-none mt-0.5">
+                  {(parseInt(unidadesInput, 10) || 1) === 1 ? 'unidad' : 'unidades'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUnidadesInput(prev => (parseInt(prev, 10) || 0) + 1)}
+                className="w-10 h-full rounded-xl bg-white/5 hover:bg-emerald-500/20 text-emerald-400 text-lg font-black flex items-center justify-center transition-all active:scale-95 cursor-pointer"
+                title="Sumar 1 unidad"
+              >
+                +
+              </button>
+            </div>
+          )}
+
           <button
             onClick={confirmarBolsa}
-            disabled={!selectedId || pesoKgActual <= 0}
-            className="px-6 py-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-30 disabled:cursor-not-allowed text-white font-black text-sm rounded-2xl border-b-2 border-purple-800 active:border-b-0 active:translate-y-px shadow-lg transition-all uppercase tracking-widest flex items-center gap-2"
+            disabled={!puedeConfirmar}
+            className={`px-6 h-[54px] ${
+              esUnidad
+                ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-800'
+                : 'bg-purple-600 hover:bg-purple-500 border-purple-800'
+            } disabled:opacity-30 disabled:cursor-not-allowed text-white font-black text-sm rounded-2xl border-b-2 active:border-b-0 active:translate-y-px shadow-lg transition-all uppercase tracking-widest flex items-center justify-center gap-2 shrink-0 cursor-pointer`}
+            title={esUnidad ? `Confirmar e imprimir ${unidadesValidas} uds` : 'Confirmar e imprimir peso'}
           >
             <Printer size={16} />
             <span>OK</span>
@@ -5309,14 +5469,21 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <p className="text-purple-400 font-mono text-xs font-black">
-                    {bolsa.peso.toFixed(3)} kg
-                  </p>
+                <div className="flex items-center gap-2.5 shrink-0">
+                  {bolsa.esUnidad && (
+                    <span className="px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[11px] font-mono font-black">
+                      {bolsa.unidades} {bolsa.unidades === 1 ? 'ud' : 'uds'}
+                    </span>
+                  )}
+                  {bolsa.peso > 0 && (
+                    <p className="text-purple-400 font-mono text-xs font-black">
+                      {bolsa.peso.toFixed(3)} kg
+                    </p>
+                  )}
                   <button
                     onClick={() => eliminarBolsa(bolsa.id)}
                     title="Eliminar bolsa de la sesión"
-                    className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition-all"
+                    className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition-all cursor-pointer"
                   >
                     <X size={13} />
                   </button>
@@ -5331,9 +5498,21 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
               <span className="text-purple-400/70 font-bold uppercase tracking-wider text-[10px]">
                 Total sesión:
               </span>
-              <span className="text-purple-300 font-black text-sm">
-                {sesion.reduce((s, b) => s + b.peso, 0).toFixed(3)} kg
-              </span>
+              <div className="flex items-center gap-2 text-sm font-black">
+                {sesion.some(b => b.esUnidad) && (
+                  <span className="text-emerald-400 font-mono">
+                    {sesion.filter(b => b.esUnidad).reduce((s, b) => s + (b.unidades || 1), 0)} uds
+                  </span>
+                )}
+                {sesion.some(b => b.esUnidad) && sesion.some(b => b.peso > 0) && (
+                  <span className="text-gray-500">·</span>
+                )}
+                {sesion.reduce((s, b) => s + b.peso, 0) > 0 && (
+                  <span className="text-purple-300">
+                    {sesion.reduce((s, b) => s + b.peso, 0).toFixed(3)} kg
+                  </span>
+                )}
+              </div>
             </div>
             {confirmado ? (
               <div className="flex items-center justify-center gap-2 py-3 rounded-xl bg-green-500/10 border border-green-500/30">
@@ -5376,11 +5555,22 @@ function PesarYEtiquetar({ stockData, setStockData, syncWithSheet }) {
 }
 
 // ── Función global de impresión de etiquetas ──────────────────────────────────
-function imprimirEtiqueta(nombreProducto, pesoKg, tagId = null) {
-  const nombreCode = nombreProducto.toUpperCase().replace(/\s+/g, '-').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  const pesoStr = pesoKg.toFixed(3);
+function imprimirEtiqueta(nombreProducto, pesoKg = 0, tagId = null, unidades = 1, esUnidad = false) {
+  const nombreCode = (nombreProducto || '').toUpperCase().replace(/\s+/g, '-').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const pesoNum = Number(pesoKg || 0);
+  const pesoStr = pesoNum.toFixed(3);
   const finalTag = tagId ? String(tagId).toUpperCase() : Math.random().toString(36).substring(2, 6).toUpperCase();
-  const barcodeValue = `${nombreCode}-${pesoStr}-${finalTag}`;
+  
+  // Para el código de barras CODE128: si es por unidad y no se pesó, codificamos las unidades como peso para validez del formato
+  const barcodePeso = (esUnidad && pesoNum <= 0) ? (Number(unidades) || 1).toFixed(3) : pesoStr;
+  const barcodeValue = `${nombreCode}-${barcodePeso}-${finalTag}`;
+
+  let textoCantidad = `${pesoStr} kg`;
+  if (esUnidad) {
+    const cantUds = Number(unidades) || 1;
+    const palabraUd = cantUds === 1 ? 'UNIDAD' : 'UNIDADES';
+    textoCantidad = pesoNum > 0 ? `${cantUds} ${palabraUd} &middot; ${pesoStr} kg` : `${cantUds} ${palabraUd}`;
+  }
 
   const html = `<!DOCTYPE html>
 <html>
@@ -5555,7 +5745,7 @@ function imprimirEtiqueta(nombreProducto, pesoKg, tagId = null) {
     </div>
     <div class="divider"></div>
     <div class="product-name">${nombreProducto.toUpperCase()}</div>
-    <div class="weight">${pesoStr} kg &nbsp;<span style="font-size: 8pt; font-family: monospace; font-weight: 700; color: #444;">[#${finalTag}]</span></div>
+    <div class="weight">${textoCantidad} &nbsp;<span style="font-size: 8pt; font-family: monospace; font-weight: 700; color: #444;">[#${finalTag}]</span></div>
     <svg id="barcode"></svg>
   </div>
 </body>

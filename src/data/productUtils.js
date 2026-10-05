@@ -127,8 +127,35 @@ export function getTipoByNombre(nombre) {
   return 'hoja verde'; // Default
 }
 
+export const UNIDAD_OVERRIDES_KEY = 'huerta_unidad_overrides_v1';
+
+export function getUnidadOverride(nombre) {
+  if (!nombre) return null;
+  try {
+    const raw = localStorage.getItem(UNIDAD_OVERRIDES_KEY);
+    const map = raw ? JSON.parse(raw) : {};
+    const k = (nombre || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return map[k] || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function saveUnidadOverride(nombre, unidad) {
+  if (!nombre) return;
+  try {
+    const raw = localStorage.getItem(UNIDAD_OVERRIDES_KEY);
+    const map = raw ? JSON.parse(raw) : {};
+    const k = (nombre || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    map[k] = unidad;
+    localStorage.setItem(UNIDAD_OVERRIDES_KEY, JSON.stringify(map));
+  } catch (e) {}
+}
+
 export function getUnidadByNombre(nombre) {
   if (!nombre) return 'kg';
+  const override = getUnidadOverride(nombre);
+  if (override) return override;
   const n = nombre.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   
   if (n.includes('huevo')) return 'maple x30 uds';
