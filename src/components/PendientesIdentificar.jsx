@@ -103,6 +103,8 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
   const [refrescando, setRefrescando] = useState(false);
   const [loteObjetivoCustom, setLoteObjetivoCustom] = useState({});
   const inputRef = useRef(null);
+  const autoScanTimerRef = useRef(null);
+  const windowScanTimerRef = useRef(null);
 
   // ── Lote multi-producto acumulado: { [prodKey]: [ { id, code, ts }, ... ] } ──
   const [lotePendiente, setLotePendiente] = useState(() => {
@@ -306,6 +308,10 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
   // ── Agregar códigos escaneados a la cola del producto actual ───────────────
   const agregarALaCola = useCallback((rawTexto) => {
     if (!rawTexto || !actual) return;
+    if (autoScanTimerRef.current) {
+      clearTimeout(autoScanTimerRef.current);
+      autoScanTimerRef.current = null;
+    }
     const codigos = extraerCodigos(rawTexto);
     if (codigos.length === 0) return;
 
@@ -355,88 +361,145 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
   }, [actual, enfocar]);
 
   // ── DETECTOR GLOBAL PARA PISTOLA LECTORA DE CÓDIGOS DE BARRA ──────────────
-  // Atrapa el escaneo de la pistola sin importar dónde esté el foco
+  // Atrapa el escaneo de la pistola incluso si el foco no está en el input
   useEffect(() => {
     let scanBuffer = '';
     let lastKeyTime = Date.now();
 
+    const procesarCodigoDetectado = (code) => {
+      const clean = limpiar(code);
+      if (!clean || !esCodigoValido(clean)) return;
+
+      if (actual) {
+        agregarALaCola(clean);
+      } else {
+        // Si está en la lista general, asociar automáticamente al producto escaneado
+        const map = getEanMapping();
+        const mapped = map[clean];
+        const dataIdent = getIdentificaciones();
+
+        let matchedKey = null;
+        if (mapped?.nombre) matchedKey = normNombre(mapped.nombre);
+        if (!matchedKey) {
+          for (const [k, v] of Object.entries(dataIdent)) {
+            if ((v.scans || []).some((s) => s.code === clean)) {
+              matchedKey = k;
+              break;
+            }
+          }
+        }
+
+        if (matchedKey) {
+          setAbierto(matchedKey);
+          setLotePendiente((prev) => {
+            const prevList = prev[matchedKey] || [];
+            return {
+              ...prev,
+              [matchedKey]: [...prevList, {
+                id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                code: clean,
+                ts: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+              }]
+            };
+          });
+          playScanBeep(true);
+        }
+      }
+    };
+
     const handleWindowKeyDown = (e) => {
-      // Ignorar teclas modificadoras
-      if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab'].includes(e.key)) return;
+      // Ignorar teclas modificadoras salvo Enter y Tab
+      if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(e.key)) return;
 
       const active = document.activeElement;
       const isSearchInput = active && active.getAttribute('data-is-search') === 'true';
       if (isSearchInput) return; // Si el usuario escribe manualmente en el buscador, no interferir
 
       const now = Date.now();
-      // Si pasaron más de 120ms entre teclas, resetear buffer (tipeo humano vs pistola ultra rápida)
+      // Si pasaron más de 120ms entre teclas, resetear buffer
       if (now - lastKeyTime > 120) {
         scanBuffer = '';
       }
       lastKeyTime = now;
 
-      if (e.key === 'Enter' || e.keyCode === 13) {
+      if (e.key === 'Enter' || e.keyCode === 13 || e.key === 'Tab') {
+        if (windowScanTimerRef.current) clearTimeout(windowScanTimerRef.current);
         const codeCapturado = (scanBuffer || (active === inputRef.current ? (inputRef.current?.value || codigoInput) : '')).trim();
         scanBuffer = '';
 
         if (codeCapturado && esCodigoValido(codeCapturado)) {
           e.preventDefault();
           e.stopPropagation();
-
-          if (actual) {
-            agregarALaCola(codeCapturado);
-          } else {
-            // Si está en la lista general, intentar asociar al producto escaneado
-            const map = getEanMapping();
-            const clean = limpiar(codeCapturado);
-            const mapped = map[clean];
-            const dataIdent = getIdentificaciones();
-
-            let matchedKey = null;
-            if (mapped?.nombre) matchedKey = normNombre(mapped.nombre);
-            if (!matchedKey) {
-              for (const [k, v] of Object.entries(dataIdent)) {
-                if ((v.scans || []).some((s) => s.code === clean)) {
-                  matchedKey = k;
-                  break;
-                }
-              }
-            }
-
-            if (matchedKey) {
-              setAbierto(matchedKey);
-              setLotePendiente((prev) => {
-                const prevList = prev[matchedKey] || [];
-                return {
-                  ...prev,
-                  [matchedKey]: [...prevList, {
-                    id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-                    code: clean,
-                    ts: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                  }]
-                };
-              });
-              playScanBeep(true);
-            }
-          }
+          procesarCodigoDetectado(codeCapturado);
         }
       } else if (e.key.length === 1) {
         scanBuffer += e.key;
+
+        // Si la pistola no manda Enter y dispara rápido:
+        if (windowScanTimerRef.current) clearTimeout(windowScanTimerRef.current);
+        const bufferClean = limpiar(scanBuffer);
+        if (/^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(bufferClean)) {
+          windowScanTimerRef.current = setTimeout(() => {
+            if (esCodigoValido(bufferClean)) {
+              scanBuffer = '';
+              procesarCodigoDetectado(bufferClean);
+            }
+          }, 40);
+        } else if (bufferClean.length >= 4) {
+          windowScanTimerRef.current = setTimeout(() => {
+            if (esCodigoValido(bufferClean)) {
+              scanBuffer = '';
+              procesarCodigoDetectado(bufferClean);
+            }
+          }, 140);
+        }
       }
     };
 
     window.addEventListener('keydown', handleWindowKeyDown, true);
-    return () => window.removeEventListener('keydown', handleWindowKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleWindowKeyDown, true);
+      if (windowScanTimerRef.current) clearTimeout(windowScanTimerRef.current);
+    };
   }, [actual, agregarALaCola, codigoInput]);
 
+  // ── MANEJO DEL INPUT CON DETECCIÓN AUTOMÁTICA EN TIEMPO REAL ──────────────
+  // Detecta el disparo de la pistola al instante, aun sin Enter o con Enter
   const handleInputChange = (e) => {
     const val = e.target.value;
-    // Si la pistola lectora pegó o envió saltos de línea (CR o LF)
-    if (/[\r\n]/.test(val)) {
+
+    // 1. Si la pistola lectora o pegado envió saltos de línea (CR o LF) o tabulador
+    if (/[\r\n\t]/.test(val)) {
+      if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
       agregarALaCola(val);
       return;
     }
+
     setCodigoInput(val);
+
+    const clean = limpiar(val);
+
+    // 2. Detección instantánea de códigos estándar (EAN-13, EAN-8, UPC-12, ITF-14)
+    // Ejemplo: "7794940000857" (13 dígitos) se descuenta y agrega automáticamente sin apretar nada más
+    if (/^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(clean)) {
+      if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
+      autoScanTimerRef.current = setTimeout(() => {
+        agregarALaCola(clean);
+      }, 35);
+      return;
+    }
+
+    // 3. Temporizador de ráfaga rápida de pistola para cualquier otro código (>= 4 caracteres)
+    if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
+    if (clean.length >= 4 && esCodigoValido(clean)) {
+      autoScanTimerRef.current = setTimeout(() => {
+        const cur = inputRef.current ? inputRef.current.value : val;
+        const curClean = limpiar(cur);
+        if (curClean.length >= 4 && esCodigoValido(curClean)) {
+          agregarALaCola(curClean);
+        }
+      }, 140);
+    }
   };
 
   const quitarDeCola = (prodKey, index) => {
@@ -468,12 +531,13 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
   };
 
   const onKeyDown = (e) => {
-    if (e.key === 'Enter' || e.keyCode === 13) {
+    if (e.key === 'Enter' || e.keyCode === 13 || e.key === 'Tab') {
       e.preventDefault();
-      const val = e.currentTarget?.value || codigoInput;
-      if (val && val.trim()) {
+      if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
+      const val = (e.currentTarget?.value || codigoInput || '').trim();
+      if (val && esCodigoValido(val)) {
         agregarALaCola(val);
-      } else if (enCola > 0) {
+      } else if (enCola > 0 && e.key === 'Enter') {
         subirProductoActualAlStock();
       }
     }
@@ -849,6 +913,14 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
                 value={codigoInput}
                 onChange={handleInputChange}
                 onKeyDown={onKeyDown}
+                onPaste={(e) => {
+                  const pasteText = (e.clipboardData?.getData('text') || '').trim();
+                  if (pasteText && esCodigoValido(pasteText)) {
+                    e.preventDefault();
+                    if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
+                    agregarALaCola(pasteText);
+                  }
+                }}
                 onBlur={() => setTimeout(enfocar, 150)}
                 placeholder={`🔫 Apuntá la pistola y dispará al código de "${prod.nombre}"...`}
                 className="w-full bg-black/50 border border-emerald-500/40 focus:border-emerald-400 text-white text-sm font-mono rounded-2xl pl-12 pr-4 py-3.5 outline-none transition shadow-inner"
