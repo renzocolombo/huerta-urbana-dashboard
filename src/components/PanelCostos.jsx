@@ -212,6 +212,7 @@ export default function PanelCostos() {
   // con debounce por producto (antes cada tecla disparaba un POST concurrente y el último en llegar ganaba).
   const syncTimersRef = useRef({});
   const syncColaRef = useRef(Promise.resolve());
+  const prodsModificadosRef = useRef(new Set());
 
   // Carga inicial: Si contextProds ya tiene datos, usarlos de inmediato y refrescar desde el Sheet en segundo plano
   const cargadoRef = useRef(false);
@@ -724,6 +725,9 @@ export default function PanelCostos() {
       return p;
     });
     if (editado) {
+      if (editado.nombre) {
+        prodsModificadosRef.current.add(normNombre(editado.nombre));
+      }
       // 1) lo editado queda protegido contra recargas en vuelo hasta que el Sheet lo confirme
       marcarPendiente(editado.nombre, campo, valor);
       if (editado.stock_unidades !== undefined) {
@@ -864,6 +868,9 @@ export default function PanelCostos() {
     };
 
     // 2. Actualizar estado local, contexto y localStorage
+    if (nuevo?.nombre) {
+      prodsModificadosRef.current.add(normNombre(nuevo.nombre));
+    }
     const prodsActualizados = [...productos, nuevo];
     setProductos(prodsActualizados);
     if (setProductosCostos) setProductosCostos(prodsActualizados);
@@ -1086,23 +1093,35 @@ export default function PanelCostos() {
           }
         }
 
-        // Sincronizar en la hoja Almacen todos los productos que tengan datos reales cargados
-        // (costo o stock > 0) o que hayan sido modificados recientemente.
-        // Esto garantiza que productos como "Sal fina", "Alfajor", etc., siempre queden actualizados
-        // en el Sheet sin depender de cachés locales, y evita sobreescribir con ceros las filas vacías.
+        // Sincronizar en la hoja Almacen únicamente los productos modificados
+        // o cuya firma difiera de lo último enviado al Sheet (evita pasar por todos los productos)
+        const cacheAlmacen = leerCacheAlmacen();
         const prodsAlmacenASincronizar = productosCalculados.filter(p => {
           if (p.categoriaPrincipal !== 'Almacén' || !p.nombre || !p.nombre.trim()) return false;
-          const tieneDatos = Number(p.precioCajon) > 0 || Number(p.stock_unidades) > 0;
-          return tieneDatos;
+          const k = normNombre(p.nombre);
+          const tieneModificacion = prodsModificadosRef.current.has(k);
+          const payloadActual = armarPayloadAlmacen(p, p.fila || 2);
+          const yaEnviado = cacheAlmacen[k]?.sentSig === firmaPayloadAlmacen(payloadActual);
+          return tieneModificacion || !yaEnviado;
         });
 
-        for (let i = 0; i < prodsAlmacenASincronizar.length; i++) {
-          const p = prodsAlmacenASincronizar[i];
-          setPublicandoMsg(`Guardando Almacén en Sheet (${i + 1}/${prodsAlmacenASincronizar.length}): ${p.nombre}...`);
-          const ok = await syncWithSheet(p);
-          if (!ok) fallosAlmacen.push(p.nombre);
+        if (prodsAlmacenASincronizar.length > 0) {
+          setPublicandoMsg(`Guardando ${prodsAlmacenASincronizar.length} producto(s) modificado(s) en Sheet...`);
+          // Ejecutar en paralelo para máxima velocidad (2-3 segundos en total)
+          const batchResultados = await Promise.all(
+            prodsAlmacenASincronizar.map(async (p) => {
+              const ok = await syncWithSheet(p);
+              return { nombre: p.nombre, ok };
+            })
+          );
+          for (const res of batchResultados) {
+            if (!res.ok) fallosAlmacen.push(res.nombre);
+          }
+          prodsModificadosRef.current.clear();
+          console.log(`[PUBLICAR] Almacén: ${prodsAlmacenASincronizar.length - fallosAlmacen.length} guardados, ${fallosAlmacen.length} con error`);
+        } else {
+          console.log('[PUBLICAR] Todos los productos de Almacén ya estaban actualizados en el Sheet. Omitiendo guardado repetido.');
         }
-        console.log(`[PUBLICAR] Almacén: ${prodsAlmacenASincronizar.length - fallosAlmacen.length} guardados, ${fallosAlmacen.length} con error`);
         if (fallosAlmacen.length) setError('No se pudieron guardar en el Sheet: ' + fallosAlmacen.join(', '));
       }
 
