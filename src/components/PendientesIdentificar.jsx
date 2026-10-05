@@ -1,11 +1,15 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   ScanBarcode, ArrowLeft, AlertTriangle, CheckCircle2, Search, RotateCcw,
-  Package, UploadCloud, Plus, Loader2, ArrowRight, Trash2, Check
+  Package, UploadCloud, Plus, Loader2, ArrowRight, Trash2, Check, Sparkles,
+  Layers, ChevronRight
 } from 'lucide-react';
-import { asociarEanAProducto, normalizeSubcategoriaAlmacen, getEanMapping } from '../data/productUtils';
 import {
-  getIdentificaciones, esProductoAlmacenUnidad, stockOficialUnidades, normNombre,
+  asociarEanAProducto, normalizeSubcategoriaAlmacen, getEanMapping,
+  SUBCATEGORIAS_ALMACEN, getSubcategoriaAlmacen
+} from '../data/productUtils';
+import {
+  getIdentificaciones, esProductoAlmacenUnidad, normNombre,
   registrarEscaneo, deshacerUltimoEscaneo, productoDeCodigo
 } from '../utils/identificacionAlmacen';
 import { APPS_SCRIPT_URL } from '../utils/appsScriptUrl';
@@ -51,7 +55,7 @@ function playScanBeep(success = true) {
 export function esCodigoValido(raw) {
   if (!raw) return false;
   const clean = limpiar(raw);
-  if (/^(20|02)\d{10,11}$/.test(clean)) return false; // Balanza de pesaje
+  if (/^(20|02)\d{10,11}$/.test(clean)) return false; // Balanza de pesaje de verduras
   return clean.length >= 4;
 }
 
@@ -82,15 +86,16 @@ export function extraerCodigos(raw) {
 
 /**
  * Pendientes de Almacén:
- * - Muestra productos comprados en Panel de Costos que aún no ingresaron al stock real.
- * - Permite escaneo continuo con descuento automático del contador en vivo.
- * - Soporta acumulación multi-producto (lote): se pueden escanear varios productos distintos y subirlos todos juntos con un solo clic.
- * - Al subir, asocia el EAN y lo ingresa al stock real y al Google Sheet para que en AgendaEntregas descuente al armar pedidos.
+ * - Filtra y agrupa productos por categoría (Almacén, Bebidas, Limpieza, Lácteos, Golosinas).
+ * - Descuenta automáticamente del contador "Restan escanear" con cada disparo de la pistola.
+ * - Soporta acumulación en lote multi-producto (escanear varios productos distintos y subir todo junto).
+ * - Cuando un producto termina de escanearse y se carga, DESAPARECE automáticamente de la lista de pendientes.
  */
 export default function PendientesIdentificar({ stockData, setStockData, syncWithSheet, cargarStockDesdeSheet }) {
   const [version, setVersion] = useState(0);
-  const [abierto, setAbierto] = useState(null); // nombre normalizado del producto seleccionado
-  const [filtro, setFiltro] = useState('pendientes');
+  const [abierto, setAbierto] = useState(null); // key normalizada del producto seleccionado
+  const [filtro, setFiltro] = useState('pendientes'); // 'pendientes' | 'todos'
+  const [subcategoriaFiltro, setSubcategoriaFiltro] = useState('Todas');
   const [busqueda, setBusqueda] = useState('');
   const [feedback, setFeedback] = useState(null); // { tipo: 'ok'|'error', texto }
   const [codigoInput, setCodigoInput] = useState('');
@@ -109,7 +114,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
     }
   });
 
-  // Persistir el lote entre navegaciones para que no se pierdan los códigos escaneados
+  // Persistir el lote entre recargas
   useEffect(() => {
     try {
       localStorage.setItem(LOTE_STORAGE_KEY, JSON.stringify(lotePendiente));
@@ -233,47 +238,73 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stockData, version, lotePendiente]);
 
-  const visibles = (productos || []).filter((x) => {
-    if (!x || !x.prod) return false;
-    const prodNombre = String(x.prod?.nombre || '');
-    if (busqueda && !normNombre(prodNombre).includes(normNombre(busqueda))) return false;
-    if (filtro === 'pendientes') {
-      const enLoteProd = lotePendiente[x.key]?.length || 0;
-      return (x.total === 0 || x.identificadas < x.total) || enLoteProd > 0;
+  // ── FILTRADO: Los productos completados desaparecen de Pendientes ──────────
+  const visibles = useMemo(() => {
+    return (productos || []).filter((x) => {
+      if (!x || !x.prod) return false;
+      const prodNombre = String(x.prod?.nombre || '');
+      if (busqueda && !normNombre(prodNombre).includes(normNombre(busqueda))) return false;
+
+      // Filtro por subcategoría de Almacén
+      if (subcategoriaFiltro !== 'Todas') {
+        const subCat = normalizeSubcategoriaAlmacen(x.prod.subcategoria || getSubcategoriaAlmacen(prodNombre));
+        if (subCat !== subcategoriaFiltro) return false;
+      }
+
+      if (filtro === 'pendientes') {
+        const enLoteProd = lotePendiente[x.key]?.length || 0;
+        // Solo mostrar si falta escanear (total > identificadas) o si tiene códigos acumulados en la cola
+        const tienePendiente = x.total > 0 && x.identificadas < x.total;
+        return tienePendiente || enLoteProd > 0;
+      }
+      return true;
+    });
+  }, [productos, busqueda, subcategoriaFiltro, filtro, lotePendiente]);
+
+  // Agrupación por categoría para mostrar Almacén, Bebidas, Limpieza, etc. juntos
+  const productosPorCategoria = useMemo(() => {
+    const grupos = {};
+    for (const item of visibles) {
+      const cat = normalizeSubcategoriaAlmacen(item.prod?.subcategoria || getSubcategoriaAlmacen(item.prod?.nombre));
+      if (!grupos[cat]) grupos[cat] = [];
+      grupos[cat].push(item);
     }
-    return true;
-  });
+    return grupos;
+  }, [visibles]);
 
   const actual = abierto ? (productos || []).find((x) => x.key === abierto) : null;
-  const pendientesCount = (productos || []).filter((x) => x.total > 0 && x.identificadas < x.total).length;
+  const pendientesCount = useMemo(() => {
+    return (productos || []).filter((x) => x.total > 0 && x.identificadas < x.total).length;
+  }, [productos]);
 
-  const enfocar = useCallback(() => inputRef.current?.focus(), []);
+  const enfocar = useCallback(() => {
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, []);
+
   useEffect(() => {
     if (!actual) return;
     enfocar();
-    const t = setInterval(() => {
-      const a = document.activeElement;
-      if (!a || a === document.body) enfocar();
-    }, 1500);
+    const t = setInterval(enfocar, 1500);
     return () => clearInterval(t);
   }, [actual?.key, enfocar]);
 
   // Números en vivo del producto abierto
   const scansEnCola = (actual ? lotePendiente[actual.key] : []) || [];
   const enCola = scansEnCola.length;
-  // El objetivo de este lote: si el usuario lo ajustó manualmente usa ese, sino el de Costos (o mínimo 1 si era 0)
   const totalBase = actual ? Number(actual.total) : 0;
   const totalObjetivo = actual
     ? (loteObjetivoCustom[actual.key] !== undefined ? loteObjetivoCustom[actual.key] : (totalBase > 0 ? totalBase : Math.max(1, enCola)))
-    : 0;
+    : 1;
 
-  // ── RESTAN ESCANEAR: Descuenta en vivo con cada código en cola ──
+  // ── RESTAN ESCANEAR: Descuenta automáticamente por cada disparo de la pistola ──
   const restanEscanear = Math.max(0, totalObjetivo - enCola);
   const completo = totalObjetivo > 0 && enCola >= totalObjetivo;
   const pct = totalObjetivo > 0 ? Math.min(100, Math.round((enCola / totalObjetivo) * 100)) : 0;
 
-  // ── Agregar códigos escaneados a la cola del producto actual (descuenta contador en vivo) ──
-  const agregarALaCola = (rawTexto) => {
+  // ── Agregar códigos escaneados a la cola del producto actual ───────────────
+  const agregarALaCola = useCallback((rawTexto) => {
     if (!rawTexto || !actual) return;
     const codigos = extraerCodigos(rawTexto);
     if (codigos.length === 0) return;
@@ -286,7 +317,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
         avisos.push(`"${code}" no parece un código válido`);
         continue;
       }
-      
+
       const otro = productoDeCodigo(code, actual.prod.nombre);
       if (otro && normNombre(otro) !== normNombre(actual.prod.nombre)) {
         avisos.push(`Código ${code} reasignado desde "${otro}"`);
@@ -310,6 +341,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
         };
       });
       setCodigoInput('');
+      if (inputRef.current) inputRef.current.value = '';
       if (avisos.length > 0) {
         setFeedback({ tipo: 'ok', texto: avisos.join(' | ') });
       } else {
@@ -320,7 +352,82 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
       setFeedback({ tipo: 'error', texto: avisos.join(' | ') });
     }
     enfocar();
-  };
+  }, [actual, enfocar]);
+
+  // ── DETECTOR GLOBAL PARA PISTOLA LECTORA DE CÓDIGOS DE BARRA ──────────────
+  // Atrapa el escaneo de la pistola sin importar dónde esté el foco
+  useEffect(() => {
+    let scanBuffer = '';
+    let lastKeyTime = Date.now();
+
+    const handleWindowKeyDown = (e) => {
+      // Ignorar teclas modificadoras
+      if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab'].includes(e.key)) return;
+
+      const active = document.activeElement;
+      const isSearchInput = active && active.getAttribute('data-is-search') === 'true';
+      if (isSearchInput) return; // Si el usuario escribe manualmente en el buscador, no interferir
+
+      const now = Date.now();
+      // Si pasaron más de 120ms entre teclas, resetear buffer (tipeo humano vs pistola ultra rápida)
+      if (now - lastKeyTime > 120) {
+        scanBuffer = '';
+      }
+      lastKeyTime = now;
+
+      if (e.key === 'Enter' || e.keyCode === 13) {
+        const codeCapturado = (scanBuffer || (active === inputRef.current ? (inputRef.current?.value || codigoInput) : '')).trim();
+        scanBuffer = '';
+
+        if (codeCapturado && esCodigoValido(codeCapturado)) {
+          e.preventDefault();
+          e.stopPropagation();
+
+          if (actual) {
+            agregarALaCola(codeCapturado);
+          } else {
+            // Si está en la lista general, intentar asociar al producto escaneado
+            const map = getEanMapping();
+            const clean = limpiar(codeCapturado);
+            const mapped = map[clean];
+            const dataIdent = getIdentificaciones();
+
+            let matchedKey = null;
+            if (mapped?.nombre) matchedKey = normNombre(mapped.nombre);
+            if (!matchedKey) {
+              for (const [k, v] of Object.entries(dataIdent)) {
+                if ((v.scans || []).some((s) => s.code === clean)) {
+                  matchedKey = k;
+                  break;
+                }
+              }
+            }
+
+            if (matchedKey) {
+              setAbierto(matchedKey);
+              setLotePendiente((prev) => {
+                const prevList = prev[matchedKey] || [];
+                return {
+                  ...prev,
+                  [matchedKey]: [...prevList, {
+                    id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                    code: clean,
+                    ts: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                  }]
+                };
+              });
+              playScanBeep(true);
+            }
+          }
+        }
+      } else if (e.key.length === 1) {
+        scanBuffer += e.key;
+      }
+    };
+
+    window.addEventListener('keydown', handleWindowKeyDown, true);
+    return () => window.removeEventListener('keydown', handleWindowKeyDown, true);
+  }, [actual, agregarALaCola, codigoInput]);
 
   const handleInputChange = (e) => {
     const val = e.target.value;
@@ -363,8 +470,9 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
   const onKeyDown = (e) => {
     if (e.key === 'Enter' || e.keyCode === 13) {
       e.preventDefault();
-      if (codigoInput.trim()) {
-        agregarALaCola(codigoInput);
+      const val = e.currentTarget?.value || codigoInput;
+      if (val && val.trim()) {
+        agregarALaCola(val);
       } else if (enCola > 0) {
         subirProductoActualAlStock();
       }
@@ -475,14 +583,16 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
     if (subiendo || !actual) return;
 
     let scansList = [...scansEnCola];
-    if (codigoInput.trim()) {
-      const extraidos = extraerCodigos(codigoInput);
+    const valInput = (inputRef.current?.value || codigoInput || '').trim();
+    if (valInput) {
+      const extraidos = extraerCodigos(valInput);
       for (const c of extraidos) {
         if (esCodigoValido(c)) {
           scansList.push({ id: `tmp-${Date.now()}`, code: c, ts: '' });
         }
       }
       setCodigoInput('');
+      if (inputRef.current) inputRef.current.value = '';
     }
 
     if (scansList.length === 0) return;
@@ -497,15 +607,18 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
 
       if (exitososTotal > 0) {
         playScanBeep(true);
+        // Quitar este producto de la cola pendiente
         setLotePendiente((prev) => {
           const next = { ...prev };
           delete next[actual.key];
           return next;
         });
+        // Volver a la lista para ver cómo desapareció el producto completado
+        setAbierto(null);
         setVersion((v) => v + 1);
         setFeedback({
           tipo: 'ok',
-          texto: `✅ ¡${exitososTotal} ${exitososTotal === 1 ? 'producto ingresado' : 'productos ingresados'} con éxito al stock real y sincronizados con Google Sheets!`
+          texto: `✅ ¡${exitososTotal} ${exitososTotal === 1 ? 'producto ingresado' : 'productos ingresados'} con éxito al stock real! El producto ya fue completado.`
         });
       }
     } catch (e) {
@@ -513,7 +626,6 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
       setFeedback({ tipo: 'error', texto: 'Ocurrió un error al subir el producto al stock.' });
     } finally {
       setSubiendo(false);
-      enfocar();
     }
   };
 
@@ -540,10 +652,11 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
         playScanBeep(true);
         setLotePendiente({});
         localStorage.removeItem(LOTE_STORAGE_KEY);
+        setAbierto(null);
         setVersion((v) => v + 1);
         setFeedback({
           tipo: 'ok',
-          texto: `🎉 ¡Lote completo subido con éxito! Se ingresaron ${exitososTotal} unidades de ${productosActualizados} producto(s) al stock real.`
+          texto: `🎉 ¡Lote subido con éxito! Se ingresaron ${exitososTotal} unidades de ${productosActualizados} producto(s) al stock real y quedaron completados.`
         });
       }
     } catch (e) {
@@ -611,14 +724,14 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
           <button
             type="button"
             onClick={() => { setAbierto(null); setFeedback(null); setCodigoInput(''); }}
-            className="flex items-center gap-1.5 text-xs font-bold text-gray-400 hover:text-white cursor-pointer transition py-1 px-2 rounded-lg hover:bg-white/5"
+            className="flex items-center gap-1.5 text-xs font-bold text-gray-400 hover:text-white cursor-pointer transition py-1.5 px-3 rounded-xl bg-white/5 hover:bg-white/10"
           >
-            <ArrowLeft size={14} /> Volver a la lista de productos
+            <ArrowLeft size={14} /> Volver a la lista de pendientes
           </button>
 
           {totalCodigosEnLote > enCola && (
             <span className="text-[11px] font-bold text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 px-2.5 py-1 rounded-full">
-              📦 Hay otros {totalCodigosEnLote - enCola} códigos en cola de otros productos
+              📦 Hay {totalCodigosEnLote - enCola} códigos en cola de otros productos
             </span>
           )}
         </div>
@@ -626,28 +739,34 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
         {/* Encabezado del producto */}
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h3 className="text-white font-black text-xl leading-tight">{prod.nombre}</h3>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md bg-white/10 text-emerald-400 border border-white/5">
+                {prod.subcategoria || 'Almacén'}
+              </span>
+            </div>
+            <h3 className="text-white font-black text-2xl leading-tight mt-1">{prod.nombre}</h3>
             <p className="text-[11px] text-gray-500 uppercase tracking-wider font-bold mt-0.5">
-              Stock oficial comprado en Panel de Costos: <span className="text-gray-300 font-mono">{totalObjetivo} ud</span>
+              Stock oficial en Costos: <span className="text-gray-300 font-mono">{totalBase} ud</span>
             </p>
           </div>
           {completo && (
-            <span className="px-3 py-1 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center gap-1 shrink-0">
-              <CheckCircle2 size={13} /> {restanEscanear === 0 ? 'Completado' : 'Excedente'}
+            <span className="px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center gap-1 shrink-0 shadow-lg">
+              <CheckCircle2 size={14} /> {restanEscanear === 0 ? 'Lote Completo' : 'Excedente'}
             </span>
           )}
         </div>
 
-        {/* ── CONTADORES EN VIVO: Se descuenta automáticamente con cada escaneo ── */}
+        {/* ── CONTADORES EN VIVO: Se descuenta automáticamente por disparo de pistola ── */}
         <div className="grid grid-cols-3 gap-2.5">
+          {/* Tarjeta 1: A ingresar */}
           <div className="bg-black/40 border border-white/10 rounded-2xl p-3 text-center">
             <div className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">A ingresar</div>
             <div className="flex items-center justify-center gap-1.5 mt-0.5">
               <button
                 type="button"
-                onClick={() => setLoteObjetivoCustom(prev => ({ ...prev, [actual.key]: Math.max(1, totalObjetivo - 1) }))}
+                onClick={() => setLoteObjetivoCustom((prev) => ({ ...prev, [actual.key]: Math.max(1, totalObjetivo - 1) }))}
                 className="w-5 h-5 rounded bg-white/10 hover:bg-white/20 text-gray-300 font-bold flex items-center justify-center text-xs cursor-pointer select-none"
-                title="Restar 1"
+                title="Restar 1 al objetivo"
               >
                 -
               </button>
@@ -656,9 +775,9 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
               </div>
               <button
                 type="button"
-                onClick={() => setLoteObjetivoCustom(prev => ({ ...prev, [actual.key]: totalObjetivo + 1 }))}
+                onClick={() => setLoteObjetivoCustom((prev) => ({ ...prev, [actual.key]: totalObjetivo + 1 }))}
                 className="w-5 h-5 rounded bg-white/10 hover:bg-white/20 text-gray-300 font-bold flex items-center justify-center text-xs cursor-pointer select-none"
-                title="Sumar 1"
+                title="Sumar 1 al objetivo"
               >
                 +
               </button>
@@ -666,18 +785,20 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
             <div className="text-[9px] text-gray-500 mt-1 font-semibold">Total a escanear</div>
           </div>
 
+          {/* Tarjeta 2: En cola */}
           <div className={`border rounded-2xl p-3 text-center transition-all duration-200 ${
             enCola > 0
               ? 'bg-emerald-950/60 border-emerald-500/50 shadow-lg shadow-emerald-950/50'
               : 'bg-black/40 border-white/10'
           }`}>
-            <div className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">En cola (listas)</div>
+            <div className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">Escaneadas (en cola)</div>
             <div className="text-2xl font-black font-mono text-emerald-400 mt-0.5">
               +{enCola} <span className="text-xs font-sans">ud</span>
             </div>
-            <div className="text-[9px] text-emerald-500/80 mt-0.5 font-semibold">Para subir con Cargar</div>
+            <div className="text-[9px] text-emerald-500/80 mt-0.5 font-semibold">Listas para subir</div>
           </div>
 
+          {/* Tarjeta 3: Restan escanear */}
           <div className={`border rounded-2xl p-3 text-center transition-all duration-200 ${
             restanEscanear === 0
               ? 'bg-emerald-950/40 border-emerald-500/40'
@@ -688,7 +809,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
               {restanEscanear} <span className="text-xs text-gray-500 font-sans">ud</span>
             </div>
             <div className={`text-[9px] mt-0.5 font-bold ${restanEscanear === 0 ? 'text-emerald-400' : 'text-amber-500'}`}>
-              {restanEscanear === 0 ? '¡Listo para subir!' : 'Descuenta por disparo'}
+              {restanEscanear === 0 ? '¡Listo para subir!' : 'Descuenta con cada disparo'}
             </div>
           </div>
         </div>
@@ -729,7 +850,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
                 onChange={handleInputChange}
                 onKeyDown={onKeyDown}
                 onBlur={() => setTimeout(enfocar, 150)}
-                placeholder={`🔫 Escaneá aquí cada unidad de "${prod.nombre}"...`}
+                placeholder={`🔫 Apuntá la pistola y dispará al código de "${prod.nombre}"...`}
                 className="w-full bg-black/50 border border-emerald-500/40 focus:border-emerald-400 text-white text-sm font-mono rounded-2xl pl-12 pr-4 py-3.5 outline-none transition shadow-inner"
                 autoComplete="off"
                 spellCheck={false}
@@ -753,7 +874,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
             </button>
           </div>
           <p className="text-[11px] text-gray-400 px-1 font-medium">
-            ⚡ <strong className="text-white">Escaneo en ráfaga:</strong> dispará con la pistola seguidas las veces que necesites (ej: 3 veces para 3 harinas). Cada disparo descuenta del contador. Podés cargar solo este producto o seguir con otros.
+            ⚡ <strong className="text-white">Escaneo automático:</strong> cada disparo de la pistola al código descuenta directamente de "Restan escanear" y suena un beep. Podés subir solo este producto o seguir escaneando otros.
           </p>
         </div>
 
@@ -884,7 +1005,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
   }
 
   // ═════════════════════════════════════════════════════════════════════════════
-  // VISTA 2: LISTA DE PRODUCTOS PENDIENTES CON ACCIÓN DE LOTE COMPLETO
+  // VISTA 2: LISTA DE PRODUCTOS PENDIENTES CON AGRUPACIÓN POR CATEGORÍA
   // ═════════════════════════════════════════════════════════════════════════════
   return (
     <div className="bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 border border-white/10 rounded-3xl p-5 space-y-4">
@@ -962,7 +1083,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
         <div>
           <h3 className="text-white font-black text-sm uppercase tracking-wider">Productos por ingresar al stock</h3>
           <p className="text-[11px] text-gray-500 mt-0.5">
-            Escaneá con la pistola cada unidad física comprada en Panel de Costos para que ingrese al stock real.
+            Escaneá con la pistola cada unidad física. Al cargar, el producto completado desaparece de pendientes.
           </p>
         </div>
         <button
@@ -986,12 +1107,40 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
         </div>
       )}
 
-      {/* Búsqueda y Filtros */}
+      {/* ── SELECTOR DE SUBCATEGORÍAS DE ALMACÉN (Almacén, Bebidas, Limpieza, Lácteos, Golosinas) ── */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Layers size={13} className="text-gray-400" />
+          <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Categorías de Almacén:</span>
+        </div>
+        <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+          {['Todas', ...SUBCATEGORIAS_ALMACEN].map((cat) => {
+            const isActiva = subcategoriaFiltro === cat;
+            return (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setSubcategoriaFiltro(cat)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+                  isActiva
+                    ? 'bg-emerald-500 text-black shadow-md shadow-emerald-900/40'
+                    : 'bg-white/5 hover:bg-white/10 text-gray-300 border border-white/5'
+                }`}
+              >
+                {cat}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Búsqueda y Filtros de Estado */}
       <div className="flex gap-2">
         <div className="relative flex-1">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
           <input
             type="text"
+            data-is-search="true"
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
             placeholder="Buscar producto a identificar..."
@@ -1014,63 +1163,81 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
         </div>
       </div>
 
-      {/* Lista de productos */}
+      {/* ── LISTA DE PRODUCTOS AGRUPADA POR CATEGORÍA ─────────────────────── */}
       {visibles.length === 0 ? (
-        <div className="py-10 text-center text-gray-500 text-xs font-bold flex flex-col items-center gap-2">
-          <Package size={28} className="text-gray-600" />
-          {filtro === 'pendientes' ? 'No hay productos pendientes de ingresar 🎉' : 'No hay productos de Almacén cargados.'}
+        <div className="py-12 text-center text-gray-500 text-xs font-bold flex flex-col items-center gap-2">
+          <CheckCircle2 size={36} className="text-emerald-500/70" />
+          <p className="text-gray-300 text-sm font-bold">
+            {filtro === 'pendientes' ? '¡Excelente! Todos los productos están cargados al stock real 🎉' : 'No hay productos en esta categoría.'}
+          </p>
+          <p className="text-[11px] text-gray-500">
+            {filtro === 'pendientes' ? 'Podés cambiar a la pestaña "Todos" para ver el inventario completo.' : ''}
+          </p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {visibles.map(({ prod, total, identificadas, key }) => {
-            const enLoteProd = lotePendiente[key]?.length || 0;
-            const restan = Math.max(0, total - enLoteProd);
-            const completo = total > 0 && enLoteProd >= total;
-            const pct = total > 0 ? Math.min(100, Math.round((enLoteProd / total) * 100)) : 0;
+        <div className="space-y-4">
+          {Object.entries(productosPorCategoria).map(([categoria, items]) => (
+            <div key={categoria} className="space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  {categoria} ({items.length})
+                </span>
+              </div>
 
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => { setAbierto(key); setFeedback(null); }}
-                className={`w-full text-left p-3.5 rounded-2xl border transition cursor-pointer select-none ${
-                  enLoteProd > 0
-                    ? 'bg-emerald-950/30 border-emerald-500/40 hover:bg-emerald-950/50'
-                    : 'bg-black/30 hover:bg-black/50 border-white/5 hover:border-green-500/30'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 truncate">
-                    <span className="text-white text-sm font-bold truncate">{prod.nombre}</span>
-                    {enLoteProd > 0 && (
-                      <span className="px-2 py-0.5 rounded-md bg-emerald-500 text-black text-[10px] font-black shrink-0">
-                        +{enLoteProd} en cola
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className={`text-xs font-black font-mono ${
-                      completo ? 'text-emerald-400' : 'text-amber-400'
-                    }`}>
-                      {total === 0 ? `${enLoteProd} escaneadas` : `${enLoteProd} de ${total} ud`}
-                    </span>
-                    {total > 0 && restan > 0 && (
-                      <div className="text-[10px] text-gray-500 font-semibold">
-                        Faltan {restan} ud
+              <div className="space-y-1.5">
+                {items.map(({ prod, total, identificadas, key }) => {
+                  const enLoteProd = lotePendiente[key]?.length || 0;
+                  const restan = Math.max(0, total - (identificadas + enLoteProd));
+                  const completo = total > 0 && (identificadas + enLoteProd) >= total;
+                  const pct = total > 0 ? Math.min(100, Math.round(((identificadas + enLoteProd) / total) * 100)) : 0;
+
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => { setAbierto(key); setFeedback(null); }}
+                      className={`w-full text-left p-3.5 rounded-2xl border transition cursor-pointer select-none ${
+                        enLoteProd > 0
+                          ? 'bg-emerald-950/30 border-emerald-500/40 hover:bg-emerald-950/50'
+                          : 'bg-black/30 hover:bg-black/50 border-white/5 hover:border-green-500/30'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="text-white text-sm font-bold truncate">{prod.nombre}</span>
+                          {enLoteProd > 0 && (
+                            <span className="px-2 py-0.5 rounded-md bg-emerald-500 text-black text-[10px] font-black shrink-0">
+                              +{enLoteProd} en cola
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className={`text-xs font-black font-mono ${
+                            completo ? 'text-emerald-400' : 'text-amber-400'
+                          }`}>
+                            {total === 0 ? `${enLoteProd} escaneadas` : `${identificadas + enLoteProd} de ${total} ud`}
+                          </span>
+                          {total > 0 && restan > 0 && (
+                            <div className="text-[10px] text-gray-500 font-semibold">
+                              Faltan {restan} ud
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    )}
-                  </div>
-                </div>
 
-                <div className="h-1.5 mt-2 rounded-full bg-black/50 overflow-hidden">
-                  <div
-                    className={`h-full transition-all duration-300 ${completo ? 'bg-emerald-500' : 'bg-gradient-to-r from-amber-500 to-emerald-500'}`}
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
-              </button>
-            );
-          })}
+                      <div className="h-1.5 mt-2 rounded-full bg-black/50 overflow-hidden">
+                        <div
+                          className={`h-full transition-all duration-300 ${completo ? 'bg-emerald-500' : 'bg-gradient-to-r from-amber-500 to-emerald-500'}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
