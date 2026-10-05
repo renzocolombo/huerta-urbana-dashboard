@@ -3428,11 +3428,8 @@ function StatusAccordion({ title, icon, items, isOpen, onToggle, color, type }) 
                 const esUnidad = p.esUnidad || p.unidad === 'unidad';
                 return (
                   <div key={p.id} className="bg-black/30 border border-white/5 rounded-2xl p-4 flex flex-col justify-between hover:bg-black/40 transition-all">
-                    <div className="flex justify-between items-start mb-2 gap-1.5">
-                      <span className="text-white font-bold text-xs truncate pr-1 flex-1">{p.nombre}</span>
-                      <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded shrink-0 ${p.tipo === 'duro' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'}`}>
-                        {p.tipo === 'duro' ? '🥔 Duro' : '🥬 Blando'}
-                      </span>
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="text-white font-bold text-xs truncate pr-2">{p.nombre}</span>
                     </div>
                     {esUnidad ? (
                       <div className="flex gap-1 mb-2">
@@ -3636,47 +3633,22 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd, onOp
           <span className="text-xl">{icon}</span>
           <h4 className="font-black text-white text-[14px] uppercase tracking-wide truncate leading-tight flex-1" title={product.nombre}>{product.nombre}</h4>
           
-          {/* Selector 1-clic Duro / Blando para TODAS las tarjetas */}
-          <div className="flex items-center gap-0.5 bg-black/60 border border-white/10 rounded-xl p-0.5 shadow-sm shrink-0">
+          {/* Botón rápido 1-clic para alternar Duro / Blando */}
+          {!esUnidad && (
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (product.tipo === 'duro') return;
-                const def = DEFAULTS_BY_TYPE['duro'];
-                saveTipoOverride(product.nombre, 'duro');
-                onUpdate({ tipo: 'duro', totalDays: def.totalDays, urgentDays: def.alertDays });
-              }}
-              className={`px-1.5 py-0.5 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer flex items-center gap-1 select-none ${
+              onClick={toggleTipoDirecto}
+              className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer border flex items-center gap-1 select-none shrink-0 shadow-sm ${
                 product.tipo === 'duro'
-                  ? 'bg-amber-500 text-black font-black shadow-sm'
-                  : 'text-gray-400 hover:text-white bg-transparent'
+                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 hover:bg-amber-500/30'
+                  : 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/30'
               }`}
-              title="Clasificar como DURO"
+              title={`Clasificado como ${product.tipo === 'duro' ? 'DURO' : 'BLANDO'}. Hacé clic para cambiar a ${product.tipo === 'duro' ? 'BLANDO' : 'DURO'}`}
             >
-              <span>🥔</span>
-              <span>Duro</span>
+              <span>{product.tipo === 'duro' ? '🥔' : '🥬'}</span>
+              <span>{product.tipo === 'duro' ? 'Duro' : 'Blando'}</span>
             </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (product.tipo !== 'duro') return;
-                const def = DEFAULTS_BY_TYPE['blando'];
-                saveTipoOverride(product.nombre, 'blando');
-                onUpdate({ tipo: 'blando', totalDays: def.totalDays, urgentDays: def.alertDays });
-              }}
-              className={`px-1.5 py-0.5 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer flex items-center gap-1 select-none ${
-                product.tipo !== 'duro'
-                  ? 'bg-emerald-500 text-black font-black shadow-sm'
-                  : 'text-gray-400 hover:text-white bg-transparent'
-              }`}
-              title="Clasificar como BLANDO"
-            >
-              <span>🥬</span>
-              <span>Blando</span>
-            </button>
-          </div>
+          )}
         </div>
 
         <div className="space-y-3">
