@@ -20,6 +20,7 @@ import {
   normalizeSubcategoriaAlmacen,
   ALMACEN_PRESETS
 } from '../data/productUtils';
+import PendientesIdentificar from './PendientesIdentificar';
 import { leerCacheAlmacen, guardarCacheAlmacen, calcularPrecioAlmacen, firmaPayloadAlmacen } from '../utils/almacenCache';
 
 // Configuración de entorno
@@ -2081,7 +2082,23 @@ export default function ControlStock() {
           <Scale size={13} />
           Pesar y Etiquetar
         </button>
+        <button
+          onClick={() => setStockSubTab('identificar')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-widest transition-all duration-200 ${
+            stockSubTab === 'identificar'
+              ? 'bg-amber-500 text-white shadow-lg shadow-amber-900/40'
+              : 'text-gray-500 hover:text-gray-300'
+          }`}
+        >
+          <Tag size={13} />
+          Por identificar
+        </button>
       </div>
+
+      {/* ── SUB-PESTAÑA: PRODUCTOS A ESCANEAR (identificación EAN, no toca stock) ── */}
+      {stockSubTab === 'identificar' && (
+        <PendientesIdentificar stockData={stockData} />
+      )}
 
       {/* ── SUB-PESTAÑA: PESAR Y ETIQUETAR ──────────────────────────────── */}
       {stockSubTab === 'pesar' && (
