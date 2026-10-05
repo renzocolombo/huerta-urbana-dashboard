@@ -1426,39 +1426,13 @@ export default function PanelCostos() {
       <div className="flex flex-col md:flex-row items-center justify-between gap-4 bg-gray-900/40 p-6 rounded-3xl border border-gray-800">
         <div>
           <h3 className="text-lg font-bold text-white">Acciones de Publicación</h3>
-          <p className="text-xs text-gray-500">Sincronizá con Google Sheets y publicá los precios actualizados</p>
+          <p className="text-xs text-gray-500">Publicá los precios y catálogo actualizados en la tienda web y Google Sheets</p>
         </div>
         <div className="flex gap-3 relative z-10">
-          <button 
-            onClick={cargarDatosDesdeSheet} 
-            disabled={sincronizando}
-            className={`flex items-center gap-2.5 px-6 py-4 rounded-2xl transition-all border font-bold text-xs cursor-pointer shadow-lg active:scale-95 ${
-              sincronizadoExito
-                ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.35)]'
-                : sincronizando
-                ? 'bg-gray-800 text-gray-400 border-gray-700 cursor-wait'
-                : 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700 hover:border-gray-600'
-            }`}
-          >
-            {sincronizando ? (
-              <Loader2 size={18} className="animate-spin text-green-400" />
-            ) : sincronizadoExito ? (
-              <Check size={18} className="text-white" />
-            ) : (
-              <Globe size={18} className="text-green-400" />
-            )}
-            <span>
-              {sincronizando 
-                ? 'Sincronizando...' 
-                : sincronizadoExito 
-                ? '¡Sincronizado con Sheet!' 
-                : 'Sincronizar Sheet'}
-            </span>
-          </button>
           <button
             onClick={publicar}
             disabled={publicando}
-            className="flex items-center gap-2 bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white font-bold px-8 py-4 rounded-2xl transition-all shadow-lg hover:shadow-green-500/20 active:scale-95 pointer-events-auto"
+            className="flex items-center gap-2 bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white font-bold px-8 py-4 rounded-2xl transition-all shadow-lg hover:shadow-green-500/20 active:scale-95 pointer-events-auto cursor-pointer"
           >
             {publicando ? <Settings className="animate-spin" size={20} /> : <Globe size={20} />}
             {publicando ? (publicandoMsg || 'Publicando...') : 'Publicar precios'}
