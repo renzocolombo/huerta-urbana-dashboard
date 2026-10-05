@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { ScanBarcode, ArrowLeft, AlertTriangle, CheckCircle2, Search, RotateCcw, Package, PlusCircle, ArrowRight } from 'lucide-react';
+import { ScanBarcode, ArrowLeft, AlertTriangle, CheckCircle2, Search, RotateCcw, Package, PlusCircle } from 'lucide-react';
 import { esCodigoEan } from '../data/productUtils';
 import {
   getIdentificaciones, esProductoAlmacenUnidad, stockOficialUnidades, normNombre,
@@ -53,100 +53,119 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
 
   // Lista unificada: stockData + productos recién cargados en Panel de Costos
   const productos = useMemo(() => {
-    const ident = getIdentificaciones();
-    const map = new Map();
+    try {
+      const ident = getIdentificaciones() || {};
+      const map = new Map();
 
-    // 1. Productos en stockData
-    Object.values(stockData || {})
-      .filter(esProductoAlmacenUnidad)
-      .forEach((p) => {
-        const k = normNombre(p.nombre);
-        const total = stockOficialUnidades(p);
-        const scans = ident[k]?.scans || [];
-        map.set(k, {
-          prod: p,
-          total,
-          identificadas: scans.length,
-          scans,
-          key: k
+      // 1. Productos en stockData
+      Object.values(stockData || {})
+        .filter((p) => p && p.nombre && esProductoAlmacenUnidad(p))
+        .forEach((p) => {
+          const k = normNombre(p.nombre);
+          if (!k) return;
+          const total = stockOficialUnidades(p);
+          const scans = (ident[k] && Array.isArray(ident[k]?.scans)) ? ident[k].scans : [];
+          map.set(k, {
+            prod: p,
+            total,
+            identificadas: scans.length,
+            scans,
+            key: k
+          });
         });
-      });
 
-    // 2. Productos guardados en Panel de Costos (para que aparezcan de inmediato apenas se carguen)
-    try {
-      const guardados = JSON.parse(
-        localStorage.getItem('huerta_data_costos_v31_productos') ||
-        localStorage.getItem('huerta_data_costos_v1_productos') ||
-        '[]'
-      );
-      guardados.forEach((cp) => {
-        if (!cp || !cp.nombre) return;
-        const esAlm = cp.categoriaPrincipal === 'Almacén' || cp.esUnidad || (cp.id && String(cp.id).startsWith('alm_'));
-        if (!esAlm) return;
-        const k = normNombre(cp.nombre);
-        const totalCostos = Math.max(0, Math.round(Number(cp.stock_unidades ?? cp.cantidadCajon) || 0));
-        const scans = ident[k]?.scans || [];
+      // 2. Productos guardados en Panel de Costos (para que aparezcan de inmediato apenas se carguen)
+      try {
+        const rawGuardados = localStorage.getItem('huerta_data_costos_v31_productos') ||
+          localStorage.getItem('huerta_data_costos_v1_productos') ||
+          '[]';
+        const parsed = JSON.parse(rawGuardados);
+        const guardados = Array.isArray(parsed) ? parsed : [];
+        guardados.forEach((cp) => {
+          if (!cp || !cp.nombre) return;
+          const esAlm = cp.categoriaPrincipal === 'Almacén' || cp.esUnidad || (cp.id && String(cp.id).startsWith('alm_'));
+          if (!esAlm) return;
+          const k = normNombre(cp.nombre);
+          if (!k) return;
+          const totalCostos = Math.max(0, Math.round(Number(cp.stock_unidades ?? cp.cantidadCajon) || 0));
+          const scans = (ident[k] && Array.isArray(ident[k]?.scans)) ? ident[k].scans : [];
 
-        if (map.has(k)) {
-          const entry = map.get(k);
-          if (totalCostos > entry.total) {
-            entry.total = totalCostos;
+          if (map.has(k)) {
+            const entry = map.get(k);
+            if (totalCostos > entry.total) {
+              entry.total = totalCostos;
+            }
+          } else if (totalCostos > 0 || scans.length > 0) {
+            map.set(k, {
+              prod: {
+                ...cp,
+                stock: { '500g': 0, '1kg': scans.length, unidades: scans.length },
+                originalLoad: { '500g': 0, '1kg': totalCostos, unidades: totalCostos }
+              },
+              total: totalCostos,
+              identificadas: scans.length,
+              scans,
+              key: k
+            });
           }
-        } else if (totalCostos > 0 || scans.length > 0) {
-          map.set(k, {
-            prod: {
-              ...cp,
-              stock: { '500g': 0, '1kg': scans.length, unidades: scans.length },
-              originalLoad: { '500g': 0, '1kg': totalCostos, unidades: totalCostos }
-            },
-            total: totalCostos,
-            identificadas: scans.length,
-            scans,
-            key: k
-          });
-        }
-      });
-    } catch (e) {}
+        });
+      } catch (e) {
+        console.warn('Error leyendo costos:', e);
+      }
 
-    // 3. Productos custom de almacén
-    try {
-      const customSaved = JSON.parse(localStorage.getItem('huerta_custom_almacen_prods_v1') || '[]');
-      customSaved.forEach((cp) => {
-        if (!cp || !cp.nombre) return;
-        const k = normNombre(cp.nombre);
-        const totalCostos = Math.max(0, Math.round(Number(cp.stock_unidades ?? cp.cantidadCajon) || 0));
-        const scans = ident[k]?.scans || [];
-        if (map.has(k)) {
-          const entry = map.get(k);
-          if (totalCostos > entry.total) entry.total = totalCostos;
-        } else if (totalCostos > 0 || scans.length > 0) {
-          map.set(k, {
-            prod: {
-              ...cp,
-              stock: { '500g': 0, '1kg': scans.length, unidades: scans.length },
-              originalLoad: { '500g': 0, '1kg': totalCostos, unidades: totalCostos }
-            },
-            total: totalCostos,
-            identificadas: scans.length,
-            scans,
-            key: k
-          });
-        }
-      });
-    } catch (e) {}
+      // 3. Productos custom de almacén
+      try {
+        const parsedCustom = JSON.parse(localStorage.getItem('huerta_custom_almacen_prods_v1') || '[]');
+        const customSaved = Array.isArray(parsedCustom) ? parsedCustom : [];
+        customSaved.forEach((cp) => {
+          if (!cp || !cp.nombre) return;
+          const k = normNombre(cp.nombre);
+          if (!k) return;
+          const totalCostos = Math.max(0, Math.round(Number(cp.stock_unidades ?? cp.cantidadCajon) || 0));
+          const scans = (ident[k] && Array.isArray(ident[k]?.scans)) ? ident[k].scans : [];
+          if (map.has(k)) {
+            const entry = map.get(k);
+            if (totalCostos > entry.total) entry.total = totalCostos;
+          } else if (totalCostos > 0 || scans.length > 0) {
+            map.set(k, {
+              prod: {
+                ...cp,
+                stock: { '500g': 0, '1kg': scans.length, unidades: scans.length },
+                originalLoad: { '500g': 0, '1kg': totalCostos, unidades: totalCostos }
+              },
+              total: totalCostos,
+              identificadas: scans.length,
+              scans,
+              key: k
+            });
+          }
+        });
+      } catch (e) {
+        console.warn('Error leyendo custom:', e);
+      }
 
-    return Array.from(map.values()).sort((a, b) => a.prod.nombre.localeCompare(b.prod.nombre));
+      return Array.from(map.values()).sort((a, b) => {
+        const nameA = String(a?.prod?.nombre || '');
+        const nameB = String(b?.prod?.nombre || '');
+        return nameA.localeCompare(nameB, 'es', { sensitivity: 'base' });
+      });
+    } catch (err) {
+      console.error('Error calculando productos en PendientesIdentificar:', err);
+      return [];
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stockData, version]);
 
-  const visibles = productos.filter((x) => {
-    if (busqueda && !normNombre(x.prod.nombre).includes(normNombre(busqueda))) return false;
+  const visibles = (productos || []).filter((x) => {
+    if (!x || !x.prod) return false;
+    const prodNombre = String(x.prod?.nombre || '');
+    if (busqueda && !normNombre(prodNombre).includes(normNombre(busqueda))) return false;
     if (filtro === 'pendientes') return x.total > 0 && x.identificadas < x.total;
     return true;
   });
 
-  const actual = abierto ? productos.find((x) => x.key === abierto) : null;
-  const pendientesCount = productos.filter((x) => x.total > 0 && x.identificadas < x.total).length;
+  const actual = abierto ? (productos || []).find((x) => x.key === abierto) : null;
+  const pendientesCount = (productos || []).filter((x) => x.total > 0 && x.identificadas < x.total).length;
 
   const enfocar = useCallback(() => inputRef.current?.focus(), []);
   useEffect(() => {
@@ -226,6 +245,144 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
       };
       localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
     } catch (e) {}
+  };
+
+  const procesar = (raw, forzar = false) => {
+    const codigos = extraerCodigos(raw);
+    if (codigos.length === 0 || !actual) return;
+
+    let exitosos = 0;
+    let ultimoRes = null;
+    const errores = [];
+    const excedentesPendientes = [];
+
+    for (const code of codigos) {
+      if (!esCodigoEan(code)) {
+        errores.push(`"${code}" no es un código EAN válido`);
+        continue;
+      }
+      const otro = productoDeCodigo(code, actual.prod.nombre);
+      if (otro) {
+        errores.push(`Código ${code} ya asociado a "${otro}"`);
+        continue;
+      }
+
+      const res = registrarEscaneo(actual.prod, code, { forzar });
+      if (res.status === 'excedido') {
+        excedentesPendientes.push(code);
+        continue;
+      }
+
+      exitosos++;
+      ultimoRes = res;
+    }
+
+    if (exitosos > 0) {
+      // Sumar al stock real cada código escaneado
+      sumarAlStockReal(exitosos);
+      setVersion((v) => v + 1);
+    }
+
+    if (excedentesPendientes.length > 0) {
+      setExcedido({ codigos: excedentesPendientes, code: excedentesPendientes[0] });
+    } else {
+      setExcedido(null);
+    }
+
+    // Feedback claro según cantidad de códigos
+    if (exitosos > 0 && errores.length === 0 && excedentesPendientes.length === 0) {
+      if (codigos.length === 1) {
+        setFeedback({
+          tipo: 'ok',
+          texto: ultimoRes?.completo
+            ? `✅ ${actual.prod.nombre}: ${ultimoRes.identificadas} de ${ultimoRes.total} — ¡todas las unidades ingresadas al stock real!`
+            : `✅ Código ${codigos[0]} ingresado (+1 producto al stock real). ${ultimoRes?.identificadas || 0} de ${ultimoRes?.total || 0} identificadas.`
+        });
+      } else {
+        setFeedback({
+          tipo: 'ok',
+          texto: `✅ Se ingresaron ${exitosos} productos al stock real (1 por cada código). ${ultimoRes?.identificadas || 0} de ${ultimoRes?.total || 0} identificadas.`
+        });
+      }
+    } else if (exitosos > 0) {
+      setFeedback({
+        tipo: 'ok',
+        texto: `✅ Se ingresaron ${exitosos} producto(s) al stock real. ${errores.length ? '⚠️ Omitidos: ' + errores.join(', ') : ''} ${excedentesPendientes.length ? `(${excedentesPendientes.length} exceden stock)` : ''}`
+      });
+    } else if (errores.length > 0) {
+      setFeedback({
+        tipo: 'error',
+        texto: errores.join(' | ')
+      });
+    }
+  };
+
+  const ejecutarCarga = (texto) => {
+    const valor = texto !== undefined ? texto : codigoInput;
+    if (!valor || !valor.trim()) return;
+    setCodigoInput('');
+    procesar(valor);
+    enfocar();
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    ejecutarCarga(codigoInput);
+  };
+
+  const forzarExcedentes = () => {
+    if (!excedido) return;
+    const lista = excedido.codigos || [excedido.code];
+    procesar(lista.join(' '), true);
+    setExcedido(null);
+    enfocar();
+  };
+
+  const deshacer = () => {
+    if (!actual) return;
+    deshacerUltimoEscaneo(actual.prod);
+    setExcedido(null);
+    setFeedback(null);
+    // Reducir 1 unidad del stock real si hay stock cargado
+    if (setStockData) {
+      setStockData((prev) => {
+        const next = { ...(prev || {}) };
+        const k = actual.key;
+        const prodRef = actual.prod;
+        let targetId = prodRef.id && next[prodRef.id] ? prodRef.id : null;
+        if (!targetId) targetId = Object.keys(next).find((id) => normNombre(next[id]?.nombre) === k);
+        if (targetId && next[targetId]) {
+          const item = next[targetId];
+          const stockActual = Number(item.stock?.unidades ?? item.stock?.['1kg']) || 0;
+          const nuevoStock = Math.max(0, stockActual - 1);
+          const updated = {
+            ...item,
+            stock: { ...item.stock, '1kg': nuevoStock, unidades: nuevoStock }
+          };
+          next[targetId] = updated;
+          if (syncWithSheet) syncWithSheet(updated);
+          return next;
+        }
+        return prev;
+      });
+    }
+    setVersion((v) => v + 1);
+    enfocar();
+  };
+
+  const refrescarManual = async () => {
+    setRefrescando(true);
+    try {
+      if (typeof cargarStockDesdeSheet === 'function') {
+        await cargarStockDesdeSheet();
+      }
+    } catch (e) {
+      console.warn('Error al refrescar:', e);
+    } finally {
+      setVersion((v) => v + 1);
+      setTimeout(() => setRefrescando(false), 400);
+    }
   };
 
   // ── Vista de detalle de un producto ───────────────────────────────────────
@@ -331,7 +488,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
             </button>
           </div>
           <p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest px-1">
-            Podés escanear con pistola (Enter automático), escribir o pegar varios códigos: cada código suma 1 producto.
+            Podés escanear con pistola (Enter automático), escribir o pegar varios códigos: cada código suma 1 producto al stock real.
           </p>
         </div>
 

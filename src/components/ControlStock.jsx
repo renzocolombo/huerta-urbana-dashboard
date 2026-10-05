@@ -402,11 +402,6 @@ export default function ControlStock() {
     return () => clearInterval(interval);
   }, [refocusScanner, stockSubTab]);
 
-  useEffect(() => {
-    if (stockSubTab === 'identificar') {
-      cargarStockDesdeSheet();
-    }
-  }, [stockSubTab]);
 
   // ── Scanner: procesar código escaneado ───────────────────────────────────
   const procesarEscaneo = useCallback((rawCode) => {
