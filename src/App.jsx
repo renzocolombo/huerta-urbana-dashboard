@@ -86,7 +86,7 @@ export default function App() {
 
       {/* Contenido principal */}
       <main className="pt-14">
-        <div className={`mx-auto px-4 py-6 transition-all duration-300 ${seccion === 'costos' ? 'max-w-[1680px]' : 'max-w-7xl'}`}>
+        <div className="max-w-7xl mx-auto px-4 py-6">
           {/* Key fuerza remount al cambiar sección para animar entrada */}
           <div key={seccion} className="fade-in">
             <ComponenteActual rol={rol} usuario={usuario} />

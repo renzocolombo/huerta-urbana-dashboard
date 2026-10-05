@@ -1276,16 +1276,16 @@ export default function PanelCostos() {
           <table className="w-full text-xs text-left">
             <thead className="bg-[#111827] text-gray-400 uppercase tracking-wider font-bold">
               <tr>
-                <th className="px-4 py-3.5 min-w-[190px]">Producto</th>
-                <th className="px-3 py-3.5 whitespace-nowrap min-w-[160px]">Cajón / Kilos / Uds</th>
-                <th className="px-3 py-3.5 text-center whitespace-nowrap">Costo U.</th>
-                <th className="px-3 py-3.5 text-center whitespace-nowrap">Margen %</th>
-                <th className="px-3 py-3.5 text-center whitespace-nowrap">Precio (+M)</th>
-                <th className="px-3 py-3.5 text-center whitespace-nowrap">Tope Manual</th>
-                <th className="px-3 py-3.5 text-center whitespace-nowrap">Precio Final</th>
-                <th className="px-3 py-3.5 text-center whitespace-nowrap">M. Real</th>
-                <th className="px-3 py-3.5 text-center whitespace-nowrap">Ganancia</th>
-                <th className="px-4 py-3.5 text-center whitespace-nowrap min-w-[140px]">Sincronización</th>
+                <th className="pl-4 pr-1 py-3 whitespace-nowrap">Producto</th>
+                <th className="pl-1 pr-2 py-3 whitespace-nowrap">Cajón / Kilos / Uds</th>
+                <th className="px-2 py-3 text-center whitespace-nowrap">Costo U.</th>
+                <th className="px-2 py-3 text-center whitespace-nowrap">Margen %</th>
+                <th className="px-2 py-3 text-center whitespace-nowrap">Precio (+M)</th>
+                <th className="px-2 py-3 text-center whitespace-nowrap">Tope Manual</th>
+                <th className="px-2 py-3 text-center whitespace-nowrap">Precio Final</th>
+                <th className="px-2 py-3 text-center whitespace-nowrap">M. Real</th>
+                <th className="px-2 py-3 text-center whitespace-nowrap">Ganancia</th>
+                <th className="pl-2 pr-4 py-3 text-center whitespace-nowrap min-w-[130px]">Sincronización</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
@@ -1311,7 +1311,7 @@ export default function PanelCostos() {
                 return (
                   <Fragment key={cat.id}>
                     <tr className="bg-gray-900/80">
-                      <td colSpan="10" className="px-6 py-2.5 border-y border-gray-800">
+                      <td colSpan="10" className="px-4 py-2 border-y border-gray-800">
                         <div className="flex items-center justify-between">
                           <span className={`text-[11px] font-black uppercase tracking-[0.2em] ${cat.color}`}>{cat.label}</span>
                           <span className="text-[10px] text-gray-500 font-mono">{catItems.length} {catItems.length === 1 ? 'producto' : 'productos'}</span>
@@ -1320,15 +1320,15 @@ export default function PanelCostos() {
                     </tr>
                     {catItems.map(p => (
                       <tr key={p.id} className={`hover:bg-gray-800/40 transition-colors ${!p.activo ? 'opacity-40' : ''}`}>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <p className="font-bold text-white text-sm">{p.nombre}</p>
+                        <td className="pl-4 pr-1 py-2.5">
+                          <div className="flex items-center gap-1.5">
+                            <p className="font-bold text-white text-sm leading-tight">{p.nombre}</p>
                             {p.categoriaPrincipal === 'Almacén' && (
                               <div className="flex items-center gap-1" title="Stock en depósito (si es mayor a 0 se publica en la tienda web)">
                                 <input
                                   type="number"
                                   min="0"
-                                  className={`w-14 px-1 py-0.5 rounded text-[11px] font-mono font-bold border outline-none text-center transition-colors ${
+                                  className={`w-12 px-1 py-0.5 rounded text-[11px] font-mono font-bold border outline-none text-center transition-colors ${
                                     Number(p.stock_unidades) > 0 
                                       ? 'bg-emerald-950/70 border-emerald-500/50 text-emerald-300 focus:border-emerald-400' 
                                       : 'bg-red-950/70 border-red-500/50 text-red-300 focus:border-red-400'
@@ -1342,16 +1342,16 @@ export default function PanelCostos() {
                               </div>
                             )}
                           </div>
-                          <p className="text-[10px] text-gray-500 font-medium">
+                          <p className="text-[10px] text-gray-500 font-medium leading-normal">
                             {p.marca ? `${p.marca} · ` : ''}{p.subcategoria ? `${p.subcategoria} · ` : ''}Fila: {p.fila || '-'}
                           </p>
                         </td>
-                        <td className="px-3 py-3 text-gray-400">
-                          <div className="flex items-center gap-1.5 mb-1">
+                        <td className="pl-1 pr-2 py-2.5 text-gray-400">
+                          <div className="flex items-center gap-1 mb-0.5">
                             <span className="text-gray-500 font-mono text-[10px]">$</span>
                             <input 
                               type="number" 
-                              className="bg-gray-900 border border-gray-800 rounded-lg w-20 px-2 py-1 focus:border-green-500 outline-none text-white block font-mono font-bold"
+                              className="bg-gray-900 border border-gray-800 rounded-lg w-18 px-1.5 py-0.5 focus:border-green-500 outline-none text-white block font-mono font-bold text-xs"
                               placeholder="—"
                               value={p.precioCajon ? p.precioCajon : ''}
                               onFocus={(e) => e.target.select()}
@@ -1359,12 +1359,12 @@ export default function PanelCostos() {
                               title="Costo total pagado por el cajón o lote"
                             />
                           </div>
-                          <div className="flex items-center gap-1 mt-1">
+                          <div className="flex items-center gap-1">
                             <input 
                               type="number" 
                               min="0.1"
                               step="any"
-                              className="bg-gray-900 border border-gray-800 rounded-lg w-14 px-1.5 py-0.5 text-white font-mono text-xs focus:border-green-500 outline-none"
+                              className="bg-gray-900 border border-gray-800 rounded-lg w-13 px-1 py-0.5 text-white font-mono text-xs focus:border-green-500 outline-none"
                               placeholder="—"
                               value={p.cantidadCajon ? p.cantidadCajon : ''}
                               onFocus={(e) => e.target.select()}
@@ -1377,35 +1377,35 @@ export default function PanelCostos() {
                                 className="text-[9px] text-amber-400 font-mono px-1 py-0.2 rounded bg-amber-400/10 border border-amber-400/20 whitespace-nowrap" 
                                 title={`Costo calculado sobre ${(Math.max(0.1, p.cantidadCajon - 1)).toFixed(1)} kg netos (1kg de merma descontado)`}
                               >
-                                -1kg merma
+                                -1kg
                               </span>
                             )}
                           </div>
                         </td>
-                        <td className="px-3 py-3 font-mono text-gray-300 font-bold text-center whitespace-nowrap">
+                        <td className="px-2 py-2.5 font-mono text-gray-300 font-bold text-center whitespace-nowrap">
                           {$$(p.costoUnitario.toFixed(0))}
                           <span className="text-[9px] text-gray-500 block font-normal">/{p.unidad}</span>
                         </td>
-                        <td className="px-3 py-3 text-center whitespace-nowrap">
-                          <div className="flex items-center justify-center gap-1">
+                        <td className="px-2 py-2.5 text-center whitespace-nowrap">
+                          <div className="flex items-center justify-center gap-0.5">
                             <input 
                               type="number" 
-                              className="bg-gray-900 border border-gray-800 rounded-lg w-12 px-1 py-1 focus:border-green-500 outline-none text-white text-right font-mono"
+                              className="bg-gray-900 border border-gray-800 rounded-lg w-11 px-1 py-0.5 focus:border-green-500 outline-none text-white text-right font-mono text-xs"
                               placeholder="—"
                               value={p.margen ? p.margen : ''}
                               onFocus={(e) => e.target.select()}
                               onChange={(e) => actualizarProducto(p.id, 'margen', e.target.value === '' ? 0 : Number(e.target.value))}
                             />
-                            <span className="text-gray-500">%</span>
+                            <span className="text-gray-500 text-[11px]">%</span>
                           </div>
                         </td>
-                        <td className="px-3 py-3 font-mono text-blue-400 font-bold text-center whitespace-nowrap">{$$(p.precioConMargen.toFixed(0))}</td>
-                        <td className="px-3 py-3 text-center whitespace-nowrap">
+                        <td className="px-2 py-2.5 font-mono text-blue-400 font-bold text-center whitespace-nowrap text-xs">{$$(p.precioConMargen.toFixed(0))}</td>
+                        <td className="px-2 py-2.5 text-center whitespace-nowrap">
                           <div className="flex items-center justify-center gap-1">
                             <Lock size={10} className="text-gray-600" />
                             <input 
                               type="number" 
-                              className="bg-gray-900 border border-gray-800 rounded w-16 px-1.5 py-1 focus:border-amber-500 outline-none font-mono text-xs"
+                              className="bg-gray-900 border border-gray-800 rounded w-14 px-1 py-0.5 focus:border-amber-500 outline-none font-mono text-xs"
                               placeholder="—"
                               value={p.precioMaxManual || ''}
                               onFocus={(e) => e.target.select()}
@@ -1413,24 +1413,24 @@ export default function PanelCostos() {
                             />
                           </div>
                         </td>
-                        <td className="px-3 py-3 text-center whitespace-nowrap">
+                        <td className="px-2 py-2.5 text-center whitespace-nowrap">
                           <span className="text-sm font-black text-green-400 font-mono">{$$(p.precioFinal.toFixed(0))}</span>
                         </td>
-                        <td className="px-3 py-3 text-center whitespace-nowrap">
-                          <span className={`font-bold px-2 py-0.5 rounded-full ${p.margenReal > 50 ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-500'}`}>
+                        <td className="px-2 py-2.5 text-center whitespace-nowrap">
+                          <span className={`font-bold px-1.5 py-0.5 rounded-full text-[11px] ${p.margenReal > 50 ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-500'}`}>
                             {p.margenReal.toFixed(1)}%
                           </span>
                         </td>
-                        <td className="px-3 py-3 font-mono text-gray-500 text-center whitespace-nowrap">+$ {p.gananciaUnidad.toFixed(0)}</td>
-                        <td className="px-4 py-3 whitespace-nowrap">
+                        <td className="px-2 py-2.5 font-mono text-gray-500 text-center whitespace-nowrap text-xs">+$ {p.gananciaUnidad.toFixed(0)}</td>
+                        <td className="pl-2 pr-4 py-2.5 whitespace-nowrap">
                           <div className="flex items-center justify-center gap-2">
                             <button 
                               type="button"
                               onClick={() => actualizarProducto(p.id, 'activo', !p.activo)}
-                              className={`w-10 h-5 rounded-full relative transition-colors cursor-pointer shrink-0 ${p.activo ? 'bg-green-600' : 'bg-gray-700'}`}
+                              className={`w-9 h-5 rounded-full relative transition-colors cursor-pointer shrink-0 ${p.activo ? 'bg-green-600' : 'bg-gray-700'}`}
                               title={p.activo ? 'Producto activo en sincronización' : 'Producto pausado'}
                             >
-                              <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${p.activo ? 'right-1' : 'left-1'}`} />
+                              <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-all shadow ${p.activo ? 'right-0.5' : 'left-0.5'}`} />
                             </button>
                             <span className={`text-[10px] font-bold uppercase tracking-wider ${p.activo ? 'text-green-400' : 'text-gray-500'}`}>
                               {p.activo ? 'Activo' : 'Pausa'}
@@ -1438,10 +1438,10 @@ export default function PanelCostos() {
                             <button 
                               type="button"
                               onClick={() => eliminarProducto(p.id)} 
-                              className="p-1.5 text-gray-500 hover:text-red-400 transition-colors cursor-pointer"
+                              className="p-1 text-gray-500 hover:text-red-400 transition-colors cursor-pointer"
                               title="Eliminar producto"
                             >
-                              <Trash2 size={16} />
+                              <Trash2 size={15} />
                             </button>
                           </div>
                         </td>
