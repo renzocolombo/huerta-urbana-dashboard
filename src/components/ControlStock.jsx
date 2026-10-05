@@ -1570,15 +1570,25 @@ export default function ControlStock() {
         let stock_unidades = remoteInfo.stock_unidades !== undefined ? Number(remoteInfo.stock_unidades) : stock_1k;
         let orig_unidades = orig_1k;
 
-        if (cachedUnits && esUnidad) {
-          const remoteStockUds = remoteInfo.stock_unidades !== undefined ? Number(remoteInfo.stock_unidades) : null;
-          // Si el Sheet o Panel de Costos trae stock mayor a 0 y el cache local tenía 0, priorizar el stock del Sheet
-          if (remoteStockUds !== null && remoteStockUds > 0 && (!cachedUnits.stock || Number(cachedUnits.stock) <= 0)) {
-            stock_unidades = remoteStockUds;
-            orig_unidades = Math.max(stock_unidades, Number(cachedUnits.originalLoad) || stock_unidades);
+        if (esUnidad) {
+          const remoteStockUds = remoteInfo.stock_unidades !== undefined ? Number(remoteInfo.stock_unidades) : 0;
+          let identData = {};
+          try {
+            identData = JSON.parse(localStorage.getItem('huerta_almacen_identificacion_v1') || '{}');
+          } catch(e) {}
+          const userScans = identData[norm(p.nombre)]?.scans || [];
+          
+          // La cantidad comprada de Costos es el originalLoad (esperado a ingresar)
+          orig_unidades = Math.max(remoteStockUds, Number(cachedUnits?.originalLoad) || 0, userScans.length);
+
+          // El stock real disponible en depósito es ÚNICAMENTE lo que se haya escaneado e ingresado
+          if (cachedUnits && cachedUnits.stock !== undefined && cachedUnits.stock !== null) {
+            stock_unidades = Math.max(0, Number(cachedUnits.stock));
+          } else if (userScans.length > 0) {
+            stock_unidades = userScans.length;
           } else {
-            stock_unidades = cachedUnits.stock !== undefined ? Number(cachedUnits.stock) : (remoteStockUds ?? stock_1k);
-            orig_unidades = cachedUnits.originalLoad || stock_unidades;
+            // Producto nuevo en Costos pero todavía no escaneado: el stock real arranca en 0
+            stock_unidades = 0;
           }
         }
 
