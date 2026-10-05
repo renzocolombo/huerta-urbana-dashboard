@@ -1582,12 +1582,10 @@ export default function ControlStock() {
           orig_unidades = Math.max(remoteStockUds, Number(cachedUnits?.originalLoad) || 0, userScans.length);
 
           // El stock real disponible en depósito es ÚNICAMENTE lo que se haya escaneado e ingresado
-          if (cachedUnits && cachedUnits.stock !== undefined && cachedUnits.stock !== null) {
-            stock_unidades = Math.max(0, Number(cachedUnits.stock));
-          } else if (userScans.length > 0) {
-            stock_unidades = userScans.length;
+          if (userScans.length > 0) {
+            stock_unidades = (cachedUnits && Number(cachedUnits.stock) > 0) ? Number(cachedUnits.stock) : userScans.length;
           } else {
-            // Producto nuevo en Costos pero todavía no escaneado: el stock real arranca en 0
+            // Producto nuevo en Costos pero todavía no escaneado en depósito: stock real arranca en 0
             stock_unidades = 0;
           }
         }

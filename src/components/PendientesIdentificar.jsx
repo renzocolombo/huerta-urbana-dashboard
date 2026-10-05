@@ -51,12 +51,12 @@ function playScanBeep(success = true) {
 export function esCodigoValido(raw) {
   if (!raw) return false;
   const clean = limpiar(raw);
-  if (/^(20|02)\d{10,11}$/.test(clean)) return false; // Balanza con peso
+  if (/^(20|02)\d{10,11}$/.test(clean)) return false; // Balanza de pesaje
   return clean.length >= 4;
 }
 
 /**
- * Extrae uno o varios códigos ingresados juntos (separados por espacios, comas, saltos de línea o concatenados de 13/14 dígitos).
+ * Extrae uno o varios códigos ingresados juntos.
  */
 export function extraerCodigos(raw) {
   if (!raw) return [];
@@ -96,6 +96,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
   const [codigoInput, setCodigoInput] = useState('');
   const [subiendo, setSubiendo] = useState(false);
   const [refrescando, setRefrescando] = useState(false);
+  const [loteObjetivoCustom, setLoteObjetivoCustom] = useState({});
   const inputRef = useRef(null);
 
   // ── Lote multi-producto acumulado: { [prodKey]: [ { id, code, ts }, ... ] } ──
@@ -141,11 +142,10 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
             Math.round(Number(p?.originalLoad?.unidades ?? p?.originalLoad?.['1kg'] ?? p?.stock?.unidades ?? p?.stock?.['1kg']) || 0)
           );
           const scans = (ident[k] && Array.isArray(ident[k]?.scans)) ? ident[k].scans : [];
-          const stockRealActual = Math.max(0, Math.round(Number(p?.stock?.unidades ?? p?.stock?.['1kg']) || 0));
           map.set(k, {
             prod: p,
             total: totalEsperado,
-            identificadas: scans.length > 0 ? scans.length : stockRealActual,
+            identificadas: scans.length,
             scans,
             key: k
           });
@@ -259,33 +259,39 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
   }, [actual?.key, enfocar]);
 
   // Números en vivo del producto abierto
-  const totalObjetivo = actual?.total || 0;
-  const yaEnStock = actual?.identificadas || 0;
   const scansEnCola = (actual ? lotePendiente[actual.key] : []) || [];
   const enCola = scansEnCola.length;
-  const totalConCola = yaEnStock + enCola;
-  const restanEscanear = Math.max(0, totalObjetivo - totalConCola);
-  const completo = totalObjetivo > 0 && totalConCola >= totalObjetivo;
-  const pct = totalObjetivo > 0 ? Math.min(100, Math.round((totalConCola / totalObjetivo) * 100)) : 0;
+  // El objetivo de este lote: si el usuario lo ajustó manualmente usa ese, sino el de Costos (o mínimo 1 si era 0)
+  const totalBase = actual ? Number(actual.total) : 0;
+  const totalObjetivo = actual
+    ? (loteObjetivoCustom[actual.key] !== undefined ? loteObjetivoCustom[actual.key] : (totalBase > 0 ? totalBase : Math.max(1, enCola)))
+    : 0;
+
+  // ── RESTAN ESCANEAR: Descuenta en vivo con cada código en cola ──
+  const restanEscanear = Math.max(0, totalObjetivo - enCola);
+  const completo = totalObjetivo > 0 && enCola >= totalObjetivo;
+  const pct = totalObjetivo > 0 ? Math.min(100, Math.round((enCola / totalObjetivo) * 100)) : 0;
 
   // ── Agregar códigos escaneados a la cola del producto actual (descuenta contador en vivo) ──
   const agregarALaCola = (rawTexto) => {
+    if (!rawTexto || !actual) return;
     const codigos = extraerCodigos(rawTexto);
-    if (codigos.length === 0 || !actual) return;
+    if (codigos.length === 0) return;
 
     const nuevosValidos = [];
-    const errores = [];
+    const avisos = [];
 
     for (const code of codigos) {
       if (!esCodigoValido(code)) {
-        errores.push(`"${code}" no es un código de barras válido`);
+        avisos.push(`"${code}" no parece un código válido`);
         continue;
       }
+      
       const otro = productoDeCodigo(code, actual.prod.nombre);
-      if (otro) {
-        errores.push(`Código ${code} ya está asignado a "${otro}"`);
-        continue;
+      if (otro && normNombre(otro) !== normNombre(actual.prod.nombre)) {
+        avisos.push(`Código ${code} reasignado desde "${otro}"`);
       }
+
       nuevosValidos.push({
         id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
         code,
@@ -304,12 +310,26 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
         };
       });
       setCodigoInput('');
-      setFeedback(null);
-    } else if (errores.length > 0) {
+      if (avisos.length > 0) {
+        setFeedback({ tipo: 'ok', texto: avisos.join(' | ') });
+      } else {
+        setFeedback(null);
+      }
+    } else if (avisos.length > 0) {
       playScanBeep(false);
-      setFeedback({ tipo: 'error', texto: errores.join(' | ') });
+      setFeedback({ tipo: 'error', texto: avisos.join(' | ') });
     }
     enfocar();
+  };
+
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    // Si la pistola lectora pegó o envió saltos de línea (CR o LF)
+    if (/[\r\n]/.test(val)) {
+      agregarALaCola(val);
+      return;
+    }
+    setCodigoInput(val);
   };
 
   const quitarDeCola = (prodKey, index) => {
@@ -341,7 +361,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
   };
 
   const onKeyDown = (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' || e.keyCode === 13) {
       e.preventDefault();
       if (codigoInput.trim()) {
         agregarALaCola(codigoInput);
@@ -353,7 +373,6 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
 
   // ── Sincroniza productos cargados con el Stock Real y Google Sheets ─────────
   const procesarSubidaItems = async (itemsAProcesar) => {
-    // itemsAProcesar: [ { key, prod, scansList } ]
     let exitososTotal = 0;
     let productosActualizados = 0;
     const nextStock = { ...(stockData || {}) };
@@ -455,7 +474,6 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
   const subirProductoActualAlStock = async () => {
     if (subiendo || !actual) return;
 
-    // Si había algo ingresado en el input sin presionar Enter, incluirlo
     let scansList = [...scansEnCola];
     if (codigoInput.trim()) {
       const extraidos = extraerCodigos(codigoInput);
@@ -479,7 +497,6 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
 
       if (exitososTotal > 0) {
         playScanBeep(true);
-        // Quitar este producto de la cola pendiente
         setLotePendiente((prev) => {
           const next = { ...prev };
           delete next[actual.key];
@@ -625,10 +642,28 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
         <div className="grid grid-cols-3 gap-2.5">
           <div className="bg-black/40 border border-white/10 rounded-2xl p-3 text-center">
             <div className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">A ingresar</div>
-            <div className="text-2xl font-black font-mono text-white mt-0.5">
-              {totalObjetivo} <span className="text-xs text-gray-500 font-sans">ud</span>
+            <div className="flex items-center justify-center gap-1.5 mt-0.5">
+              <button
+                type="button"
+                onClick={() => setLoteObjetivoCustom(prev => ({ ...prev, [actual.key]: Math.max(1, totalObjetivo - 1) }))}
+                className="w-5 h-5 rounded bg-white/10 hover:bg-white/20 text-gray-300 font-bold flex items-center justify-center text-xs cursor-pointer select-none"
+                title="Restar 1"
+              >
+                -
+              </button>
+              <div className="text-2xl font-black font-mono text-white">
+                {totalObjetivo} <span className="text-xs text-gray-500 font-sans">ud</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLoteObjetivoCustom(prev => ({ ...prev, [actual.key]: totalObjetivo + 1 }))}
+                className="w-5 h-5 rounded bg-white/10 hover:bg-white/20 text-gray-300 font-bold flex items-center justify-center text-xs cursor-pointer select-none"
+                title="Sumar 1"
+              >
+                +
+              </button>
             </div>
-            <div className="text-[9px] text-gray-500 mt-0.5 font-semibold">Total en Costos</div>
+            <div className="text-[9px] text-gray-500 mt-1 font-semibold">Total a escanear</div>
           </div>
 
           <div className={`border rounded-2xl p-3 text-center transition-all duration-200 ${
@@ -662,7 +697,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
         <div className="space-y-1">
           <div className="flex justify-between text-[11px] text-gray-400 font-mono">
             <span>Progreso de escaneo</span>
-            <span className="font-bold text-white">{totalConCola} de {totalObjetivo} ({pct}%)</span>
+            <span className="font-bold text-white">{enCola} de {totalObjetivo} ({pct}%)</span>
           </div>
           <div className="h-2.5 rounded-full bg-black/60 overflow-hidden border border-white/5">
             <div
@@ -691,7 +726,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
                 ref={inputRef}
                 type="text"
                 value={codigoInput}
-                onChange={(e) => setCodigoInput(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={onKeyDown}
                 onBlur={() => setTimeout(enfocar, 150)}
                 placeholder={`🔫 Escaneá aquí cada unidad de "${prod.nombre}"...`}
@@ -989,10 +1024,9 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
         <div className="space-y-2">
           {visibles.map(({ prod, total, identificadas, key }) => {
             const enLoteProd = lotePendiente[key]?.length || 0;
-            const totalConLote = identificadas + enLoteProd;
-            const completo = total > 0 && totalConLote >= total;
-            const pct = total > 0 ? Math.min(100, Math.round((totalConLote / total) * 100)) : 0;
-            const restan = Math.max(0, total - totalConLote);
+            const restan = Math.max(0, total - enLoteProd);
+            const completo = total > 0 && enLoteProd >= total;
+            const pct = total > 0 ? Math.min(100, Math.round((enLoteProd / total) * 100)) : 0;
 
             return (
               <button
@@ -1018,7 +1052,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
                     <span className={`text-xs font-black font-mono ${
                       completo ? 'text-emerald-400' : 'text-amber-400'
                     }`}>
-                      {total === 0 ? `${totalConLote} identificadas` : `${totalConLote} de ${total} ud`}
+                      {total === 0 ? `${enLoteProd} escaneadas` : `${enLoteProd} de ${total} ud`}
                     </span>
                     {total > 0 && restan > 0 && (
                       <div className="text-[10px] text-gray-500 font-semibold">
