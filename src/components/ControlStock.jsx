@@ -1598,7 +1598,7 @@ export default function ControlStock() {
           stock: { '500g': stock_500, '1kg': esUnidad ? stock_unidades : stock_1k, unidades: esUnidad ? stock_unidades : stock_1k },
           originalLoad: { '500g': orig_500, '1kg': esUnidad ? orig_unidades : orig_1k, unidades: esUnidad ? orig_unidades : orig_1k },
           ultimoBandejeado: (cachedUnits && cachedUnits.fecha) || remoteInfo.ultimo_bandejeado || remoteInfo[5] || null,
-          tipo: remoteInfo.tipo || remoteInfo[1] || autoTipo,
+          tipo: getTipoOverride(p.nombre) || remoteInfo.tipo || remoteInfo[1] || autoTipo,
           categoriaPrincipal: catPrincipal,
           subcategoria: subCat,
           unidad,
@@ -1614,7 +1614,7 @@ export default function ControlStock() {
            stock: { '500g': 0, '1kg': savedStock, unidades: savedStock }, 
            originalLoad: { '500g': 0, '1kg': savedStock, unidades: savedStock },
            ultimoBandejeado: (cachedUnits && cachedUnits.fecha) || null, 
-           tipo: autoTipo, categoriaPrincipal: catPrincipal, subcategoria: subCat, unidad, esUnidad, totalDays: def.totalDays, urgentDays: def.alertDays
+           tipo: getTipoOverride(p.nombre) || autoTipo, categoriaPrincipal: catPrincipal, subcategoria: subCat, unidad, esUnidad, totalDays: def.totalDays, urgentDays: def.alertDays
          };
       } else {
         const def = DEFAULTS_BY_TYPE[autoTipo] || DEFAULTS_BY_TYPE['duro'];
@@ -1624,7 +1624,7 @@ export default function ControlStock() {
           stock: { '500g': 0, '1kg': savedStock, unidades: savedStock }, 
           originalLoad: { '500g': 0, '1kg': savedStock, unidades: savedStock },
           ultimoBandejeado: (cachedUnits && cachedUnits.fecha) || null, 
-          tipo: autoTipo, categoriaPrincipal: catPrincipal, subcategoria: subCat, unidad, esUnidad, totalDays: def.totalDays, urgentDays: def.alertDays
+          tipo: getTipoOverride(p.nombre) || autoTipo, categoriaPrincipal: catPrincipal, subcategoria: subCat, unidad, esUnidad, totalDays: def.totalDays, urgentDays: def.alertDays
         };
       }
     });
@@ -2057,6 +2057,10 @@ export default function ControlStock() {
 
   const updateProductData = (pid, patch) => {
     const newData = { ...stockData };
+    if (!newData[pid]) return;
+    if (patch.tipo) {
+      saveTipoOverride(newData[pid].nombre, patch.tipo);
+    }
     newData[pid] = { ...newData[pid], ...patch };
     setStockData(newData);
     syncWithSheet(newData[pid]);
@@ -3565,8 +3569,24 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd, onOp
   }, [editing, product]);
 
   const handleSaveSettings = () => {
+    if (localSettings.tipo) {
+      saveTipoOverride(product.nombre, localSettings.tipo);
+    }
     onUpdate(localSettings);
     setEditing(false);
+  };
+
+  const toggleTipoDirecto = (e) => {
+    e.stopPropagation();
+    const esDuroActual = product.tipo === 'duro';
+    const nuevoTipo = esDuroActual ? 'blando' : 'duro';
+    const def = DEFAULTS_BY_TYPE[nuevoTipo] || DEFAULTS_BY_TYPE['duro'];
+    saveTipoOverride(product.nombre, nuevoTipo);
+    onUpdate({
+      tipo: nuevoTipo,
+      totalDays: def.totalDays,
+      urgentDays: def.alertDays
+    });
   };
 
   const esUnidad = product.esUnidad || product.unidad === 'unidad';
@@ -3604,6 +3624,23 @@ function ProductCard({ product, onUpdate, isAdding, onToggleAdd, onSaveAdd, onOp
         <div className="flex items-center gap-2 mb-3">
           <span className="text-xl">{icon}</span>
           <h4 className="font-black text-white text-[14px] uppercase tracking-wide truncate leading-tight flex-1" title={product.nombre}>{product.nombre}</h4>
+          
+          {/* Botón rápido 1-clic para alternar Duro / Blando */}
+          {!esUnidad && (
+            <button
+              type="button"
+              onClick={toggleTipoDirecto}
+              className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer border flex items-center gap-1 select-none shrink-0 shadow-sm ${
+                product.tipo === 'duro'
+                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 hover:bg-amber-500/30'
+                  : 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/30'
+              }`}
+              title={`Clasificado como ${product.tipo === 'duro' ? 'DURO' : 'BLANDO'}. Hacé clic para cambiar a ${product.tipo === 'duro' ? 'BLANDO' : 'DURO'}`}
+            >
+              <span>{product.tipo === 'duro' ? '🥔' : '🥬'}</span>
+              <span>{product.tipo === 'duro' ? 'Duro' : 'Blando'}</span>
+            </button>
+          )}
         </div>
 
         <div className="space-y-3">
