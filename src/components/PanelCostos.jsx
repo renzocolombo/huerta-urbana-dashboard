@@ -1324,8 +1324,10 @@ export default function PanelCostos() {
                                       ? 'bg-emerald-950/70 border-emerald-500/50 text-emerald-300 focus:border-emerald-400' 
                                       : 'bg-red-950/70 border-red-500/50 text-red-300 focus:border-red-400'
                                   }`}
-                                  value={p.stock_unidades !== undefined ? p.stock_unidades : 0}
-                                  onChange={(e) => actualizarProducto(p.id, 'stock_unidades', Math.max(0, parseInt(e.target.value) || 0))}
+                                  placeholder="—"
+                                  value={p.stock_unidades ? p.stock_unidades : ''}
+                                  onFocus={(e) => e.target.select()}
+                                  onChange={(e) => actualizarProducto(p.id, 'stock_unidades', e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value) || 0))}
                                 />
                                 <span className="text-[10px] text-gray-400 font-mono">uds</span>
                               </div>
@@ -1341,8 +1343,10 @@ export default function PanelCostos() {
                             <input 
                               type="number" 
                               className="bg-gray-900 border border-gray-800 rounded-lg w-20 px-2 py-1 focus:border-green-500 outline-none text-white block font-mono font-bold"
-                              value={p.precioCajon}
-                              onChange={(e) => actualizarProducto(p.id, 'precioCajon', Number(e.target.value))}
+                              placeholder="—"
+                              value={p.precioCajon ? p.precioCajon : ''}
+                              onFocus={(e) => e.target.select()}
+                              onChange={(e) => actualizarProducto(p.id, 'precioCajon', e.target.value === '' ? 0 : Number(e.target.value))}
                               title="Costo total pagado por el cajón o lote"
                             />
                           </div>
@@ -1352,8 +1356,10 @@ export default function PanelCostos() {
                               min="0.1"
                               step="any"
                               className="bg-gray-900 border border-gray-800 rounded-lg w-14 px-1.5 py-0.5 text-white font-mono text-xs focus:border-green-500 outline-none"
-                              value={p.cantidadCajon}
-                              onChange={(e) => actualizarProducto(p.id, 'cantidadCajon', Number(e.target.value) || 1)}
+                              placeholder="—"
+                              value={p.cantidadCajon ? p.cantidadCajon : ''}
+                              onFocus={(e) => e.target.select()}
+                              onChange={(e) => actualizarProducto(p.id, 'cantidadCajon', e.target.value === '' ? 0 : Number(e.target.value))}
                               title={p.esPesado ? "Kilos brutos comprados (se resta 1kg de merma automáticamente)" : "Cantidad de unidades compradas"}
                             />
                             <span className="text-[10px] text-gray-500 uppercase font-mono">{p.unidad}</span>
@@ -1376,8 +1382,10 @@ export default function PanelCostos() {
                             <input 
                               type="number" 
                               className="bg-gray-900 border border-gray-800 rounded-lg w-12 px-1 py-1 focus:border-green-500 outline-none text-white text-right font-mono"
-                              value={p.margen}
-                              onChange={(e) => actualizarProducto(p.id, 'margen', Number(e.target.value))}
+                              placeholder="—"
+                              value={p.margen ? p.margen : ''}
+                              onFocus={(e) => e.target.select()}
+                              onChange={(e) => actualizarProducto(p.id, 'margen', e.target.value === '' ? 0 : Number(e.target.value))}
                             />
                             <span className="text-gray-500">%</span>
                           </div>
@@ -1389,8 +1397,9 @@ export default function PanelCostos() {
                             <input 
                               type="number" 
                               className="bg-gray-900 border border-gray-800 rounded w-16 px-1.5 py-1 focus:border-amber-500 outline-none font-mono text-xs"
-                              placeholder="Auto"
+                              placeholder="—"
                               value={p.precioMaxManual || ''}
+                              onFocus={(e) => e.target.select()}
                               onChange={(e) => actualizarProducto(p.id, 'precioMaxManual', e.target.value ? Number(e.target.value) : null)}
                             />
                           </div>
@@ -1590,8 +1599,10 @@ export default function PanelCostos() {
                       type="number" 
                       min="0"
                       className="w-full bg-black/40 border border-amber-500/40 rounded-xl px-3 py-2 text-amber-300 font-mono font-bold focus:border-amber-400 outline-none transition-all text-xs text-center"
-                      value={tempProd.stock_unidades !== undefined ? tempProd.stock_unidades : 10}
-                      onChange={(e) => setTempProd({...tempProd, stock_unidades: Math.max(0, parseInt(e.target.value) || 0)})}
+                      placeholder="—"
+                      value={tempProd.stock_unidades ? tempProd.stock_unidades : ''}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => setTempProd({...tempProd, stock_unidades: e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value) || 0)})}
                     />
                   </div>
                   <div className="col-span-2 pt-0.5">
@@ -1639,8 +1650,10 @@ export default function PanelCostos() {
                     min="0.1"
                     step="any"
                     className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all font-mono"
-                    value={tempProd.cantidadCajon}
-                    onChange={(e) => setTempProd({...tempProd, cantidadCajon: Number(e.target.value) || 1})}
+                    placeholder="—"
+                    value={tempProd.cantidadCajon ? tempProd.cantidadCajon : ''}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setTempProd({...tempProd, cantidadCajon: e.target.value === '' ? 0 : Number(e.target.value)})}
                   />
                   {tempProd.unidad === 'kg' ? (
                     <p className="text-[10px] text-amber-400">Se resta 1kg de merma para calcular el costo ({Math.max(0.1, (tempProd.cantidadCajon || 1) - 1).toFixed(1)} kg netos).</p>
@@ -1656,8 +1669,10 @@ export default function PanelCostos() {
                     type="number" 
                     min="0"
                     className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all font-mono font-bold"
-                    value={tempProd.precioCajon}
-                    onChange={(e) => setTempProd({...tempProd, precioCajon: Number(e.target.value) || 0})}
+                    placeholder="—"
+                    value={tempProd.precioCajon ? tempProd.precioCajon : ''}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setTempProd({...tempProd, precioCajon: e.target.value === '' ? 0 : Number(e.target.value)})}
                   />
                   <p className="text-[10px] text-emerald-400 font-mono">
                     Costo U.: ${tempProd.precioCajon && tempProd.cantidadCajon 
@@ -1673,8 +1688,10 @@ export default function PanelCostos() {
                   <input 
                     type="number" 
                     className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-green-500 outline-none transition-all font-bold text-green-500 font-mono"
-                    value={tempProd.margen}
-                    onChange={(e) => setTempProd({...tempProd, margen: Number(e.target.value)})}
+                    placeholder="—"
+                    value={tempProd.margen ? tempProd.margen : ''}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setTempProd({...tempProd, margen: e.target.value === '' ? 0 : Number(e.target.value)})}
                   />
                 </div>
                 <div className="space-y-2">
@@ -1682,8 +1699,9 @@ export default function PanelCostos() {
                   <input 
                     type="number" 
                     className="w-full bg-gray-900 border border-gray-800 rounded-2xl px-4 py-3 text-white focus:border-amber-500 outline-none transition-all font-mono"
-                    placeholder="Desactivado"
-                    value={tempProd.precioMaxManual}
+                    placeholder="—"
+                    value={tempProd.precioMaxManual || ''}
+                    onFocus={(e) => e.target.select()}
                     onChange={(e) => setTempProd({...tempProd, precioMaxManual: e.target.value === '' ? '' : Number(e.target.value)})}
                   />
                 </div>
