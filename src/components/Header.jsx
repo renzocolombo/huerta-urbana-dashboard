@@ -1,34 +1,53 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Leaf, LayoutDashboard, ShoppingCart, Clock, Users, MapPin, Route, DollarSign, Package, FileText, Menu, X, LogOut, Database, Landmark, AlertTriangle, Scale } from 'lucide-react';
+import { 
+  Leaf, LayoutDashboard, ShoppingCart, Clock, Users, MapPin, 
+  Package, FileText, Menu, X, LogOut, Database, Landmark, AlertTriangle, 
+  Scale, Home, ShieldCheck 
+} from 'lucide-react';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { calcularFaltantes } from './Faltantes';
+import { apiGetStockKg } from '../utils/mercaderiaApi';
 
 const NAV_ITEMS = [
-  { id: 'finanzas',   label: 'Finanzas',          icon: Landmark },
-  { id: 'pedidos',    label: 'Pedidos del día',   icon: ShoppingCart },
-  { id: 'agenda',     label: 'Agenda entregas',   icon: MapPin },
-  { id: 'mercaderia', label: 'Mercadería',        icon: Scale },
-  { id: 'costos',     label: 'Panel de costos',   icon: DollarSign },
-  { id: 'stock',      label: 'Control stock',     icon: Package },
-  { id: 'faltantes',  label: 'Faltantes',         icon: AlertTriangle },
-  { id: 'clientes',   label: 'Clientes',          icon: Users },
-  { id: 'historial',  label: 'Historial',         icon: Clock },
-  { id: 'graficos',   label: 'Gráficos',          icon: LayoutDashboard },
-  { id: 'reportes',   label: 'Reportes',          icon: FileText },
+  { id: 'finanzas',    label: 'Finanzas',               icon: Landmark },
+  { id: 'pedidos',     label: 'Pedidos del día',        icon: ShoppingCart },
+  { id: 'agenda',      label: 'Agenda entregas',        icon: MapPin },
+  { id: 'productos',   label: 'Productos',              icon: Package },
+  { id: 'hogar',       label: 'Hogar',                  icon: Home },
+  { id: 'hogar_admin', label: 'Hogar - administración', icon: ShieldCheck, adminOnly: true },
+  { id: 'stock',       label: 'Control stock (viejo)',  icon: Scale },
+  { id: 'faltantes',   label: 'Faltantes',              icon: AlertTriangle },
+  { id: 'clientes',    label: 'Clientes',               icon: Users },
+  { id: 'historial',   label: 'Historial',              icon: Clock },
+  { id: 'graficos',    label: 'Gráficos',               icon: LayoutDashboard },
+  { id: 'reportes',    label: 'Reportes',              icon: FileText },
 ];
 
 export default function Header({ seccion, onNav, onLogout, rol, usuario, urlSheet, setSeccionActiva }) {
   const [menuAbierto, setMenuAbierto] = useState(false);
   const { conectado, ultimoRefresco, stockData, productosCostos, pedidos } = useGoogleSheets();
+  const [stockKgList, setStockKgList] = useState(null);
+
+  useEffect(() => {
+    let cancel = false;
+    apiGetStockKg()
+      .then((res) => {
+        if (!cancel && res && res.ok && Array.isArray(res.productos)) {
+          setStockKgList(res.productos);
+        }
+      })
+      .catch(() => {});
+    return () => { cancel = true; };
+  }, [ultimoRefresco]);
 
   const faltantesCount = useMemo(() => {
     try {
-      const res = calcularFaltantes(stockData, productosCostos, pedidos);
+      const res = calcularFaltantes(stockData, productosCostos, pedidos, stockKgList);
       return res?.faltantes?.length || 0;
     } catch (e) {
       return 0;
     }
-  }, [stockData, productosCostos, pedidos]);
+  }, [stockData, productosCostos, pedidos, stockKgList]);
 
   const getEstilosSaludo = (u) => {
     const user = (u || '').toLowerCase();
@@ -38,8 +57,18 @@ export default function Header({ seccion, onNav, onLogout, rol, usuario, urlShee
 
   const estilos = getEstilosSaludo(usuario);
 
+  const esAdminRem = rol === 'admin' && (
+    (usuario || '').toLowerCase() === 'ren' || 
+    (usuario || '').toLowerCase() === 'rem' ||
+    (usuario || '').toLowerCase() === 'admin'
+  );
 
-  const itemsMostrar = rol === 'admin' ? NAV_ITEMS : (rol === 'repartidor' ? NAV_ITEMS.filter(item => item.id === 'agenda') : []);
+  const itemsMostrar = rol === 'admin' 
+    ? NAV_ITEMS.filter(item => {
+        if (item.adminOnly) return esAdminRem;
+        return true;
+      })
+    : (rol === 'repartidor' ? NAV_ITEMS.filter(item => item.id === 'agenda') : []);
 
   return (
     <>

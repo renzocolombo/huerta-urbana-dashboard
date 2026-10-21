@@ -1,7 +1,7 @@
 import { APPS_SCRIPT_URL } from './appsScriptUrl';
 
 /**
- * Cliente de llamadas al Apps Script para el módulo de Mercadería, Stock y Precios.
+ * Cliente de llamadas al Apps Script para Productos, Compras, Salidas y Hogar.
  * Envía POST JSON con { accion, ...params } contra el endpoint activo.
  */
 export async function llamarAppsScript(accion, params = {}, timeoutMs = 20000) {
@@ -53,61 +53,29 @@ export async function llamarAppsScript(accion, params = {}, timeoutMs = 20000) {
   }
 }
 
-// ── Servicios específicos del contrato ─────────────────────────────────────
-
-export async function apiGetConfig() {
-  return llamarAppsScript('getConfig');
-}
-
-export async function apiSetConfig(clave, valor) {
-  return llamarAppsScript('setConfig', { clave, valor });
-}
-
-export async function apiCrearIngreso({ producto, proveedor, kg_netos, costo_total, cajones }) {
-  return llamarAppsScript('crearIngreso', {
-    producto,
-    proveedor,
-    kg_netos: Number(kg_netos),
-    costo_total: Number(costo_total),
-    ...(Array.isArray(cajones) ? { cajones } : {}),
-  });
-}
+// ── 1. PRODUCTOS & CONFIG ──────────────────────────────────────────────────
 
 export async function apiGetStockKg(producto = null) {
   return llamarAppsScript('getStockKg', producto ? { producto } : {});
 }
 export const apiGetStock = apiGetStockKg;
 
-export async function apiGetIngresos(producto = null, limite = 50) {
-  return llamarAppsScript('getIngresos', {
-    ...(producto ? { producto } : {}),
-    ...(limite ? { limite } : {}),
-  });
-}
-
-export async function apiRegistrarSalida({ producto, tipo, kg, nota }) {
-  return llamarAppsScript('registrarSalida', {
-    producto,
-    tipo,
-    kg: Number(kg),
-    nota: nota || '',
-  });
-}
-
-export async function apiGetMovimientos(producto = null, limite = 50) {
-  return llamarAppsScript('getMovimientos', {
-    ...(producto ? { producto } : {}),
-    ...(limite ? { limite } : {}),
-  });
-}
-
 export async function apiGetPreciosSugeridos() {
   return llamarAppsScript('getPreciosSugeridos');
 }
 
+export async function apiCrearProducto({ producto, categoria, unidad = 'kg', margen_pct }) {
+  return llamarAppsScript('crearProducto', {
+    producto: String(producto).trim(),
+    categoria: categoria ? String(categoria).trim() : 'Verduras',
+    unidad: (unidad === 'un' || unidad === 'atado') ? unidad : 'kg',
+    ...(margen_pct !== undefined && margen_pct !== null ? { margen_pct: Number(margen_pct) } : {}),
+  });
+}
+
 export async function apiSetMargen(producto, margen_pct) {
   return llamarAppsScript('setMargen', {
-    producto,
+    producto: String(producto).trim(),
     margen_pct: Number(margen_pct),
   });
 }
@@ -125,4 +93,164 @@ export async function apiPublicarPrecios(payload) {
     origen: 'mercaderia',
     productos,
   });
+}
+
+export async function apiGetConfig() {
+  return llamarAppsScript('getConfig');
+}
+
+export async function apiSetConfig(clave, valor) {
+  return llamarAppsScript('setConfig', { clave, valor });
+}
+
+// ── 2. COMPRAS / INGRESOS ──────────────────────────────────────────────────
+
+export async function apiCrearIngreso({ 
+  producto, proveedor, proveedor_tel, kg_netos, costo_total, 
+  cajones, categoria, unidad 
+}) {
+  return llamarAppsScript('crearIngreso', {
+    producto: String(producto).trim(),
+    proveedor: proveedor ? String(proveedor).trim() : 'Sin especificar',
+    ...(proveedor_tel ? { proveedor_tel: String(proveedor_tel).trim() } : {}),
+    kg_netos: Number(kg_netos),
+    costo_total: Number(costo_total),
+    ...(Array.isArray(cajones) && cajones.length > 0 ? { cajones } : {}),
+    ...(categoria ? { categoria: String(categoria).trim() } : {}),
+    ...(unidad ? { unidad: String(unidad).trim() } : {}),
+  });
+}
+
+export async function apiGetIngresos(producto = null, limite = 100) {
+  return llamarAppsScript('getIngresos', {
+    ...(producto ? { producto } : {}),
+    ...(limite ? { limite } : {}),
+  });
+}
+
+export async function apiGetProveedores() {
+  return llamarAppsScript('getProveedores');
+}
+
+// ── 3. SALIDAS (MERMA, AJUSTE, CASA) ───────────────────────────────────────
+
+/**
+ * Registra una o más salidas de stock en el Sheet.
+ * @param {Object} params
+ * @param {'MERMA'|'AJUSTE'|'CASA'} params.tipo
+ * @param {Array<{producto: string, kg: number}>} params.items
+ * @param {string} [params.nota]
+ * @param {string} [params.admin_pin] Requerido para MERMA y AJUSTE
+ * @param {string} [params.pin] Requerido para CASA
+ */
+export async function apiRegistrarSalidas({ tipo, items, nota, admin_pin, pin }) {
+  const payload = {
+    tipo,
+    items: (items || []).map(it => ({
+      producto: String(it.producto).trim(),
+      kg: Number(it.kg),
+    })),
+    ...(nota ? { nota: String(nota).trim() } : {}),
+    ...(admin_pin ? { admin_pin: String(admin_pin).trim() } : {}),
+    ...(pin ? { pin: String(pin).trim() } : {}),
+  };
+  return llamarAppsScript('registrarSalidas', payload);
+}
+
+export async function apiGetMovimientos({ producto = null, tipo = null, limite = 100 } = {}) {
+  return llamarAppsScript('getMovimientos', {
+    ...(producto ? { producto } : {}),
+    ...(tipo ? { tipo } : {}),
+    ...(limite ? { limite } : {}),
+  });
+}
+
+// ── 4. HOGAR (FAMILIA & ADMINISTRACIÓN) ─────────────────────────────────────
+
+export async function apiGetHogar() {
+  return llamarAppsScript('getHogar');
+}
+
+export async function apiVerificarHogarPin(pin) {
+  return llamarAppsScript('verificarHogarPin', {
+    pin: String(pin).trim(),
+  });
+}
+
+export async function apiHogarCargar({ monto, modo = 'sumar', nota = '', admin_pin }) {
+  return llamarAppsScript('hogarCargar', {
+    monto: Number(monto),
+    modo: (modo === 'reemplazar') ? 'reemplazar' : 'sumar',
+    nota: String(nota || '').trim(),
+    admin_pin: String(admin_pin).trim(),
+  });
+}
+
+export async function apiSetHogarPin({ pin_nuevo, admin_pin }) {
+  return llamarAppsScript('setHogarPin', {
+    pin_nuevo: String(pin_nuevo).trim(),
+    admin_pin: String(admin_pin).trim(),
+  });
+}
+
+export async function apiSetAdminPin({ pin_nuevo, pin_actual }) {
+  return llamarAppsScript('setAdminPin', {
+    pin_nuevo: String(pin_nuevo).trim(),
+    ...(pin_actual ? { pin_actual: String(pin_actual).trim() } : {}),
+  });
+}
+
+// ── GESTIÓN DE PINS EN MEMORIA (NUNCA LOCALSTORAGE) ─────────────────────────
+// Bloqueo automático por inactividad:
+// Admin: 15 minutos sin uso
+// Hogar: 5 minutos sin uso
+
+let _adminPinMemory = null;
+let _adminPinExpiresAt = 0;
+
+export function getAdminPinSession() {
+  if (!_adminPinMemory) return null;
+  if (Date.now() > _adminPinExpiresAt) {
+    _adminPinMemory = null;
+    _adminPinExpiresAt = 0;
+    return null;
+  }
+  // Renovar ventana de 15 minutos de inactividad
+  _adminPinExpiresAt = Date.now() + 15 * 60 * 1000;
+  return _adminPinMemory;
+}
+
+export function setAdminPinSession(pin) {
+  _adminPinMemory = String(pin).trim();
+  _adminPinExpiresAt = Date.now() + 15 * 60 * 1000;
+}
+
+export function clearAdminPinSession() {
+  _adminPinMemory = null;
+  _adminPinExpiresAt = 0;
+}
+
+let _hogarPinMemory = null;
+let _hogarPinExpiresAt = 0;
+
+export function getHogarPinSession() {
+  if (!_hogarPinMemory) return null;
+  if (Date.now() > _hogarPinExpiresAt) {
+    _hogarPinMemory = null;
+    _hogarPinExpiresAt = 0;
+    return null;
+  }
+  // Renovar ventana de 5 minutos de inactividad
+  _hogarPinExpiresAt = Date.now() + 5 * 60 * 1000;
+  return _hogarPinMemory;
+}
+
+export function setHogarPinSession(pin) {
+  _hogarPinMemory = String(pin).trim();
+  _hogarPinExpiresAt = Date.now() + 5 * 60 * 1000;
+}
+
+export function clearHogarPinSession() {
+  _hogarPinMemory = null;
+  _hogarPinExpiresAt = 0;
 }

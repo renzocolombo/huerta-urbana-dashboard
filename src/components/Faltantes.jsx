@@ -1,11 +1,12 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { 
   Printer, Copy, Check, AlertCircle, AlertTriangle, 
-  PackageX, ShoppingBag, Layers, HelpCircle, CheckSquare, Search
+  PackageX, ShoppingBag, Layers, HelpCircle, CheckSquare, Search, RefreshCw
 } from 'lucide-react';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { parsearProductosPedido } from '../utils/remitoPrinter';
 import { getTipoByNombre, getCategoriaPrincipal } from '../data/productUtils';
+import { apiGetStockKg } from '../utils/mercaderiaApi';
 
 const norm = (s) =>
   (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -13,7 +14,7 @@ const norm = (s) =>
 /**
  * Función central de cálculo de faltantes utilizada por la pantalla Faltantes y el Header (badge).
  */
-export function calcularFaltantes(stockData, productosCostos, pedidos) {
+export function calcularFaltantes(stockData, productosCostos, pedidos, stockKgList = null) {
   // 1. Unificar catálogo de productos
   const stockList = Array.isArray(stockData)
     ? stockData
@@ -41,7 +42,24 @@ export function calcularFaltantes(stockData, productosCostos, pedidos) {
     });
   });
 
-  // Sobreimprimir con datos reales de stock
+  // Incorporar productos provenientes de getStockKg si existen
+  if (Array.isArray(stockKgList)) {
+    stockKgList.forEach((sk) => {
+      if (!sk || !sk.producto) return;
+      const k = norm(sk.producto);
+      const existing = catalogMap.get(k) || {};
+      catalogMap.set(k, {
+        ...existing,
+        id: sk.id || existing.id,
+        nombre: sk.producto || existing.nombre,
+        categoriaPrincipal: sk.categoria || existing.categoriaPrincipal || getCategoriaPrincipal(sk.producto),
+        unidad: sk.unidad || existing.unidad || 'kg',
+        en_deposito: Number(sk.en_deposito || 0),
+      });
+    });
+  }
+
+  // Sobreimprimir con datos de ControlStock
   stockList.forEach((s) => {
     if (!s || !s.nombre) return;
     const k = norm(s.nombre);
@@ -134,42 +152,49 @@ export function calcularFaltantes(stockData, productosCostos, pedidos) {
     let stockActual = 0;
     let cargaOriginal = 0;
     let tieneCargaOriginal = false;
-    let unidadLabel = 'kg';
+    let unidadLabel = p.unidad || 'kg';
 
-    if (esUnidad) {
-      stockActual = Number(p.stock_unidades ?? 0);
-      unidadLabel = p.unidad?.includes('maple') ? 'maples' : 'uds';
-      if (p.original_load_1kg !== null && p.original_load_1kg !== undefined && p.original_load_1kg !== '') {
-        cargaOriginal = Number(p.original_load_1kg) || 0;
-        tieneCargaOriginal = true;
-      }
-    } else if (tipo === 'hoja verde') {
-      const s500 = Number(p.stock_500g || 0);
-      const s1k = Number(p.stock_1kg || 0);
-      stockActual = Math.round((s500 * 0.25 + s1k * 0.5) * 100) / 100;
-      unidadLabel = 'kg';
-      if (
-        (p.original_load_500g !== null && p.original_load_500g !== undefined && p.original_load_500g !== '') ||
-        (p.original_load_1kg !== null && p.original_load_1kg !== undefined && p.original_load_1kg !== '')
-      ) {
-        const o500 = Number(p.original_load_500g || 0);
-        const o1k = Number(p.original_load_1kg || 0);
-        cargaOriginal = Math.round((o500 * 0.25 + o1k * 0.5) * 100) / 100;
-        tieneCargaOriginal = o500 > 0 || o1k > 0;
-      }
+    if (stockKgList) {
+      // Fuente oficial getStockKg (en_deposito), comparando por nombre normalizado. Si no está, stock 0.
+      stockActual = Number(p.en_deposito || 0);
+      unidadLabel = p.unidad || (esUnidad ? (p.unidad?.includes('maple') ? 'maples' : 'uds') : 'kg');
     } else {
-      const s500 = Number(p.stock_500g || 0);
-      const s1k = Number(p.stock_1kg || 0);
-      stockActual = Math.round((s500 * 0.5 + s1k * 1.0) * 100) / 100;
-      unidadLabel = 'kg';
-      if (
-        (p.original_load_500g !== null && p.original_load_500g !== undefined && p.original_load_500g !== '') ||
-        (p.original_load_1kg !== null && p.original_load_1kg !== undefined && p.original_load_1kg !== '')
-      ) {
-        const o500 = Number(p.original_load_500g || 0);
-        const o1k = Number(p.original_load_1kg || 0);
-        cargaOriginal = Math.round((o500 * 0.5 + o1k * 1.0) * 100) / 100;
-        tieneCargaOriginal = o500 > 0 || o1k > 0;
+      // Cálculo previo legacy (ControlStock: bolsas 500g/1kg y stock_unidades)
+      if (esUnidad) {
+        stockActual = Number(p.stock_unidades ?? 0);
+        unidadLabel = p.unidad?.includes('maple') ? 'maples' : 'uds';
+        if (p.original_load_1kg !== null && p.original_load_1kg !== undefined && p.original_load_1kg !== '') {
+          cargaOriginal = Number(p.original_load_1kg) || 0;
+          tieneCargaOriginal = true;
+        }
+      } else if (tipo === 'hoja verde') {
+        const s500 = Number(p.stock_500g || 0);
+        const s1k = Number(p.stock_1kg || 0);
+        stockActual = Math.round((s500 * 0.25 + s1k * 0.5) * 100) / 100;
+        unidadLabel = 'kg';
+        if (
+          (p.original_load_500g !== null && p.original_load_500g !== undefined && p.original_load_500g !== '') ||
+          (p.original_load_1kg !== null && p.original_load_1kg !== undefined && p.original_load_1kg !== '')
+        ) {
+          const o500 = Number(p.original_load_500g || 0);
+          const o1k = Number(p.original_load_1kg || 0);
+          cargaOriginal = Math.round((o500 * 0.25 + o1k * 0.5) * 100) / 100;
+          tieneCargaOriginal = o500 > 0 || o1k > 0;
+        }
+      } else {
+        const s500 = Number(p.stock_500g || 0);
+        const s1k = Number(p.stock_1kg || 0);
+        stockActual = Math.round((s500 * 0.5 + s1k * 1.0) * 100) / 100;
+        unidadLabel = 'kg';
+        if (
+          (p.original_load_500g !== null && p.original_load_500g !== undefined && p.original_load_500g !== '') ||
+          (p.original_load_1kg !== null && p.original_load_1kg !== undefined && p.original_load_1kg !== '')
+        ) {
+          const o500 = Number(p.original_load_500g || 0);
+          const o1k = Number(p.original_load_1kg || 0);
+          cargaOriginal = Math.round((o500 * 0.5 + o1k * 1.0) * 100) / 100;
+          tieneCargaOriginal = o500 > 0 || o1k > 0;
+        }
       }
     }
 
@@ -234,10 +259,30 @@ export default function Faltantes() {
   const [copiado, setCopiado] = useState(false);
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('Todos');
+  const [stockKgList, setStockKgList] = useState(null);
+  const [cargandoStockKg, setCargandoStockKg] = useState(false);
+
+  const cargarStockKg = async () => {
+    setCargandoStockKg(true);
+    try {
+      const res = await apiGetStockKg();
+      if (res && res.ok && Array.isArray(res.productos)) {
+        setStockKgList(res.productos);
+      }
+    } catch (e) {
+      console.warn('Error al obtener getStockKg para faltantes:', e);
+    } finally {
+      setCargandoStockKg(false);
+    }
+  };
+
+  useEffect(() => {
+    cargarStockKg();
+  }, []);
 
   const { faltantes, sinIdentificar } = useMemo(() => {
-    return calcularFaltantes(stockData, productosCostos, pedidos);
-  }, [stockData, productosCostos, pedidos]);
+    return calcularFaltantes(stockData, productosCostos, pedidos, stockKgList);
+  }, [stockData, productosCostos, pedidos, stockKgList]);
 
   const filtrados = useMemo(() => {
     return faltantes.filter((item) => {
@@ -363,6 +408,15 @@ export default function Faltantes() {
           >
             <Printer size={16} />
             <span>Imprimir planilla (A4)</span>
+          </button>
+
+          <button
+            onClick={cargarStockKg}
+            disabled={cargandoStockKg}
+            className="p-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white transition-all cursor-pointer"
+            title="Refrescar stock en depósito (getStockKg)"
+          >
+            <RefreshCw size={16} className={cargandoStockKg ? 'animate-spin text-green-400' : ''} />
           </button>
         </div>
       </div>

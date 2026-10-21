@@ -11,32 +11,46 @@ import PedidosDelDia from './components/PedidosDelDia';
 import Historial from './components/Historial';
 import Clientes from './components/Clientes';
 import AgendaEntregas from './components/AgendaEntregas';
-import PanelCostos from './components/PanelCostos';
 import Finanzas from './components/Finanzas';
 import ControlStock from './components/ControlStock';
 import Faltantes from './components/Faltantes';
-import Mercaderia from './components/Mercaderia';
+import Productos from './components/Productos';
+import Hogar from './components/Hogar';
+import HogarAdmin from './components/HogarAdmin';
 import Reportes from './components/Reportes';
 import IAFlotante from './components/IAFlotante';
 import { useGoogleSheets } from './context/GoogleSheetsContext';
 
 // Mapa de secciones del dashboard
 const SECCIONES = {
-  pedidos:    { label: 'Pedidos del día',   componente: PedidosDelDia },
-  agenda:     { label: 'Agenda entregas',   componente: AgendaEntregas },
-  finanzas:   { label: 'Finanzas',         componente: Finanzas },
-  mercaderia: { label: 'Mercadería',        componente: Mercaderia },
-  costos:     { label: 'Panel de costos',  componente: PanelCostos },
-  stock:      { label: 'Control stock',    componente: ControlStock },
-  faltantes:  { label: 'Faltantes',        componente: Faltantes },
-  clientes:   { label: 'Clientes',         componente: Clientes },
-  historial:  { label: 'Historial',         componente: Historial },
-  graficos:   { label: 'Gráficos',          componente: Graficos },
-  reportes:   { label: 'Reportes',         componente: Reportes },
+  pedidos:     { label: 'Pedidos del día',        componente: PedidosDelDia },
+  agenda:      { label: 'Agenda entregas',        componente: AgendaEntregas },
+  finanzas:    { label: 'Finanzas',              componente: Finanzas },
+  productos:   { label: 'Productos',              componente: Productos },
+  hogar:       { label: 'Hogar',                  componente: Hogar },
+  hogar_admin: { label: 'Hogar - administración', componente: HogarAdmin },
+  stock:       { label: 'Control stock (viejo)',  componente: ControlStock },
+  faltantes:   { label: 'Faltantes',              componente: Faltantes },
+  clientes:    { label: 'Clientes',               componente: Clientes },
+  historial:   { label: 'Historial',              componente: Historial },
+  graficos:    { label: 'Gráficos',               componente: Graficos },
+  reportes:    { label: 'Reportes',              componente: Reportes },
 };
 
 export default function App() {
   const { cargarTodo } = useGoogleSheets();
+  const [esRutaHogarDirecta, setEsRutaHogarDirecta] = useState(() => {
+    return typeof window !== 'undefined' && window.location.hash.toLowerCase() === '#hogar';
+  });
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setEsRutaHogarDirecta(window.location.hash.toLowerCase() === '#hogar');
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
   const [logueado, setLogueado] = useState(() => {
     return localStorage.getItem('huerta_auth_logueado') === 'true';
   });
@@ -47,6 +61,11 @@ export default function App() {
     return localStorage.getItem('huerta_auth_usuario') || '';
   });
   const [seccion, setSeccion] = useState('finanzas');
+
+  // Si se accede directamente mediante link del hogar (#hogar), no requiere login del dashboard
+  if (esRutaHogarDirecta) {
+    return <Hogar standalone={true} />;
+  }
 
   // Si no está logueado, mostrar pantalla de login
   if (!logueado) {
