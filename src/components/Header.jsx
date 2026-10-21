@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Leaf, LayoutDashboard, ShoppingCart, Clock, Users, MapPin, Route, DollarSign, Package, FileText, Menu, X, LogOut, Database, Landmark } from 'lucide-react';
+import { Leaf, LayoutDashboard, ShoppingCart, Clock, Users, MapPin, Route, DollarSign, Package, FileText, Menu, X, LogOut, Database, Landmark, AlertTriangle } from 'lucide-react';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
+import { calcularFaltantes } from './Faltantes';
 
 const NAV_ITEMS = [
   { id: 'finanzas',  label: 'Finanzas',          icon: Landmark },
@@ -8,6 +9,7 @@ const NAV_ITEMS = [
   { id: 'agenda',    label: 'Agenda entregas',   icon: MapPin },
   { id: 'costos',    label: 'Panel de costos',   icon: DollarSign },
   { id: 'stock',     label: 'Control stock',     icon: Package },
+  { id: 'faltantes', label: 'Faltantes',         icon: AlertTriangle },
   { id: 'clientes',  label: 'Clientes',          icon: Users },
   { id: 'historial', label: 'Historial',         icon: Clock },
   { id: 'graficos',  label: 'Gráficos',          icon: LayoutDashboard },
@@ -16,7 +18,16 @@ const NAV_ITEMS = [
 
 export default function Header({ seccion, onNav, onLogout, rol, usuario, urlSheet, setSeccionActiva }) {
   const [menuAbierto, setMenuAbierto] = useState(false);
-  const { conectado, ultimoRefresco } = useGoogleSheets();
+  const { conectado, ultimoRefresco, stockData, productosCostos, pedidos } = useGoogleSheets();
+
+  const faltantesCount = useMemo(() => {
+    try {
+      const res = calcularFaltantes(stockData, productosCostos, pedidos);
+      return res?.faltantes?.length || 0;
+    } catch (e) {
+      return 0;
+    }
+  }, [stockData, productosCostos, pedidos]);
 
   const getEstilosSaludo = (u) => {
     const user = (u || '').toLowerCase();
@@ -64,13 +75,20 @@ export default function Header({ seccion, onNav, onLogout, rol, usuario, urlShee
                 <button
                   key={id}
                   onClick={() => onNav(id)}
-                  className={`flex flex-col items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all min-w-[75px] ${
+                  className={`relative flex flex-col items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all min-w-[75px] ${
                     seccion === id
                       ? 'bg-green-500/15 text-green-400'
                       : 'text-gray-400 hover:text-white hover:bg-gray-800'
                   }`}
                 >
-                  <Icon size={14} />
+                  <div className="relative flex items-center justify-center">
+                    <Icon size={14} />
+                    {id === 'faltantes' && faltantesCount > 0 && (
+                      <span className="absolute -top-1.5 -right-3 bg-red-600 text-white text-[9px] font-black px-1 rounded-full min-w-[15px] h-[15px] flex items-center justify-center leading-none border border-black shadow">
+                        {faltantesCount > 99 ? '99+' : faltantesCount}
+                      </span>
+                    )}
+                  </div>
                   <span className="text-[10px] leading-[1.1] text-center max-w-[65px] h-[22px] flex items-center justify-center">
                     {label}
                   </span>
@@ -153,14 +171,21 @@ export default function Header({ seccion, onNav, onLogout, rol, usuario, urlShee
                 <button
                   key={id}
                   onClick={() => { onNav(id); setMenuAbierto(false); }}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
                     seccion === id
                       ? 'bg-green-500/15 text-green-400'
                       : 'text-gray-400 hover:text-white hover:bg-gray-800'
                   }`}
                 >
-                  <Icon size={16} />
-                  {label}
+                  <div className="flex items-center gap-3">
+                    <Icon size={16} />
+                    <span>{label}</span>
+                  </div>
+                  {id === 'faltantes' && faltantesCount > 0 && (
+                    <span className="bg-red-600 text-white text-[11px] font-black px-2 py-0.5 rounded-full min-w-[20px] text-center shadow">
+                      {faltantesCount}
+                    </span>
+                  )}
                 </button>
               ))}
             </nav>

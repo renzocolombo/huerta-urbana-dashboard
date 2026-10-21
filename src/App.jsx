@@ -14,6 +14,7 @@ import AgendaEntregas from './components/AgendaEntregas';
 import PanelCostos from './components/PanelCostos';
 import Finanzas from './components/Finanzas';
 import ControlStock from './components/ControlStock';
+import Faltantes from './components/Faltantes';
 import Reportes from './components/Reportes';
 import IAFlotante from './components/IAFlotante';
 import { useGoogleSheets } from './context/GoogleSheetsContext';
@@ -25,6 +26,7 @@ const SECCIONES = {
   finanzas:  { label: 'Finanzas',         componente: Finanzas },
   costos:    { label: 'Panel de costos',  componente: PanelCostos },
   stock:     { label: 'Control stock',    componente: ControlStock },
+  faltantes: { label: 'Faltantes',        componente: Faltantes },
   clientes:  { label: 'Clientes',         componente: Clientes },
   historial: { label: 'Historial',         componente: Historial },
   graficos:  { label: 'Gráficos',          componente: Graficos },
