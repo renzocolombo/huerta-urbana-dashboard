@@ -21,16 +21,36 @@ export const ACCION_PROPUESTA_EAN_SET = 'setEanProducto';
 
 /**
  * Lee el mapa de EAN desde Google Sheets vía Apps Script.
- * Si el backend aún no implementa la acción o hay error de conexión,
- * recurre al almacenamiento local como fallback transparente.
+ * El backend responde: { ok, mapa: { <ean>: { ean, productoId, nombre, subcategoria, unidad } }, items: [...] }
+ * Se adapta la lectura a ese formato y se sincroniza la copia local.
  */
 export async function cargarMapaEan() {
   try {
     const res = await llamarAppsScript(ACCION_PROPUESTA_EAN_GET, {}, 8000);
-    if (res && res.ok && res.mapa && typeof res.mapa === 'object') {
-      // Guardar copia local en caso de desconexión futura
-      saveEanMapping(res.mapa);
-      return { ok: true, mapa: res.mapa, origen: 'sheet' };
+    if (res && res.ok) {
+      const mapa = (res.mapa && typeof res.mapa === 'object') ? { ...res.mapa } : {};
+      
+      // Si vinieron items en la respuesta, enriquecer el mapa en caso de faltantes
+      if (Array.isArray(res.items)) {
+        res.items.forEach(it => {
+          if (it && it.ean) {
+            const clean = String(it.ean).trim().toUpperCase();
+            if (!mapa[clean]) {
+              mapa[clean] = {
+                ean: clean,
+                productoId: it.productoId || null,
+                nombre: it.nombre,
+                subcategoria: it.subcategoria || 'Almacén',
+                unidad: it.unidad || 'unidad'
+              };
+            }
+          }
+        });
+      }
+
+      // Guardar copia local sincronizada
+      saveEanMapping(mapa);
+      return { ok: true, mapa, items: res.items || Object.values(mapa), origen: 'sheet' };
     }
   } catch (err) {
     console.warn('[EAN-SERVICE] No se pudo leer el mapa EAN desde el Sheet, recurriendo a local:', err.message);
@@ -38,19 +58,17 @@ export async function cargarMapaEan() {
 
   // Fallback transparente
   const localMap = getEanMapping();
-  return { ok: true, mapa: localMap, origen: 'local' };
+  return { ok: true, mapa: localMap, items: Object.values(localMap), origen: 'local' };
 }
 
 /**
  * Asocia un código EAN a un producto y lo persiste en Google Sheets vía Apps Script.
+ * El Apps Script responde { ok: true/false, error?: string }.
+ * Si ok es false o hay error de red, se muestra el error y NO se da por guardado en localStorage.
  */
 export async function guardarAsociacionEan(ean, itemData) {
   const cleanEan = String(ean).trim().toUpperCase();
 
-  // 1. Guardar en memoria/local primero para reactividad instantánea en pantalla
-  const localEntry = asociarEanAProducto(cleanEan, itemData);
-
-  // 2. Persistir en Google Sheets
   try {
     const res = await llamarAppsScript(ACCION_PROPUESTA_EAN_SET, {
       ean: cleanEan,
@@ -58,25 +76,30 @@ export async function guardarAsociacionEan(ean, itemData) {
       nombre: itemData.nombre,
       subcategoria: itemData.subcategoria || 'Almacén',
       unidad: itemData.unidad || 'unidad',
-      actualizadoEl: new Date().toISOString(),
     }, 10000);
 
     if (res && res.ok) {
+      // SOLO si el Apps Script confirmó ok: true, se persiste en localStorage
+      const localEntry = asociarEanAProducto(cleanEan, itemData);
       return { ok: true, entry: localEntry, persistidoEnSheet: true };
     } else {
+      const errorMsg = res?.error || 'No se pudo guardar la asociación EAN en Google Sheets (ok: false)';
+      console.error(`[EAN-SERVICE] Error al guardar EAN ${cleanEan}:`, errorMsg);
+      // NO se guarda en localStorage
       return { 
-        ok: true, 
-        entry: localEntry, 
-        persistidoEnSheet: false, 
-        aviso: res?.error || 'No se pudo guardar en el Sheet aún; se mantiene guardado localmente.' 
+        ok: false, 
+        error: errorMsg,
+        persistidoEnSheet: false 
       };
     }
   } catch (err) {
+    const errorMsg = `Error de red al guardar en Sheet: ${err.message}`;
+    console.error(`[EAN-SERVICE] Error al guardar EAN ${cleanEan}:`, errorMsg);
+    // NO se guarda en localStorage
     return {
-      ok: true,
-      entry: localEntry,
+      ok: false,
+      error: errorMsg,
       persistidoEnSheet: false,
-      aviso: `Error de red al guardar en Sheet: ${err.message}`,
     };
   }
 }

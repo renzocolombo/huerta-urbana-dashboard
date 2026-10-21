@@ -73,9 +73,10 @@ export async function apiCrearIngreso({ producto, proveedor, kg_netos, costo_tot
   });
 }
 
-export async function apiGetStock(producto = null) {
-  return llamarAppsScript('getStock', producto ? { producto } : {});
+export async function apiGetStockKg(producto = null) {
+  return llamarAppsScript('getStockKg', producto ? { producto } : {});
 }
+export const apiGetStock = apiGetStockKg;
 
 export async function apiGetIngresos(producto = null, limite = 50) {
   return llamarAppsScript('getIngresos', {
@@ -112,6 +113,16 @@ export async function apiSetMargen(producto, margen_pct) {
 }
 
 export async function apiPublicarPrecios(payload) {
-  // El payload existente de publicarPrecios contiene la lista de productos y precios finales
-  return llamarAppsScript('publicarPrecios', payload);
+  // Asegura: origen: 'mercaderia', solo nombre y precio por producto.
+  // Sin unidad, sin categoria, sin combos ni monto_minimo.
+  const rawProductos = Array.isArray(payload) ? payload : (payload?.productos || []);
+  const productos = rawProductos.map(p => ({
+    nombre: p.nombre,
+    precio: Number(p.precio) || 0,
+  }));
+
+  return llamarAppsScript('publicarPrecios', {
+    origen: 'mercaderia',
+    productos,
+  });
 }

@@ -1226,22 +1226,18 @@ function PreciosSugeridosTab({ config, productosCostos }) {
     setPublicarError(null);
     setPublicarExito(null);
 
-    // Armar el payload compatible con publicarPrecios existente
+    // Armar el payload: origen 'mercaderia', solo nombre y precio
     const prodsParaPublicar = preciosList.map(p => {
       const margenActual = margenesEditados[p.producto] !== undefined ? margenesEditados[p.producto] : p.margen_pct;
       const precioFinal = calcularPrecioSugerido(p.costo_kg_ultimo, margenActual);
       return {
         nombre: p.producto,
         precio: precioFinal,
-        unidad: 'kg',
-        categoria: getCategoriaPrincipal(p.producto),
-        categoriaPrincipal: getCategoriaPrincipal(p.producto),
-        activo: true
       };
     });
 
     const payload = {
-      accion: 'publicarPrecios',
+      origen: 'mercaderia',
       productos: prodsParaPublicar
     };
 
