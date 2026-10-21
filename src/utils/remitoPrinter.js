@@ -4,17 +4,16 @@
 // ============================================================================
 
 import { generarQRSvg } from './qrLocal.js';
+import { APPS_SCRIPT_URL } from './appsScriptUrl.js';
 
 /**
  * DATOS FISCALES Y COMERCIALES DEL EMISOR
- * Razón social e inicio de actividades configurados.
- * Completar cuit, domicilio e iva con los datos fiscales definitivos cuando estén disponibles.
  */
 export const EMISOR = {
-  razon: 'Huerta Urbana',
-  cuit: '—', // EDITAR: Completar con C.U.I.T. del emisor
-  domicilio: '—', // EDITAR: Completar con domicilio comercial del emisor
-  iva: '—', // EDITAR: Completar con Condición frente al IVA (ej: Responsable Inscripto / Monotributo)
+  razon: 'Renzo Alejandro Colombo',
+  nombre_comercial: 'Huerta Urbana',
+  cuit: '20-30219202-3',
+  domicilio: 'Carmen Puch 1000, Pilar, Buenos Aires',
   inicio_actividades: '01/04/2026',
 };
 
@@ -51,6 +50,47 @@ export function parsearProductosPedido(textoProducto, cantidadGeneral = 1) {
     const nombre = texto.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
     return { nombre, cantidad, pesoSolicitado, bolsasAsignadas: [] };
   });
+}
+
+/**
+ * Consulta al Apps Script el número de remito oficial correlativo asignado a un pedido.
+ * Payload: { accion: 'obtenerNumeroRemito', numero_pedido }
+ * Respuesta esperada: { ok: true, formateado: "0001-00000001" }
+ * Si la llamada falla o no responde, cae al número de pedido actual.
+ *
+ * @param {string|number} numeroPedido
+ * @returns {Promise<string>}
+ */
+export async function obtenerNumeroRemito(numeroPedido) {
+  const fallback = numeroPedido ? String(numeroPedido) : '00000001';
+  if (!numeroPedido || !APPS_SCRIPT_URL) return fallback;
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({
+        accion: 'obtenerNumeroRemito',
+        action: 'obtenerNumeroRemito',
+        numero_pedido: numeroPedido,
+      }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.ok && data.formateado) {
+        return String(data.formateado).trim();
+      }
+    }
+  } catch (e) {
+    console.warn(`[REMITO] Falló obtenerNumeroRemito para pedido #${numeroPedido}:`, e.message);
+  }
+
+  return fallback;
 }
 
 /**
@@ -338,12 +378,21 @@ const ESTILOS_REMITO = `
     border-right: 1px solid #000;
   }
 
-  .header-col-izq h2 {
-    margin: 0 0 4px 0;
-    font-size: 14pt;
+  .header-col-izq h2,
+  .header-col-izq .nombre-comercial-emisor {
+    margin: 0 0 2px 0;
+    font-size: 15pt;
     font-weight: 800;
-    letter-spacing: -0.5px;
+    letter-spacing: -0.3px;
     text-transform: uppercase;
+    color: #000;
+  }
+
+  .header-col-izq .razon-social-emisor {
+    font-size: 9.5pt;
+    font-weight: 700;
+    color: #222;
+    margin-bottom: 4px;
   }
 
   .header-col-izq .dato-emisor {
@@ -711,14 +760,15 @@ const ESTILOS_REMITO = `
  * @param {Object} preparacion - Datos de escaneo/preparación con pesadas reales
  * @param {string} tipoCopia - "ORIGINAL - CLIENTE" | "DUPLICADO - EMPRESA"
  */
-export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL - CLIENTE") {
+export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL - CLIENTE", opciones = {}) {
   const esCopiaEmpresa = String(tipoCopia).toUpperCase().includes('EMPRESA') || String(tipoCopia).toUpperCase().includes('DUPLICADO');
   const calculo = obtenerPesosReales(pedido, preparacion);
   const items = calculo.items;
 
-  // TODO: Reemplazar por correlativo de remito que traerá el Apps Script
-  const numeroRemito = pedido?.numero_pedido ? String(pedido.numero_pedido).replace(/^HU-?/i, '') : '00000001';
-  const remitoFormateado = `0001-${String(numeroRemito).padStart(8, '0')}`;
+  // Número de remito: valor formateado de Apps Script, pedido.numero_remito o fallback al número de pedido
+  const remitoFormateado = opciones?.numeroRemito
+    || pedido?.numero_remito
+    || (pedido?.numero_pedido ? String(pedido.numero_pedido) : '00000001');
 
   // Fecha de emisión (DD/MM/AAAA)
   const hoy = new Date();
@@ -796,10 +846,10 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
         <div class="header-comprobante">
           <!-- Bloque Izquierdo: Emisor -->
           <div class="header-col-izq">
-            <h2>${EMISOR.razon || '—'}</h2>
+            <h2 class="nombre-comercial-emisor">${EMISOR.nombre_comercial || 'Huerta Urbana'}</h2>
+            <div class="razon-social-emisor">${EMISOR.razon || 'Renzo Alejandro Colombo'}</div>
             <div class="dato-emisor">
               <div><strong>Domicilio:</strong> ${EMISOR.domicilio || '—'}</div>
-              <div><strong>I.V.A.:</strong> ${EMISOR.iva || '—'}</div>
             </div>
           </div>
 
@@ -956,7 +1006,7 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
  * Imprime un único remito en una ventana emergente.
  * Genera consecutivamente: ORIGINAL - CLIENTE y DUPLICADO - EMPRESA.
  */
-export function imprimirRemitoIndividual(pedido, preparacion, opciones = {}) {
+export async function imprimirRemitoIndividual(pedido, preparacion, opciones = {}) {
   if (!pedido) return;
   const copias = opciones.copias || ['ORIGINAL - CLIENTE', 'DUPLICADO - EMPRESA'];
   const win = window.open('', '_blank');
@@ -965,19 +1015,27 @@ export function imprimirRemitoIndividual(pedido, preparacion, opciones = {}) {
     return;
   }
 
-  const hojasHTML = copias.map(c => generarHojaRemitoHTML(pedido, preparacion, c)).join('');
+  win.document.write('<!DOCTYPE html><html><head><title>Cargando remito...</title><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#555;font-size:14px;background:#f9fafb;}</style></head><body><div>🌿 Cargando remito...</div></body></html>');
 
+  let numeroRemito = opciones.numeroRemito || pedido.numero_remito || null;
+  if (!numeroRemito) {
+    numeroRemito = await obtenerNumeroRemito(pedido.numero_pedido);
+  }
+
+  const hojasHTML = copias.map(c => generarHojaRemitoHTML(pedido, preparacion, c, { numeroRemito })).join('');
+
+  win.document.open();
   win.document.write(`
     <!DOCTYPE html>
     <html lang="es">
     <head>
       <meta charset="UTF-8">
-      <title>Remito #${pedido.numero_pedido || '0000'} - Huerta Urbana</title>
+      <title>Remito #${numeroRemito} - Huerta Urbana</title>
       <style>${ESTILOS_REMITO}</style>
     </head>
     <body>
       <div class="preview-toolbar">
-        <h1>🌿 Remito #${pedido.numero_pedido || ''} · ${pedido.nombre || 'Cliente'}</h1>
+        <h1>🌿 Remito #${numeroRemito} · ${pedido.nombre || 'Cliente'}</h1>
         <div class="btn-group">
           <button class="btn-close" onclick="window.close()">Cerrar</button>
           <button class="btn-print" onclick="window.print()">🖨️ Imprimir Remito</button>
@@ -1004,13 +1062,12 @@ export function imprimirRemitoIndividual(pedido, preparacion, opciones = {}) {
  * Pedido 2: ORIGINAL + DUPLICADO
  * ...
  */
-export function imprimirRemitosEnLote(pedidos = [], preparaciones = {}, tituloLote = "Remitos del Día", opciones = {}) {
+export async function imprimirRemitosEnLote(pedidos = [], preparaciones = {}, tituloLote = "Remitos del Día", opciones = {}) {
   if (!pedidos || pedidos.length === 0) {
     alert('No hay pedidos en la selección para imprimir.');
     return;
   }
 
-  // Por defecto, genera ORIGINAL y DUPLICADO consecutivos para cada pedido
   const copiasPorPedido = opciones.soloCliente ? ['ORIGINAL - CLIENTE'] : (opciones.copias || ['ORIGINAL - CLIENTE', 'DUPLICADO - EMPRESA']);
 
   const win = window.open('', '_blank');
@@ -1019,13 +1076,29 @@ export function imprimirRemitosEnLote(pedidos = [], preparaciones = {}, tituloLo
     return;
   }
 
+  win.document.write(`<!DOCTYPE html><html><head><title>Cargando remitos...</title><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#555;font-size:14px;background:#f9fafb;}</style></head><body><div>🌿 Cargando ${pedidos.length} remitos...</div></body></html>`);
+
+  const mapaNumerosRemito = {};
+  await Promise.all(
+    pedidos.map(async (p) => {
+      try {
+        const num = p.numero_remito || await obtenerNumeroRemito(p.numero_pedido);
+        mapaNumerosRemito[p.numero_pedido] = num;
+      } catch (e) {
+        mapaNumerosRemito[p.numero_pedido] = p.numero_pedido || '00000001';
+      }
+    })
+  );
+
   const totalHojas = pedidos.length * copiasPorPedido.length;
 
   const todasLasHojasHTML = pedidos.map(p => {
     const prep = preparaciones[p.numero_pedido] || null;
-    return copiasPorPedido.map(tipo => generarHojaRemitoHTML(p, prep, tipo)).join('');
+    const numeroRemito = mapaNumerosRemito[p.numero_pedido] || p.numero_pedido;
+    return copiasPorPedido.map(tipo => generarHojaRemitoHTML(p, prep, tipo, { numeroRemito })).join('');
   }).join('');
 
+  win.document.open();
   win.document.write(`
     <!DOCTYPE html>
     <html lang="es">
