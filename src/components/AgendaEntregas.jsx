@@ -4,6 +4,7 @@ import { MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, Ch
 import { HOY } from '../data/mockData';
 import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido } from '../utils/remitoPrinter';
 import { getEanMapping, esCodigoEan } from '../data/productUtils';
+import { syncProductWithSheet } from '../utils/stockSync';
 
 const DIAS_SEMANA = ['Martes', 'Jueves'];
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
@@ -189,6 +190,30 @@ export default function AgendaEntregas({ rol, usuario }) {
   const scanInputRef = useRef(null);
   const modalScanInputRef = useRef(null);
   const stockDataRef = useRef(stockData);
+  const [syncNotice, setSyncNotice] = useState(null); // { tipo: 'retrying' | 'error' | 'success', mensaje: string }
+  const syncTimerRef = useRef(null);
+
+  const handleSyncStatus = useCallback((info, prodNombre) => {
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    if (info.status === 'retrying') {
+      setSyncNotice({
+        tipo: 'retrying',
+        mensaje: `No se pudo guardar en el Sheet, reintentando... (${prodNombre})`
+      });
+    } else if (info.status === 'error') {
+      setSyncNotice({
+        tipo: 'error',
+        mensaje: `No se pudo guardar "${prodNombre}" en el Sheet tras varios intentos. El cambio se mantuvo localmente.`
+      });
+      syncTimerRef.current = setTimeout(() => setSyncNotice(null), 6000);
+    } else if (info.status === 'success') {
+      setSyncNotice({
+        tipo: 'success',
+        mensaje: `✅ "${prodNombre}" guardado en Google Sheet`
+      });
+      syncTimerRef.current = setTimeout(() => setSyncNotice(null), 3000);
+    }
+  }, []);
 
   useEffect(() => { stockDataRef.current = stockData; }, [stockData]);
   useEffect(() => { try { localStorage.setItem(PREPARACIONES_KEY, JSON.stringify(preparaciones)); } catch (e) {} }, [preparaciones]);
@@ -293,11 +318,12 @@ export default function AgendaEntregas({ rol, usuario }) {
       if (esUnidad) {
         const stockActual = Number(matchedProd.stock?.unidades ?? matchedProd.stock?.['1kg']) || 0;
         const nuevoStock = Math.max(0, stockActual - 1);
-        const newData = { ...current };
-        newData[finalMatchedStockId] = {
+        const updatedProd = {
           ...matchedProd,
           stock: { ...matchedProd.stock, '1kg': nuevoStock, unidades: nuevoStock }
         };
+        const newData = { ...current };
+        newData[finalMatchedStockId] = updatedProd;
         setStockData(newData);
         try {
           const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
@@ -309,11 +335,23 @@ export default function AgendaEntregas({ rol, usuario }) {
           }
           localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
         } catch (e) {}
+
+        syncProductWithSheet(updatedProd, {
+          onStatusChange: (status) => handleSyncStatus(status, matchedProd.nombre),
+          currentStockMap: current
+        });
       } else if (slot) {
         const stockActual = matchedProd.stock?.[slot] || 0;
+        const nuevoStock = Math.max(0, stockActual - 1);
+        const updatedProd = { ...matchedProd, stock: { ...matchedProd.stock, [slot]: nuevoStock } };
         const newData = { ...current };
-        newData[finalMatchedStockId] = { ...matchedProd, stock: { ...matchedProd.stock, [slot]: Math.max(0, stockActual - 1) } };
+        newData[finalMatchedStockId] = updatedProd;
         setStockData(newData);
+
+        syncProductWithSheet(updatedProd, {
+          onStatusChange: (status) => handleSyncStatus(status, matchedProd.nombre),
+          currentStockMap: current
+        });
       }
     }
 
@@ -458,12 +496,18 @@ export default function AgendaEntregas({ rol, usuario }) {
       // Descontar 1 unidad del stock y persistir en cache
       if (matchedProd && matchedStockId) {
         const stockActual = Number(matchedProd.stock?.unidades ?? matchedProd.stock?.['1kg']) || 0;
+        if (stockActual <= 0) {
+          setScanError(`🚫 ¡Sin stock! No hay "${nombreProd}" disponible.`);
+          return;
+        }
         const nuevoStock = Math.max(0, stockActual - 1);
-        const newData = { ...current };
-        newData[matchedStockId] = {
+        const updatedProd = {
           ...matchedProd,
-          stock: { ...matchedProd.stock, '1kg': nuevoStock, unidades: nuevoStock }
+          stock: { ...matchedProd.stock, '1kg': nuevoStock, unidades: nuevoStock },
+          ean: cleanCode
         };
+        const newData = { ...current };
+        newData[matchedStockId] = updatedProd;
         setStockData(newData);
 
         try {
@@ -476,6 +520,12 @@ export default function AgendaEntregas({ rol, usuario }) {
           }
           localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
         } catch (e) {}
+
+        // Sincronizar con Google Sheet (con reintentos y aviso visual)
+        syncProductWithSheet(updatedProd, {
+          onStatusChange: (status) => handleSyncStatus(status, nombreProd),
+          currentStockMap: current
+        });
       }
 
       const now = new Date();
@@ -614,9 +664,20 @@ export default function AgendaEntregas({ rol, usuario }) {
       const slot = determinarSlot(tipo, resultado.peso || 0.5);
       const stockActual = matchedProd.stock?.[slot] || 0;
       if (stockActual <= 0) { setScanError(`🚫 ¡Sin stock! No hay "${matchedProd.nombre}" (${slot}) disponible.`); return; }
+      const nuevoStock = Math.max(0, stockActual - 1);
+      const updatedProd = {
+        ...matchedProd,
+        stock: { ...matchedProd.stock, [slot]: nuevoStock }
+      };
       const newData = { ...current };
-      newData[matchedStockId] = { ...matchedProd, stock: { ...matchedProd.stock, [slot]: stockActual - 1 } };
+      newData[matchedStockId] = updatedProd;
       setStockData(newData);
+
+      // Sincronizar con Google Sheet (con reintentos y aviso visual)
+      syncProductWithSheet(updatedProd, {
+        onStatusChange: (status) => handleSyncStatus(status, matchedProd.nombre),
+        currentStockMap: current
+      });
     }
     
     const now = new Date();
@@ -826,6 +887,20 @@ export default function AgendaEntregas({ rol, usuario }) {
           </button>
         )}
       </div>
+
+      {/* Banner de sincronización de stock con el Sheet */}
+      {syncNotice && !modalPreparacion && (
+        <div className={`mb-4 px-4 py-3 rounded-2xl border flex items-center gap-2.5 text-xs font-bold animate-in slide-in-from-top-2 duration-200 ${
+          syncNotice.tipo === 'retrying'
+            ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+            : syncNotice.tipo === 'error'
+            ? 'bg-red-500/15 border-red-500/40 text-red-300'
+            : 'bg-green-500/15 border-green-500/30 text-green-300'
+        }`}>
+          <AlertTriangle size={15} className={syncNotice.tipo === 'retrying' ? 'animate-pulse text-amber-400 shrink-0' : 'text-current shrink-0'} />
+          <span>{syncNotice.mensaje}</span>
+        </div>
+      )}
 
       {pedidosDelTurno.length === 0 ? (
         <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-12 text-center">
@@ -1499,6 +1574,18 @@ export default function AgendaEntregas({ rol, usuario }) {
                 <div className="flex items-center gap-2 max-w-2xl mx-auto mt-2 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded-xl animate-in slide-in-from-top-1 duration-200">
                   <Check size={13} className="text-green-400 shrink-0" />
                   <p className="text-green-400 text-xs font-bold">{scanSuccess}</p>
+                </div>
+              )}
+              {syncNotice && (
+                <div className={`flex items-center gap-2 max-w-2xl mx-auto mt-2 px-3 py-2 rounded-xl border animate-in slide-in-from-top-1 duration-200 ${
+                  syncNotice.tipo === 'retrying'
+                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                    : syncNotice.tipo === 'error'
+                    ? 'bg-red-500/15 border-red-500/40 text-red-300'
+                    : 'bg-green-500/15 border-green-500/30 text-green-300'
+                }`}>
+                  <AlertTriangle size={13} className={syncNotice.tipo === 'retrying' ? 'animate-pulse text-amber-400 shrink-0' : 'text-current shrink-0'} />
+                  <p className="text-xs font-bold">{syncNotice.mensaje}</p>
                 </div>
               )}
             </div>
