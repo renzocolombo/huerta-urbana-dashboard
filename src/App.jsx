@@ -15,22 +15,24 @@ import PanelCostos from './components/PanelCostos';
 import Finanzas from './components/Finanzas';
 import ControlStock from './components/ControlStock';
 import Faltantes from './components/Faltantes';
+import Mercaderia from './components/Mercaderia';
 import Reportes from './components/Reportes';
 import IAFlotante from './components/IAFlotante';
 import { useGoogleSheets } from './context/GoogleSheetsContext';
 
 // Mapa de secciones del dashboard
 const SECCIONES = {
-  pedidos:   { label: 'Pedidos del día',   componente: PedidosDelDia },
-  agenda:    { label: 'Agenda entregas',   componente: AgendaEntregas },
-  finanzas:  { label: 'Finanzas',         componente: Finanzas },
-  costos:    { label: 'Panel de costos',  componente: PanelCostos },
-  stock:     { label: 'Control stock',    componente: ControlStock },
-  faltantes: { label: 'Faltantes',        componente: Faltantes },
-  clientes:  { label: 'Clientes',         componente: Clientes },
-  historial: { label: 'Historial',         componente: Historial },
-  graficos:  { label: 'Gráficos',          componente: Graficos },
-  reportes:  { label: 'Reportes',         componente: Reportes },
+  pedidos:    { label: 'Pedidos del día',   componente: PedidosDelDia },
+  agenda:     { label: 'Agenda entregas',   componente: AgendaEntregas },
+  finanzas:   { label: 'Finanzas',         componente: Finanzas },
+  mercaderia: { label: 'Mercadería',        componente: Mercaderia },
+  costos:     { label: 'Panel de costos',  componente: PanelCostos },
+  stock:      { label: 'Control stock',    componente: ControlStock },
+  faltantes:  { label: 'Faltantes',        componente: Faltantes },
+  clientes:   { label: 'Clientes',         componente: Clientes },
+  historial:  { label: 'Historial',         componente: Historial },
+  graficos:   { label: 'Gráficos',          componente: Graficos },
+  reportes:   { label: 'Reportes',         componente: Reportes },
 };
 
 export default function App() {

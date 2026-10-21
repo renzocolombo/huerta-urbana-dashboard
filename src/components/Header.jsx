@@ -1,19 +1,20 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Leaf, LayoutDashboard, ShoppingCart, Clock, Users, MapPin, Route, DollarSign, Package, FileText, Menu, X, LogOut, Database, Landmark, AlertTriangle } from 'lucide-react';
+import { Leaf, LayoutDashboard, ShoppingCart, Clock, Users, MapPin, Route, DollarSign, Package, FileText, Menu, X, LogOut, Database, Landmark, AlertTriangle, Scale } from 'lucide-react';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { calcularFaltantes } from './Faltantes';
 
 const NAV_ITEMS = [
-  { id: 'finanzas',  label: 'Finanzas',          icon: Landmark },
-  { id: 'pedidos',   label: 'Pedidos del día',   icon: ShoppingCart },
-  { id: 'agenda',    label: 'Agenda entregas',   icon: MapPin },
-  { id: 'costos',    label: 'Panel de costos',   icon: DollarSign },
-  { id: 'stock',     label: 'Control stock',     icon: Package },
-  { id: 'faltantes', label: 'Faltantes',         icon: AlertTriangle },
-  { id: 'clientes',  label: 'Clientes',          icon: Users },
-  { id: 'historial', label: 'Historial',         icon: Clock },
-  { id: 'graficos',  label: 'Gráficos',          icon: LayoutDashboard },
-  { id: 'reportes',  label: 'Reportes',          icon: FileText },
+  { id: 'finanzas',   label: 'Finanzas',          icon: Landmark },
+  { id: 'pedidos',    label: 'Pedidos del día',   icon: ShoppingCart },
+  { id: 'agenda',     label: 'Agenda entregas',   icon: MapPin },
+  { id: 'mercaderia', label: 'Mercadería',        icon: Scale },
+  { id: 'costos',     label: 'Panel de costos',   icon: DollarSign },
+  { id: 'stock',      label: 'Control stock',     icon: Package },
+  { id: 'faltantes',  label: 'Faltantes',         icon: AlertTriangle },
+  { id: 'clientes',   label: 'Clientes',          icon: Users },
+  { id: 'historial',  label: 'Historial',         icon: Clock },
+  { id: 'graficos',   label: 'Gráficos',          icon: LayoutDashboard },
+  { id: 'reportes',   label: 'Reportes',          icon: FileText },
 ];
 
 export default function Header({ seccion, onNav, onLogout, rol, usuario, urlSheet, setSeccionActiva }) {
