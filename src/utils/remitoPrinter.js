@@ -3,21 +3,25 @@
 // Huerta Urbana Dashboard - Formato Comprobante Tipo Remito "X" (A4)
 // ============================================================================
 
-/**
- * DATOS FISCALES Y COMERCIALES DEL EMISOR
- * Editá los valores de este objeto según los datos fiscales de Huerta Urbana.
- * Si algún campo queda vacío o nulo, en el remito se visualizará "—".
- */
-export const EMISOR = {
-  razon: 'Huerta Urbana',                  // EDITAR: Razón Social o Nombre Fantasía
-  cuit: '30-71829384-9',                   // EDITAR: C.U.I.T. del emisor
-  domicilio: 'Ruta 8 Km 42.5, Tortuguitas, Bs. As.', // EDITAR: Domicilio comercial
-  iva: 'Responsable Inscripto',            // EDITAR: Condición frente al IVA (ej: Resp. Inscripto / Monotributo / Exento)
-  inicio_actividades: '01/04/2026',        // EDITAR: Fecha de inicio de actividades (DD/MM/AAAA)
-};
+import { generarQRSvg } from './qrLocal.js';
 
 /**
- * Parsea el texto del campo producto de un pedido cuando no proviene de la preparación en vivo.
+ * DATOS FISCALES Y COMERCIALES DEL EMISOR
+ * Razón social e inicio de actividades configurados.
+ * Completar cuit, domicilio e iva con los datos fiscales definitivos cuando estén disponibles.
+ */
+export const EMISOR = {
+  razon: 'Huerta Urbana',
+  cuit: '—', // EDITAR: Completar con C.U.I.T. del emisor
+  domicilio: '—', // EDITAR: Completar con domicilio comercial del emisor
+  iva: '—', // EDITAR: Completar con Condición frente al IVA (ej: Responsable Inscripto / Monotributo)
+  inicio_actividades: '01/04/2026',
+};
+
+const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+/**
+ * Parsea el texto del campo producto de un pedido cuando no proviene de detalle_json.
  * Mantiene compatibilidad estricta con Finanzas, Faltantes y AgendaEntregas.
  */
 export function parsearProductosPedido(textoProducto, cantidadGeneral = 1) {
@@ -52,36 +56,117 @@ export function parsearProductosPedido(textoProducto, cantidadGeneral = 1) {
 /**
  * AISLAMIENTO FASE 2:
  * Concentra en una única función la lectura y normalización de las pesadas reales de un pedido.
- * Cuando en la Fase 2 las pesadas reales se lean directamente desde Google Sheets (en lugar
- * del estado de React / localStorage), únicamente se modifica esta función sin alterar la plantilla.
+ * Sabor 1: Si existe `pedido.detalle_json` (string JSON o array con [{nombre, unidad, precio_unit, dto_unit, cantidad_pedida}]),
+ *          calcula precios unitarios, subtotales, descuentos y total con las pesadas reales.
+ * Sabor 2: Si NO existe `detalle_json` (pedidos viejos), preserva el comportamiento previo con '—' y usa pedido.total.
  *
  * @param {Object} pedido - Objeto con datos del pedido (Google Sheets / mockData)
- * @param {Object} preparacion - Objeto de preparación { items: [...], completado: bool }
- * @returns {Array<Object>} Lista de ítems con cantidades reales, unidades y bolsas
+ * @param {Object} preparacion - Objeto de preparación local { items: [...], completado: bool }
+ * @returns {Object} { tieneDetalleJson, items, subtotal, descuentos, credito, totalACobrar }
  */
 export function obtenerPesosReales(pedido, preparacion) {
-  const tienePrep = preparacion && Array.isArray(preparacion.items) && preparacion.items.length > 0;
-  const itemsFuente = tienePrep ? preparacion.items : parsearProductosPedido(pedido?.producto, pedido?.cantidades);
-
-  if (!itemsFuente || itemsFuente.length === 0) {
-    return [{
-      nombre: pedido?.producto || 'Productos Varios',
-      unidad: 'un',
-      cantidadReal: pedido?.cantidades || 1,
-      cantidadFormateada: `${pedido?.cantidades || 1} un`,
-      precioUnitario: null,
-      descuento: null,
-      totalLinea: null,
-      bolsasDetalle: []
-    }];
+  // 1. Verificar si existe detalle_json nuevo
+  let detalleItems = null;
+  if (pedido?.detalle_json) {
+    try {
+      detalleItems = typeof pedido.detalle_json === 'string'
+        ? JSON.parse(pedido.detalle_json)
+        : (Array.isArray(pedido.detalle_json) ? pedido.detalle_json : null);
+    } catch (e) {
+      console.warn('[REMITO] Error parseando pedido.detalle_json:', e);
+      detalleItems = null;
+    }
   }
 
-  return itemsFuente.map(item => {
+  const tienePrep = preparacion && Array.isArray(preparacion.items) && preparacion.items.length > 0;
+  const prepItems = tienePrep ? preparacion.items : [];
+
+  // Helper para vincular bolsas escaneadas en la preparación por nombre normalizado
+  const buscarBolsasParaProducto = (nombreProd) => {
+    const k = norm(nombreProd);
+    const pItem = prepItems.find(pi => {
+      const pNorm = norm(pi.nombre);
+      return pNorm === k || pNorm.includes(k) || k.includes(pNorm);
+    });
+    return (pItem && Array.isArray(pItem.bolsasAsignadas)) ? pItem.bolsasAsignadas : [];
+  };
+
+  // ── CASO 1: Existe detalle_json con precios unitarios y desglose ────────────
+  if (Array.isArray(detalleItems) && detalleItems.length > 0) {
+    const itemsProcesados = detalleItems.map(item => {
+      const nombre = (item.nombre || '').trim();
+      const unidadRaw = (item.unidad || '').toLowerCase().trim();
+      const unidad = unidadRaw === 'kg' ? 'kg' : (unidadRaw === 'atado' ? 'atado' : 'un');
+      const bolsas = buscarBolsasParaProducto(nombre);
+
+      let cantidadReal = 0;
+      if (bolsas.length > 0) {
+        if (unidad === 'kg') {
+          const sumaKg = bolsas.reduce((acc, b) => acc + (Number(b.peso) || 0), 0);
+          cantidadReal = Number(sumaKg.toFixed(3));
+        } else {
+          cantidadReal = bolsas.length;
+        }
+      } else {
+        cantidadReal = Number(item.cantidad_pedida || 1);
+      }
+
+      // Formateo estricto: kg -> 3 decimales con coma; nunca 0,90 un para peso
+      let cantidadFormateada = '';
+      if (unidad === 'kg') {
+        cantidadFormateada = `${cantidadReal.toFixed(3).replace('.', ',')} kg`;
+      } else if (unidad === 'atado') {
+        cantidadFormateada = `${Math.round(cantidadReal)} atado${cantidadReal > 1 ? 's' : ''}`;
+      } else {
+        cantidadFormateada = `${Math.round(cantidadReal)} un`;
+      }
+
+      const precioUnit = Number(item.precio_unit) || 0;
+      const dtoUnit = Number(item.dto_unit) || 0;
+      const precioNeto = Math.max(0, precioUnit - dtoUnit);
+      const totalLinea = Number((cantidadReal * precioNeto).toFixed(2));
+      const subtotalLinea = Number((cantidadReal * precioUnit).toFixed(2));
+      const descuentoLinea = Number((cantidadReal * dtoUnit).toFixed(2));
+
+      return {
+        nombre,
+        unidad,
+        cantidadReal,
+        cantidadFormateada,
+        precioUnitario: precioUnit,
+        descuentoUnitario: dtoUnit,
+        totalLinea,
+        subtotalLinea,
+        descuentoLinea,
+        bolsasDetalle: bolsas
+      };
+    });
+
+    const subtotal = itemsProcesados.reduce((acc, it) => acc + it.subtotalLinea, 0);
+    const descuentos = itemsProcesados.reduce((acc, it) => acc + it.descuentoLinea, 0);
+    const totalACobrar = itemsProcesados.reduce((acc, it) => acc + it.totalLinea, 0);
+
+    return {
+      tieneDetalleJson: true,
+      items: itemsProcesados,
+      subtotal,
+      descuentos,
+      credito: 0,
+      totalACobrar
+    };
+  }
+
+  // ── CASO 2: Pedidos viejos sin detalle_json (mantiene '—' y pedido.total) ──
+  const itemsFuente = tienePrep ? prepItems : parsearProductosPedido(pedido?.producto, pedido?.cantidades);
+  const itemsFallback = (!itemsFuente || itemsFuente.length === 0)
+    ? [{ nombre: pedido?.producto || 'Productos Varios', cantidad: pedido?.cantidades || 1, bolsasAsignadas: [] }]
+    : itemsFuente;
+
+  const itemsProcesados = itemsFallback.map(item => {
     const bolsas = Array.isArray(item.bolsasAsignadas) ? item.bolsasAsignadas : [];
     const nombreLimpio = (item.nombre || '').trim();
     const nombreLower = nombreLimpio.toLowerCase();
 
-    // 1. Determinar tipo de unidad (kg, atado, un)
     const esAtado = /\batado\b/i.test(nombreLower);
     const esPorPeso = !esAtado && (
       Boolean(item.pesoSolicitado) ||
@@ -94,7 +179,6 @@ export function obtenerPesosReales(pedido, preparacion) {
     if (esAtado) unidad = 'atado';
     else if (esPorPeso) unidad = 'kg';
 
-    // 2. Calcular cantidad real entregada
     let cantidadReal = 0;
     if (bolsas.length > 0) {
       if (unidad === 'kg') {
@@ -111,7 +195,6 @@ export function obtenerPesosReales(pedido, preparacion) {
       }
     }
 
-    // 3. Formatear cantidad según unidad (cumplir: kg -> 3 decimales con coma; nunca 0,90 un para peso)
     let cantidadFormateada = '';
     if (unidad === 'kg') {
       cantidadFormateada = `${cantidadReal.toFixed(3).replace('.', ',')} kg`;
@@ -121,22 +204,30 @@ export function obtenerPesosReales(pedido, preparacion) {
       cantidadFormateada = `${Math.round(cantidadReal)} un`;
     }
 
-    // 4. Precios unitarios y descuentos (actualmente el Sheet guarda el total consolidado, sin desglose por ítem)
-    const precioUnitario = null; // No disponible en la planilla actual de pedidos
-    const descuento = null;      // No disponible en la planilla actual de pedidos
-    const totalLinea = null;     // No disponible por ítem; se muestra al pie el total del pedido
-
     return {
       nombre: nombreLimpio,
       unidad,
       cantidadReal,
       cantidadFormateada,
-      precioUnitario,
-      descuento,
-      totalLinea,
+      precioUnitario: null,
+      descuentoUnitario: null,
+      totalLinea: null,
+      subtotalLinea: null,
+      descuentoLinea: null,
       bolsasDetalle: bolsas
     };
   });
+
+  const totalViejo = Number(pedido?.total || 0);
+
+  return {
+    tieneDetalleJson: false,
+    items: itemsProcesados,
+    subtotal: totalViejo,
+    descuentos: null,
+    credito: null,
+    totalACobrar: totalViejo
+  };
 }
 
 // ============================================================================
@@ -258,7 +349,7 @@ const ESTILOS_REMITO = `
   .header-col-izq .dato-emisor {
     font-size: 8.5pt;
     color: #111;
-    line-height: 1.3;
+    line-height: 1.35;
   }
 
   .header-col-izq .dato-emisor strong {
@@ -386,7 +477,7 @@ const ESTILOS_REMITO = `
 
   .casillas-pago {
     display: flex;
-    gap: 10px;
+    gap: 12px;
     font-weight: 600;
   }
 
@@ -525,11 +616,10 @@ const ESTILOS_REMITO = `
     border: 1px solid #000;
     padding: 2px;
     border-radius: 3px;
+    background: #fff;
   }
 
-  .qr-box img {
-    width: 72px;
-    height: 72px;
+  .qr-box svg {
     display: block;
   }
 
@@ -538,7 +628,8 @@ const ESTILOS_REMITO = `
     font-weight: 700;
     text-transform: uppercase;
     text-align: center;
-    margin-top: 1px;
+    margin-top: 2px;
+    color: #000;
   }
 
   /* Bloque de Conformidad */
@@ -622,7 +713,8 @@ const ESTILOS_REMITO = `
  */
 export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL - CLIENTE") {
   const esCopiaEmpresa = String(tipoCopia).toUpperCase().includes('EMPRESA') || String(tipoCopia).toUpperCase().includes('DUPLICADO');
-  const items = obtenerPesosReales(pedido, preparacion);
+  const calculo = obtenerPesosReales(pedido, preparacion);
+  const items = calculo.items;
 
   // TODO: Reemplazar por correlativo de remito que traerá el Apps Script
   const numeroRemito = pedido?.numero_pedido ? String(pedido.numero_pedido).replace(/^HU-?/i, '') : '00000001';
@@ -634,13 +726,13 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
 
   // Datos del Cliente
   const clienteNombre = pedido?.nombre || 'Consumidor Final';
-  const clienteDireccion = pedido?.direccion ? `${pedido.direccion}${pedido.localidad ? ', ' + pedido.localidad : ''}` : 'A convenir';
+  const clienteDireccion = pedido?.direccion ? `${pedido.direccion}${pedido.localidad ? ', ' + pedido.localidad : ''}` : '—';
   const clienteTelefono = pedido?.telefono || '—';
   const fechaEntregaStr = pedido?.dia_entrega || pedido?.fecha || '—';
   const turnoEntregaStr = pedido?.horario_entrega || pedido?.turno_entrega || '—';
   const numPedidoStr = pedido?.numero_pedido || '—';
 
-  // Renderizar filas de ítems
+  // Renderizar filas de la tabla de ítems
   const filasHTML = items.map(item => {
     // Auditoría de bolsas escaneadas: SOLO visible en la copia DUPLICADO - EMPRESA
     let detalleBolsasEmpresa = '';
@@ -659,7 +751,9 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
     }
 
     const precioUnitStr = item.precioUnitario !== null ? `$${item.precioUnitario.toLocaleString('es-AR')}` : '—';
-    const descuentoStr = item.descuento !== null ? `$${item.descuento.toLocaleString('es-AR')}` : '—';
+    const descuentoStr = (item.descuentoUnitario !== null && item.descuentoUnitario > 0)
+      ? `$${item.descuentoUnitario.toLocaleString('es-AR')}`
+      : '—';
     const totalLineaStr = item.totalLinea !== null ? `$${item.totalLinea.toLocaleString('es-AR')}` : '—';
 
     return `
@@ -676,13 +770,24 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
     `;
   }).join('');
 
-  // Total final del pedido
-  const totalCobrarNum = Number(pedido?.total || 0);
-  const totalFormateado = totalCobrarNum.toLocaleString('es-AR');
+  // Cuadro de Totales: si hay detalle_json se calcula sumando líneas con pesadas reales; si no, usa pedido.total
+  const subtotalStr = calculo.tieneDetalleJson
+    ? `$${calculo.subtotal.toLocaleString('es-AR')}`
+    : `$${Number(pedido?.total || 0).toLocaleString('es-AR')}`;
 
-  // URL del QR del pedido
+  const descuentosStr = (calculo.tieneDetalleJson && calculo.descuentos > 0)
+    ? `-$${calculo.descuentos.toLocaleString('es-AR')}`
+    : '—';
+
+  const creditoStr = '—';
+
+  const totalFinalStr = calculo.tieneDetalleJson
+    ? `$${calculo.totalACobrar.toLocaleString('es-AR')}`
+    : `$${Number(pedido?.total || 0).toLocaleString('es-AR')}`;
+
+  // Generación local 100% offline del código QR
   const qrUrlDestino = `https://www.huertaurbana.com.ar/pedido/${encodeURIComponent(pedido?.numero_pedido || '')}`;
-  const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=85x85&data=${encodeURIComponent(qrUrlDestino)}`;
+  const qrSvgHtml = generarQRSvg(qrUrlDestino, 70);
 
   return `
     <div class="hoja-remito">
@@ -756,7 +861,7 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
               <span class="val">Contado - pago en el lugar</span>
             </div>
 
-            <!-- Medio de pago con casillas para completar a mano -->
+            <!-- Medio de pago con casillas (QR, Transf., Débito, Crédito) -->
             <div class="pago-linea">
               <span style="font-weight:700;">Medio de Pago:</span>
               <div class="casillas-pago">
@@ -764,7 +869,6 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
                 <span class="casilla-item"><span class="casilla-box"></span> Transf.</span>
                 <span class="casilla-item"><span class="casilla-box"></span> Débito</span>
                 <span class="casilla-item"><span class="casilla-box"></span> Crédito</span>
-                <span class="casilla-item"><span class="casilla-box"></span> Efectivo</span>
               </div>
             </div>
 
@@ -805,28 +909,28 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
           <table class="tabla-totales">
             <tr>
               <td>Subtotal:</td>
-              <td style="text-align:right; font-family:monospace;">$${totalFormateado}</td>
+              <td style="text-align:right; font-family:monospace;">${subtotalStr}</td>
             </tr>
             <tr>
               <td>Descuentos:</td>
-              <td style="text-align:right; font-family:monospace;">—</td>
+              <td style="text-align:right; font-family:monospace;">${descuentosStr}</td>
             </tr>
             <tr>
               <td>Crédito aplicado:</td>
-              <td style="text-align:right; font-family:monospace;">—</td>
+              <td style="text-align:right; font-family:monospace;">${creditoStr}</td>
             </tr>
             <tr class="row-total-final">
               <td>TOTAL A COBRAR:</td>
-              <td style="text-align:right; font-family:monospace;">$${totalFormateado}</td>
+              <td style="text-align:right; font-family:monospace;">${totalFinalStr}</td>
             </tr>
           </table>
         </div>
 
         <!-- ── 5. PIE: QR Y CONFORMIDAD ───────────────────────────────── -->
         <div class="footer-comprobante">
-          <!-- QR Code a la orden online -->
+          <!-- QR Code vectorial local sin llamadas a internet -->
           <div class="qr-box">
-            <img src="${qrImageUrl}" alt="QR Pedido" />
+            ${qrSvgHtml}
             <span class="qr-label">Ver Pedido Online</span>
           </div>
 
