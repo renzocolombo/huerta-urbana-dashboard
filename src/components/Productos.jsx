@@ -12,7 +12,7 @@ import {
   apiRegistrarSalidas, apiGetMovimientos,
   getAdminPinSession, setAdminPinSession, clearAdminPinSession
 } from '../utils/mercaderiaApi';
-import { BalanzaSystelSession, soportaWebSerial } from '../utils/balanzaSystel';
+import { BalanzaSystelSession, soportaWebSerial, useBalanzaSystel } from '../utils/balanzaSystel';
 import { getCategoriaPrincipal } from '../data/productUtils';
 
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -568,6 +568,7 @@ export default function Productos() {
       {modalSalida && (
         <ModalSalida
           productosExistentes={productos}
+          taraKg={config.tara_kg}
           onClose={() => setModalSalida(false)}
           onSuccess={() => {
             setModalSalida(false);
@@ -647,11 +648,13 @@ function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, on
   const [pesoManualCajon, setPesoManualCajon] = useState('');
   const [kgNetosManual, setKgNetosManual] = useState('');
 
-  // Balanza Systel
-  const [balanzaConectada, setBalanzaConectada] = useState(false);
-  const [balanzaConectando, setBalanzaConectando] = useState(false);
-  const [balanzaPesoVivo, setBalanzaPesoVivo] = useState(null);
-  const balanzaSessionRef = useRef(null);
+  // Balanza Systel (conexión compartida en sesión del navegador)
+  const {
+    conectado: balanzaConectada,
+    conectando: balanzaConectando,
+    pesoVivo: balanzaPesoVivo,
+    toggle: toggleBalanza
+  } = useBalanzaSystel();
 
   // Estados de envío y feedback
   const [guardando, setGuardando] = useState(false);
@@ -680,40 +683,6 @@ function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, on
         // silencioso
       }
     })();
-  }, []);
-
-  // Manejar conexión de Balanza Systel
-  const toggleBalanza = async () => {
-    if (balanzaConectada) {
-      if (balanzaSessionRef.current) balanzaSessionRef.current.desconectar();
-      setBalanzaConectada(false);
-      return;
-    }
-    if (!soportaWebSerial()) {
-      alert('Tu navegador no soporta Web Serial API. Usá Chrome, Edge u Opera en una computadora.');
-      return;
-    }
-    setBalanzaConectando(true);
-    try {
-      const session = new BalanzaSystelSession({
-        onPeso: (kg) => setBalanzaPesoVivo(kg),
-        onStatusChange: (status) => setBalanzaConectada(status === 'connected'),
-        onError: (err) => alert(`Error de balanza: ${err}`)
-      });
-      balanzaSessionRef.current = session;
-      const ok = await session.conectar();
-      setBalanzaConectada(ok);
-    } catch (e) {
-      alert(`No se pudo conectar a la balanza: ${e.message}`);
-    } finally {
-      setBalanzaConectando(false);
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      if (balanzaSessionRef.current) balanzaSessionRef.current.desconectar();
-    };
   }, []);
 
   const agregarCajonDesdeBalanza = () => {
@@ -1077,16 +1046,28 @@ function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, on
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COMPONENTE: MODAL SALIDA (MERMA & CORRECCIÓN DE STOCK) (PARTE 3)
 // ─────────────────────────────────────────────────────────────────────────────
-function ModalSalida({ productosExistentes, onClose, onSuccess, ejecutarConAdminPin }) {
+// COMPONENTE: MODAL SALIDA (MERMA & CORRECCIÓN DE STOCK CON BALANZA SYSTEL)
+// ─────────────────────────────────────────────────────────────────────────────
+function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutarConAdminPin }) {
   const [tipoSalida, setTipoSalida] = useState('MERMA'); // 'MERMA' | 'AJUSTE'
-  const [mostrarMasOpciones, setMostrarMasOpciones] = useState(false);
+  const balanza = useBalanzaSystel();
 
-  // Lista de items a dar de baja
-  const [itemsSalida, setItemsSalida] = useState([]); // [{ producto, kg, unidad, costo_unitario, stock_actual, stock_real? }]
+  // Producto activo seleccionado para pesar o ingresar
+  const [productoSeleccionado, setProductoSeleccionado] = useState(null);
   const [busqueda, setBusqueda] = useState('');
   const [chipCat, setChipCat] = useState('Todos');
+
+  // Modo manual alternativo o productos enteros
+  const [modoManual, setModoManual] = useState(false);
+  const [cantidadManual, setCantidadManual] = useState('');
+
+  // Tara (descontar tara activada por defecto)
+  const [descontarTara, setDescontarTara] = useState(true);
+  const taraValor = Number(taraKg) || 0;
+
+  // Lista de items a dar de baja
+  const [itemsSalida, setItemsSalida] = useState([]);
 
   // Motivo para merma
   const [motivoRapido, setMotivoRapido] = useState('Podrido');
@@ -1113,24 +1094,93 @@ function ModalSalida({ productosExistentes, onClose, onSuccess, ejecutarConAdmin
     });
   }, [productosExistentes, chipCat, busqueda]);
 
-  // Agregar producto a la lista de salida
-  const agregarProducto = (p) => {
-    if (itemsSalida.some(it => it.producto === p.producto)) return;
-    setItemsSalida([
-      ...itemsSalida,
-      {
-        producto: p.producto,
-        kg: p.unidad === 'kg' ? 1.0 : 1,
-        unidad: p.unidad || 'kg',
-        costo_unitario: p.costo_kg_ultimo || 0,
-        stock_actual: Number(p.en_deposito || 0),
-        stock_real: Number(p.en_deposito || 0)
-      }
-    ]);
+  // Selección de producto para pesar
+  const handleSeleccionarProducto = (p) => {
+    setProductoSeleccionado(p);
+    const esKg = (p.unidad || 'kg').toLowerCase() === 'kg';
+    if (esKg) {
+      setModoManual(false);
+      setCantidadManual('');
+    } else {
+      // Para productos en 'un' o 'atado', la cantidad es entera y se ingresa a mano (sin balanza)
+      setModoManual(true);
+      setCantidadManual('1');
+    }
   };
 
-  const actualizarItem = (idx, campo, valor) => {
-    setItemsSalida(itemsSalida.map((it, i) => i === idx ? { ...it, [campo]: valor } : it));
+  // Cálculos de pesaje vivo
+  const esUnidadKg = productoSeleccionado ? (productoSeleccionado.unidad || 'kg').toLowerCase() === 'kg' : true;
+  const pesoBruto = balanza.pesoVivo !== null ? Number(balanza.pesoVivo) : 0;
+  const pesoNeto = descontarTara && taraValor > 0
+    ? Math.max(0, Number((pesoBruto - taraValor).toFixed(3)))
+    : Number(pesoBruto.toFixed(3));
+
+  // Validación OK: habilitado solo con peso estable y mayor a 0 si es balanza
+  const pesoValidoBalanza = balanza.conectado && balanza.esEstable && pesoNeto > 0;
+  const cantManualNum = modoManual
+    ? (esUnidadKg ? parseFloat(cantidadManual) || 0 : parseInt(cantidadManual, 10) || 0)
+    : 0;
+  const manualValido = modoManual && cantManualNum > 0;
+
+  const okHabilitado = esUnidadKg ? (!modoManual ? pesoValidoBalanza : manualValido) : manualValido;
+
+  // Acción del botón OK
+  const handleConfirmarLinea = () => {
+    if (!productoSeleccionado || !okHabilitado) return;
+
+    const cantidadTomada = esUnidadKg
+      ? (!modoManual ? pesoNeto : cantManualNum)
+      : cantManualNum;
+
+    const stockActual = Number(productoSeleccionado.en_deposito || 0);
+    const costoUnit = Number(productoSeleccionado.costo_kg_ultimo || 0);
+
+    if (tipoSalida === 'MERMA') {
+      const stockResultante = Number(Math.max(0, stockActual - cantidadTomada).toFixed(3));
+      const valorCosto = Number((cantidadTomada * costoUnit).toFixed(2));
+
+      setItemsSalida(prev => [
+        ...prev.filter(it => it.producto !== productoSeleccionado.producto),
+        {
+          producto: productoSeleccionado.producto,
+          unidad: productoSeleccionado.unidad || 'kg',
+          kg: cantidadTomada,
+          costo_unitario: costoUnit,
+          stock_actual: stockActual,
+          stock_resultante: stockResultante,
+          valor_costo: valorCosto,
+          modoPesaje: !modoManual ? 'balanza' : 'manual',
+          taraDescontada: !modoManual && descontarTara ? taraValor : 0,
+        }
+      ]);
+    } else {
+      // AJUSTE: cantidadTomada es el stock real contado
+      const stockReal = cantidadTomada;
+      const dif = Number((stockReal - stockActual).toFixed(3));
+      const stockResultante = stockReal;
+      const valorCosto = Number((Math.abs(dif) * costoUnit).toFixed(2));
+
+      setItemsSalida(prev => [
+        ...prev.filter(it => it.producto !== productoSeleccionado.producto),
+        {
+          producto: productoSeleccionado.producto,
+          unidad: productoSeleccionado.unidad || 'kg',
+          stock_real: stockReal,
+          dif: dif,
+          costo_unitario: costoUnit,
+          stock_actual: stockActual,
+          stock_resultante: stockResultante,
+          valor_costo: valorCosto,
+          modoPesaje: !modoManual ? 'balanza' : 'manual',
+          taraDescontada: !modoManual && descontarTara ? taraValor : 0,
+        }
+      ]);
+    }
+
+    // Limpiar para pesar el siguiente producto
+    setProductoSeleccionado(null);
+    setCantidadManual('');
+    setBusqueda('');
   };
 
   const eliminarItem = (idx) => {
@@ -1139,13 +1189,8 @@ function ModalSalida({ productosExistentes, onClose, onSuccess, ejecutarConAdmin
 
   // Valor total al costo
   const valorTotalCosto = useMemo(() => {
-    return itemsSalida.reduce((acc, it) => {
-      const cantidad = tipoSalida === 'MERMA' 
-        ? (Number(it.kg) || 0)
-        : Math.abs((Number(it.stock_real) || 0) - (Number(it.stock_actual) || 0));
-      return acc + (cantidad * (Number(it.costo_unitario) || 0));
-    }, 0);
-  }, [itemsSalida, tipoSalida]);
+    return itemsSalida.reduce((acc, it) => acc + (Number(it.valor_costo) || 0), 0);
+  }, [itemsSalida]);
 
   // Enviar salida con validación de admin_pin
   const handleAplicar = () => {
@@ -1169,13 +1214,10 @@ function ModalSalida({ productosExistentes, onClose, onSuccess, ejecutarConAdmin
         notaFinal = notaPersonalizada.trim() ? `${motivoRapido} - ${notaPersonalizada.trim()}` : motivoRapido;
       } else {
         // AJUSTE: diferencia calculada (stock_real - stock_actual)
-        payloadItems = itemsSalida.map(it => {
-          const diff = Number(((Number(it.stock_real) || 0) - (Number(it.stock_actual) || 0)).toFixed(3));
-          return {
-            producto: it.producto,
-            kg: diff
-          };
-        });
+        payloadItems = itemsSalida.map(it => ({
+          producto: it.producto,
+          kg: Number(it.dif != null ? it.dif : (Number(it.stock_real || 0) - Number(it.stock_actual || 0)).toFixed(3))
+        }));
         notaFinal = 'Conteo';
       }
 
@@ -1190,7 +1232,6 @@ function ModalSalida({ productosExistentes, onClose, onSuccess, ejecutarConAdmin
         if (res && res.ok) {
           onSuccess();
         } else {
-          // Si el PIN fue incorrecto, limpiarlo de memoria para forzar volver a pedirlo
           if (res?.error && res.error.toLowerCase().includes('pin')) {
             clearAdminPinSession();
           }
@@ -1205,15 +1246,19 @@ function ModalSalida({ productosExistentes, onClose, onSuccess, ejecutarConAdmin
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
       <div className="bg-[#121212] border border-gray-800 rounded-3xl w-full max-w-2xl p-5 sm:p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 my-8">
+        {/* Cabecera del Modal */}
         <div className="flex items-center justify-between border-b border-gray-800 pb-3">
           <div>
             <h2 className="text-base font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
-              <Minus size={18} /> Registrar Salida de Stock
+              {tipoSalida === 'MERMA' ? <Minus size={18} /> : <Scale size={18} className="text-blue-400" />}
+              {tipoSalida === 'MERMA' ? 'Registrar Merma de Stock' : 'Corregir Stock (Conteo Físico)'}
             </h2>
             <p className="text-xs text-gray-400 mt-0.5">
-              {tipoSalida === 'MERMA' ? 'Baja por merma, desperdicio o regalo' : 'Corrección por conteo físico'}
+              {tipoSalida === 'MERMA'
+                ? 'Pesá los productos deteriorados o merma en la balanza Systel'
+                : 'Pesá o verificá el stock real que hay físicamente en inventario'}
             </p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white p-1 cursor-pointer">
@@ -1221,43 +1266,43 @@ function ModalSalida({ productosExistentes, onClose, onSuccess, ejecutarConAdmin
           </button>
         </div>
 
-        {/* Selector de Tipo */}
-        <div className="flex items-center justify-between gap-3 bg-black/50 p-2 rounded-2xl border border-gray-800">
-          <div className="flex gap-2">
+        {/* Selector de Tipo (Merma / Corregir Stock) */}
+        <div className="flex items-center justify-between gap-3 bg-black/50 p-1.5 rounded-2xl border border-gray-800">
+          <div className="flex gap-2 w-full">
             <button
               type="button"
-              onClick={() => setTipoSalida('MERMA')}
-              className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                tipoSalida === 'MERMA' ? 'bg-amber-500 text-black shadow' : 'text-gray-400 hover:text-white'
+              onClick={() => {
+                setTipoSalida('MERMA');
+                setProductoSeleccionado(null);
+              }}
+              className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                tipoSalida === 'MERMA'
+                  ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800/40'
               }`}
             >
-              Merma
+              <Minus size={14} /> Merma / Desperdicio
             </button>
-            {mostrarMasOpciones && (
-              <button
-                type="button"
-                onClick={() => setTipoSalida('AJUSTE')}
-                className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  tipoSalida === 'AJUSTE' ? 'bg-blue-500 text-white shadow' : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                Corregir Stock
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setTipoSalida('AJUSTE');
+                setProductoSeleccionado(null);
+              }}
+              className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                tipoSalida === 'AJUSTE'
+                  ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/20'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800/40'
+              }`}
+            >
+              <Scale size={14} /> Corregir Stock (Conteo)
+            </button>
           </div>
-
-          <button
-            type="button"
-            onClick={() => setMostrarMasOpciones(!mostrarMasOpciones)}
-            className="text-[11px] text-gray-500 hover:text-gray-300 underline cursor-pointer"
-          >
-            {mostrarMasOpciones ? 'Menos opciones' : 'Más opciones'}
-          </button>
         </div>
 
-        {/* Motivo Merma (si tipo es MERMA) */}
+        {/* Motivo de Merma (solo visible si tipo es MERMA) */}
         {tipoSalida === 'MERMA' && (
-          <div className="space-y-2">
+          <div className="space-y-2 bg-black/30 p-3 rounded-2xl border border-gray-800/60">
             <label className="block text-[11px] font-bold uppercase text-gray-400">Motivo de Merma</label>
             <div className="flex flex-wrap gap-2">
               {['Podrido', 'Golpeado', 'Regalo', 'Otro'].map(mot => (
@@ -1265,9 +1310,9 @@ function ModalSalida({ productosExistentes, onClose, onSuccess, ejecutarConAdmin
                   type="button"
                   key={mot}
                   onClick={() => setMotivoRapido(mot)}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-all ${
                     motivoRapido === mot
-                      ? 'bg-amber-400 text-black'
+                      ? 'bg-amber-400 text-black shadow-sm'
                       : 'bg-black border border-gray-800 text-gray-400 hover:text-white'
                   }`}
                 >
@@ -1278,121 +1323,410 @@ function ModalSalida({ productosExistentes, onClose, onSuccess, ejecutarConAdmin
             {motivoRapido === 'Otro' && (
               <input
                 type="text"
-                placeholder="Aclaración de motivo..."
+                placeholder="Aclaración del motivo de merma..."
                 value={notaPersonalizada}
                 onChange={(e) => setNotaPersonalizada(e.target.value)}
-                className="w-full bg-black/60 border border-gray-700 rounded-xl px-3 py-1.5 text-xs text-white outline-none"
+                className="w-full bg-black border border-gray-700 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-amber-400 mt-2"
               />
             )}
           </div>
         )}
 
-        {/* Buscador y chips para agregar productos */}
-        <div className="space-y-2 border-t border-gray-800/60 pt-3">
-          <label className="block text-[11px] font-bold uppercase text-gray-400">Elegir Productos</label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              placeholder="Buscar para agregar..."
-              value={busqueda}
-              onChange={(e) => setBusqueda(e.target.value)}
-              className="flex-1 bg-black/60 border border-gray-700 rounded-xl px-3 py-1.5 text-xs text-white outline-none"
-            />
-            <div className="flex gap-1 overflow-x-auto">
-              {['Todos', 'Verdura', 'Fruta', 'Almacén'].map(c => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => setChipCat(c)}
-                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer ${
-                    chipCat === c ? 'bg-gray-200 text-black' : 'bg-black text-gray-400 border border-gray-800'
-                  }`}
-                >
-                  {c}
-                </button>
-              ))}
+        {/* ── PASO 1: ELEGIR PRODUCTO ───────────────────────────────────────── */}
+        {!productoSeleccionado ? (
+          <div className="space-y-2.5 bg-black/40 p-3.5 rounded-2xl border border-gray-800">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-black uppercase tracking-wider text-amber-300">
+                1. Elegir Producto a {tipoSalida === 'MERMA' ? 'mermar' : 'contar'}
+              </label>
+              <span className="text-[10px] text-gray-400">Buscá y hacé clic en el producto</span>
             </div>
-          </div>
 
-          {/* Lista rápida de resultados de búsqueda */}
-          {busqueda.trim() && (
-            <div className="max-h-28 overflow-y-auto bg-black/80 border border-gray-800 rounded-xl p-1 divide-y divide-gray-800">
-              {productosFiltrados.slice(0, 6).map((p, idx) => (
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search size={14} className="absolute left-3 top-2.5 text-gray-500" />
+                <input
+                  type="text"
+                  placeholder="Escribí el nombre (ej. banana, tomate)..."
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  autoFocus
+                  className="w-full bg-black border border-gray-700 focus:border-amber-400 rounded-xl pl-9 pr-3 py-2 text-xs text-white outline-none"
+                />
+              </div>
+              <div className="flex gap-1 overflow-x-auto">
+                {['Todos', 'Verdura', 'Fruta', 'Almacén'].map(c => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setChipCat(c)}
+                    className={`px-3 py-1.5 rounded-xl text-[11px] font-bold cursor-pointer transition-all whitespace-nowrap ${
+                      chipCat === c ? 'bg-amber-400 text-black' : 'bg-black text-gray-400 border border-gray-800 hover:text-white'
+                    }`}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Cuadrícula / lista rápida de resultados */}
+            <div className="max-h-44 overflow-y-auto bg-black/80 border border-gray-800/80 rounded-xl p-1.5 divide-y divide-gray-850">
+              {productosFiltrados.slice(0, 8).map((p, idx) => (
                 <button
                   key={idx}
                   type="button"
-                  onClick={() => {
-                    agregarProducto(p);
-                    setBusqueda('');
-                  }}
-                  className="w-full px-3 py-1.5 text-left text-xs text-gray-200 hover:bg-amber-500/10 flex items-center justify-between cursor-pointer"
+                  onClick={() => handleSeleccionarProducto(p)}
+                  className="w-full px-3 py-2 text-left text-xs text-gray-200 hover:bg-amber-500/15 rounded-lg flex items-center justify-between cursor-pointer transition-colors"
                 >
-                  <span>{p.producto}</span>
-                  <span className="text-[10px] text-gray-500 font-mono">Stock: {p.en_deposito} {p.unidad}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-white">{p.producto}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-300">
+                      {p.unidad || 'kg'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[11px] text-gray-400 font-mono">
+                      Stock: <strong className="text-gray-200">{p.en_deposito}</strong> {p.unidad}
+                    </span>
+                    <span className="text-[10px] text-emerald-400 font-mono">
+                      $${p.costo_kg_ultimo || 0}/{p.unidad}
+                    </span>
+                  </div>
                 </button>
               ))}
+              {productosFiltrados.length === 0 && (
+                <div className="py-4 text-center text-xs text-gray-500">
+                  No se encontraron productos coincidentes.
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          /* ── PASO 2 & 3: BLOQUE GRANDE CON PESO EN VIVO Y CONFIRMACIÓN ────── */
+          <div className="space-y-3 bg-black/60 p-4 rounded-2xl border-2 border-amber-500/40 animate-in fade-in">
+            {/* Header del producto seleccionado */}
+            <div className="flex items-center justify-between border-b border-gray-800 pb-2.5">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    Producto elegido
+                  </span>
+                  <h3 className="text-base font-black text-white">{productoSeleccionado.producto}</h3>
+                  <span className="text-xs text-gray-400 font-mono">({productoSeleccionado.unidad || 'kg'})</span>
+                </div>
+                <p className="text-[11px] text-gray-400 mt-0.5 font-mono">
+                  Stock actual en sistema: <strong className="text-gray-200">{productoSeleccionado.en_deposito} {productoSeleccionado.unidad}</strong> · Costo: <strong className="text-emerald-400">$${productoSeleccionado.costo_kg_ultimo || 0}</strong>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProductoSeleccionado(null)}
+                className="text-xs text-gray-400 hover:text-white px-2.5 py-1 rounded-lg border border-gray-700 bg-gray-900 cursor-pointer"
+              >
+                ✕ Cambiar
+              </button>
+            </div>
 
-        {/* Lista de Items seleccionados */}
-        <div className="space-y-2">
-          <label className="block text-[11px] font-bold uppercase text-gray-400">
-            Productos a dar de baja ({itemsSalida.length})
-          </label>
+            {/* Para productos por peso (kg) que usan Balanza */}
+            {esUnidadKg && !modoManual ? (
+              <div className="space-y-3">
+                {/* Bloque Balanza Systel */}
+                <div className="bg-black border border-gray-800 rounded-2xl p-4 text-center space-y-3">
+                  {/* Estado de conexión de balanza */}
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2.5 h-2.5 rounded-full ${balanza.conectado ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`} />
+                      <span className={`font-bold ${balanza.conectado ? 'text-green-400' : 'text-gray-400'}`}>
+                        {balanza.conectando
+                          ? 'Conectando balanza...'
+                          : balanza.conectado
+                          ? 'Balanza Systel Conectada'
+                          : 'Balanza Desconectada'}
+                      </span>
+                    </div>
+
+                    {balanza.conectado && (
+                      <div>
+                        {balanza.esEstable && pesoNeto > 0 ? (
+                          <span className="bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1">
+                            <CheckCircle2 size={12} /> Peso Estable
+                          </span>
+                        ) : pesoBruto > 0 ? (
+                          <span className="bg-amber-500/20 border border-amber-500/40 text-amber-300 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 animate-pulse">
+                            <RefreshCw size={11} className="animate-spin" /> Estabilizando...
+                          </span>
+                        ) : (
+                          <span className="bg-gray-800 text-gray-400 px-2.5 py-0.5 rounded-full text-[10px]">
+                            En Cero (0.000 kg)
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* PESO EN VIVO GIGANTE */}
+                  {!balanza.conectado ? (
+                    <div className="py-4 space-y-3">
+                      <p className="text-xs text-gray-400">
+                        Conectá la balanza Systel vía USB/Serial para tomar el peso en vivo automáticamente:
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => balanza.conectar()}
+                        disabled={balanza.conectando}
+                        className="bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-500/20 cursor-pointer flex items-center justify-center gap-2 mx-auto"
+                      >
+                        <Scale size={16} />
+                        <span>{balanza.conectando ? 'Conectando...' : 'Conectar Balanza Systel'}</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="py-2">
+                      <div className="flex items-baseline justify-center gap-2">
+                        <span className={`font-mono font-black text-5xl sm:text-6xl tracking-tight transition-colors ${
+                          balanza.esEstable && pesoNeto > 0 ? 'text-emerald-400' : 'text-amber-400'
+                        }`}>
+                          {pesoNeto.toFixed(3)}
+                        </span>
+                        <span className="text-xl font-black text-gray-400">kg</span>
+                      </div>
+
+                      {/* Info de tara y bruto */}
+                      {descontarTara && taraValor > 0 && (
+                        <p className="text-[11px] text-gray-400 font-mono mt-1">
+                          Bruto: {pesoBruto.toFixed(3)} kg − Tara: {taraValor.toFixed(3)} kg
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Casilla de Tara (activada por defecto) */}
+                  <div className="flex items-center justify-center gap-2 pt-2 border-t border-gray-800/80">
+                    <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={descontarTara}
+                        onChange={(e) => setDescontarTara(e.target.checked)}
+                        className="w-4 h-4 rounded border-gray-700 bg-gray-900 text-amber-500 focus:ring-amber-400 cursor-pointer"
+                      />
+                      <span>
+                        Descontar tara <strong>({taraValor} kg)</strong>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Preview del stock resultante */}
+                <div className="bg-black/40 border border-gray-800 px-3 py-2 rounded-xl text-xs flex items-center justify-between">
+                  <span className="text-gray-400">
+                    {tipoSalida === 'MERMA' ? 'Stock resultante:' : 'Corrección a aplicar:'}
+                  </span>
+                  <span className="font-mono font-bold text-gray-200">
+                    {tipoSalida === 'MERMA' ? (
+                      <>
+                        {productoSeleccionado.en_deposito} kg →{' '}
+                        <strong className="text-amber-300">
+                          {Math.max(0, Number(productoSeleccionado.en_deposito || 0) - pesoNeto).toFixed(3)} kg
+                        </strong>
+                      </>
+                    ) : (
+                      <>
+                        {productoSeleccionado.en_deposito} kg →{' '}
+                        <strong className="text-blue-300">{pesoNeto.toFixed(3)} kg</strong>{' '}
+                        <span className="text-[10px] text-gray-400">
+                          (Dif: {(pesoNeto - Number(productoSeleccionado.en_deposito || 0)).toFixed(3)} kg)
+                        </span>
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {/* BOTÓN GRANDE OK */}
+                <button
+                  type="button"
+                  onClick={handleConfirmarLinea}
+                  disabled={!okHabilitado}
+                  className={`w-full py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-xl cursor-pointer ${
+                    okHabilitado
+                      ? tipoSalida === 'MERMA'
+                        ? 'bg-amber-400 hover:bg-amber-300 text-black shadow-amber-400/25 scale-[1.01]'
+                        : 'bg-blue-500 hover:bg-blue-400 text-white shadow-blue-500/25 scale-[1.01]'
+                      : 'bg-gray-800/80 text-gray-500 cursor-not-allowed border border-gray-700/60'
+                  }`}
+                >
+                  <Check size={18} />
+                  <span>
+                    {balanza.conectado
+                      ? okHabilitado
+                        ? tipoSalida === 'MERMA'
+                          ? `OK — Tomar ${pesoNeto.toFixed(3)} kg como Merma`
+                          : `OK — Tomar ${pesoNeto.toFixed(3)} kg como Stock Real`
+                        : !balanza.esEstable
+                        ? 'Esperando peso estable en balanza...'
+                        : 'Colocá el producto en la balanza (> 0 kg)'
+                      : 'Conectá la balanza o ingresá a mano'}
+                  </span>
+                </button>
+
+                {/* Alternativa: escribir a mano */}
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModoManual(true);
+                      setCantidadManual(pesoNeto > 0 ? String(pesoNeto) : '');
+                    }}
+                    className="text-[11px] text-gray-500 hover:text-gray-300 underline cursor-pointer"
+                  >
+                    ✏️ Escribir cantidad a mano (sin balanza)
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Entrada Manual (para unidades o alternativa sin balanza) */
+              <div className="space-y-3 bg-black/40 p-3.5 rounded-2xl border border-gray-800">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-gray-300">
+                    {esUnidadKg
+                      ? tipoSalida === 'MERMA'
+                        ? 'Ingresar peso de merma a mano (kg)'
+                        : 'Ingresar stock real a mano (kg)'
+                      : `Cantidad entera (${productoSeleccionado.unidad || 'unidades'})`}
+                  </label>
+                  {esUnidadKg && (
+                    <button
+                      type="button"
+                      onClick={() => setModoManual(false)}
+                      className="text-[11px] text-amber-400 hover:text-amber-300 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Scale size={12} /> Volver a Balanza
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {!esUnidadKg && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const actual = parseInt(cantidadManual, 10) || 1;
+                        if (actual > 1) setCantidadManual(String(actual - 1));
+                      }}
+                      className="w-10 h-10 rounded-xl bg-gray-800 hover:bg-gray-700 text-white font-black text-sm flex items-center justify-center cursor-pointer"
+                    >
+                      −
+                    </button>
+                  )}
+
+                  <input
+                    type="number"
+                    step={esUnidadKg ? '0.001' : '1'}
+                    min={esUnidadKg ? '0.001' : '1'}
+                    placeholder={esUnidadKg ? '0.000 kg' : 'Cantidad entera...'}
+                    value={cantidadManual}
+                    onChange={(e) => setCantidadManual(e.target.value)}
+                    autoFocus
+                    className="flex-1 bg-black border border-gray-700 focus:border-amber-400 rounded-xl px-3 py-2.5 text-center font-mono font-bold text-base text-white outline-none"
+                  />
+
+                  {!esUnidadKg && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const actual = parseInt(cantidadManual, 10) || 0;
+                        setCantidadManual(String(actual + 1));
+                      }}
+                      className="w-10 h-10 rounded-xl bg-gray-800 hover:bg-gray-700 text-white font-black text-sm flex items-center justify-center cursor-pointer"
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
+
+                {/* BOTÓN OK MANUAL */}
+                <button
+                  type="button"
+                  onClick={handleConfirmarLinea}
+                  disabled={!okHabilitado}
+                  className={`w-full py-3 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                    okHabilitado
+                      ? 'bg-amber-400 hover:bg-amber-300 text-black shadow-md'
+                      : 'bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700'
+                  }`}
+                >
+                  <Check size={16} />
+                  <span>
+                    OK — Agregar {cantManualNum > 0 ? `${cantManualNum} ${productoSeleccionado.unidad || 'kg'}` : ''} a la lista
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── PASO 5 & 7: LISTA DE PRODUCTOS ARMADA ─────────────────────────── */}
+        <div className="space-y-2 border-t border-gray-800 pt-3">
+          <div className="flex items-center justify-between">
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-400">
+              Productos en la lista ({itemsSalida.length})
+            </label>
+            {itemsSalida.length > 0 && (
+              <span className="text-[11px] text-gray-500">
+                Podés seguir eligiendo productos arriba
+              </span>
+            )}
+          </div>
 
           {itemsSalida.length === 0 ? (
-            <div className="py-6 text-center text-xs text-gray-500 border border-dashed border-gray-800 rounded-2xl">
-              Buscá y seleccioná los productos arriba para agregarlos a la lista.
+            <div className="py-5 text-center text-xs text-gray-500 border border-dashed border-gray-800 rounded-2xl">
+              Elegí un producto arriba para pesarlo y agregarlo a la lista.
             </div>
           ) : (
             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
               {itemsSalida.map((it, idx) => (
                 <div key={idx} className="bg-black/60 border border-gray-800 rounded-xl p-3 flex items-center justify-between gap-3 text-xs">
-                  <div className="flex-1">
-                    <span className="font-bold text-white block">{it.producto}</span>
-                    <span className="text-[10px] text-gray-500 font-mono">
-                      Stock actual: {it.stock_actual} {it.unidad} · Costo: $${it.costo_unitario}
-                    </span>
-                  </div>
-
-                  {tipoSalida === 'MERMA' ? (
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] text-gray-400">Baja:</span>
-                      <input
-                        type="number"
-                        step={it.unidad === 'kg' ? '0.001' : '1'}
-                        value={it.kg}
-                        onChange={(e) => actualizarItem(idx, 'kg', e.target.value)}
-                        className="w-20 bg-black border border-gray-700 rounded-lg px-2 py-1 text-right font-mono text-xs text-amber-300 font-bold"
-                      />
-                      <span className="text-[10px] text-gray-400">{it.unidad}</span>
-                    </div>
-                  ) : (
+                  <div className="flex-1 space-y-0.5">
                     <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-1">
-                        <span className="text-[10px] text-gray-400">Hay realmente:</span>
-                        <input
-                          type="number"
-                          step={it.unidad === 'kg' ? '0.001' : '1'}
-                          value={it.stock_real}
-                          onChange={(e) => actualizarItem(idx, 'stock_real', e.target.value)}
-                          className="w-20 bg-black border border-gray-700 rounded-lg px-2 py-1 text-right font-mono text-xs text-blue-300 font-bold"
-                        />
-                        <span className="text-[10px] text-gray-400">{it.unidad}</span>
-                      </div>
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-gray-800 text-gray-300">
-                        Dif: {(Number(it.stock_real || 0) - Number(it.stock_actual || 0)).toFixed(2)}
+                      <span className="font-bold text-white">{it.producto}</span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-gray-800 text-gray-300 font-mono">
+                        {it.modoPesaje === 'balanza' ? '⚖️ Balanza' : '✏️ Manual'}
                       </span>
                     </div>
-                  )}
+
+                    {/* Línea de cantidad y costo */}
+                    <div className="flex items-center gap-2 text-[11px]">
+                      {tipoSalida === 'MERMA' ? (
+                        <span className="font-mono font-bold text-amber-300">
+                          Baja: {it.kg} {it.unidad}
+                        </span>
+                      ) : (
+                        <span className="font-mono font-bold text-blue-300">
+                          Real: {it.stock_real} {it.unidad} ({it.dif > 0 ? `+${it.dif}` : it.dif} {it.unidad})
+                        </span>
+                      )}
+                      <span className="text-gray-500">·</span>
+                      <span className="text-emerald-400 font-mono">
+                        Costo: $${it.valor_costo || 0}
+                      </span>
+                    </div>
+
+                    {/* Stock que quedaría (Requisito 7) */}
+                    <div className="text-[10px] text-gray-400 font-mono">
+                      Stock: <span className="text-gray-300">{it.stock_actual} {it.unidad}</span> → Quedará:{' '}
+                      <strong className={tipoSalida === 'MERMA' ? 'text-amber-400' : 'text-blue-400'}>
+                        {it.stock_resultante} {it.unidad}
+                      </strong>
+                    </div>
+                  </div>
 
                   <button
                     type="button"
                     onClick={() => eliminarItem(idx)}
-                    className="text-gray-500 hover:text-red-400 cursor-pointer"
+                    title="Quitar producto de la lista"
+                    className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
                   >
-                    <Trash2 size={14} />
+                    <Trash2 size={15} />
                   </button>
                 </div>
               ))}
@@ -1400,25 +1734,29 @@ function ModalSalida({ productosExistentes, onClose, onSuccess, ejecutarConAdmin
           )}
         </div>
 
-        {/* Resumen valor al costo */}
+        {/* Resumen total al costo */}
         {itemsSalida.length > 0 && (
           <div className="bg-black/40 border border-gray-800 p-3 rounded-xl flex items-center justify-between text-xs">
             <span className="text-gray-400">Valor total al costo de lo que sale:</span>
-            <span className="font-mono font-black text-amber-300 text-sm">{valorTotalCosto > 0 ? $$(valorTotalCosto) : '$0'}</span>
+            <span className="font-mono font-black text-amber-300 text-sm">
+              {valorTotalCosto > 0 ? $$(valorTotalCosto) : '$0'}
+            </span>
           </div>
         )}
 
+        {/* Error en el envío */}
         {errorEnvio && (
           <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs">
             {errorEnvio}
           </div>
         )}
 
+        {/* Botón Aplicar */}
         <button
           type="button"
           onClick={handleAplicar}
           disabled={enviando || itemsSalida.length === 0}
-          className="w-full bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-black text-xs uppercase tracking-wider py-3 rounded-xl transition-all shadow-lg shadow-amber-500/20 cursor-pointer flex items-center justify-center gap-1.5"
+          className="w-full bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-black text-xs uppercase tracking-wider py-3.5 rounded-xl transition-all shadow-lg shadow-amber-500/20 cursor-pointer flex items-center justify-center gap-1.5"
         >
           {enviando ? (
             <>
@@ -1428,7 +1766,9 @@ function ModalSalida({ productosExistentes, onClose, onSuccess, ejecutarConAdmin
           ) : (
             <>
               <Check size={16} />
-              <span>Aplicar {tipoSalida === 'MERMA' ? 'Merma' : 'Corrección'}</span>
+              <span>
+                Aplicar {tipoSalida === 'MERMA' ? 'Merma' : 'Corrección'} ({itemsSalida.length} {itemsSalida.length === 1 ? 'producto' : 'productos'})
+              </span>
             </>
           )}
         </button>

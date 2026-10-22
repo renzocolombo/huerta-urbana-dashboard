@@ -3,6 +3,8 @@
  * Configuración: 115200 baudios, 8 bits, sin paridad, 1 stop bit (8N1).
  */
 
+import { useState, useEffect, useCallback } from 'react';
+
 export const SERIAL_SCALE_CONFIG = {
   baudRate: 115200,
   dataBits: 8,
@@ -47,6 +49,36 @@ export function extraerPesoSystel(trama) {
 }
 
 /**
+ * Extrae el peso y flag de estabilidad de la trama Systel si está disponible.
+ */
+export function extraerDatosSystel(trama) {
+  if (!trama) return null;
+  const str = trama.replace(',', '.');
+
+  let hardwareEstable = null;
+  const stxIdx = str.indexOf('\x02');
+  const etxIdx = str.indexOf('\x03');
+  let searchStr = str;
+  if (stxIdx !== -1 && etxIdx !== -1 && etxIdx > stxIdx) {
+    searchStr = str.slice(stxIdx + 1, etxIdx);
+    const firstChar = searchStr.trim()[0];
+    if (firstChar === 'S' || firstChar === 's' || firstChar === 'E' || firstChar === 'e') {
+      hardwareEstable = true;
+    } else if (firstChar === 'U' || firstChar === 'u' || firstChar === 'D' || firstChar === 'd' || firstChar === 'M' || firstChar === 'm') {
+      hardwareEstable = false;
+    }
+  } else {
+    if (/\b[UuDdMm]\b/.test(str)) hardwareEstable = false;
+    else if (/\b[SsEe]\b/.test(str)) hardwareEstable = true;
+  }
+
+  const peso = extraerPesoSystel(str);
+  if (peso === null) return null;
+
+  return { peso, hardwareEstable };
+}
+
+/**
  * Verifica si el navegador soporta Web Serial API.
  */
 export function soportaWebSerial() {
@@ -54,47 +86,173 @@ export function soportaWebSerial() {
 }
 
 /**
- * Controlador de sesión de lectura Web Serial con reconexión y streaming de peso.
+ * Gestor Singleton de conexión Web Serial a la balanza Systel.
+ * Mantiene la conexión abierta durante toda la sesión del navegador para
+ * que múltiples componentes (Compras, Merma, Ajuste) compartan la misma balanza
+ * sin pedir reconectar constantemente.
  */
-export class BalanzaSystelSession {
-  constructor({ onPeso, onStatusChange, onError }) {
-    this.onPeso = onPeso || (() => {});
-    this.onStatusChange = onStatusChange || (() => {});
-    this.onError = onError || (() => {});
+class BalanzaManager {
+  constructor() {
     this.port = null;
     this.reader = null;
     this.isReading = false;
     this.enqInterval = null;
+    this.conectado = false;
+    this.conectando = false;
+    this.error = null;
     this.ultimoPeso = null;
+    this.esEstable = false;
+    this.subscribers = new Set();
+    this.recentReadings = []; // [{ peso, time, hardwareEstable }]
+    this.connectPromise = null;
+
+    if (typeof navigator !== 'undefined' && navigator.serial) {
+      navigator.serial.addEventListener('disconnect', (event) => {
+        if (this.port && event.target === this.port) {
+          this.desconectar();
+          this.error = 'Balanza desconectada físicamente del puerto USB/Serie.';
+          this.notificar();
+        }
+      });
+    }
+  }
+
+  isConectado() {
+    return this.conectado && Boolean(this.port);
+  }
+
+  isConectando() {
+    return this.conectando;
+  }
+
+  getUltimoPeso() {
+    return this.ultimoPeso;
+  }
+
+  getEsEstable() {
+    return this.esEstable;
+  }
+
+  getError() {
+    return this.error;
+  }
+
+  notificar() {
+    const estado = {
+      conectado: this.isConectado(),
+      conectando: this.conectando,
+      pesoVivo: this.ultimoPeso,
+      esEstable: this.esEstable,
+      error: this.error,
+    };
+    for (const sub of this.subscribers) {
+      try {
+        sub(estado);
+      } catch (e) {
+        // silencioso
+      }
+    }
+  }
+
+  suscribir(callback) {
+    this.subscribers.add(callback);
+    // Notificar inmediatamente el estado actual
+    callback({
+      conectado: this.isConectado(),
+      conectando: this.conectando,
+      pesoVivo: this.ultimoPeso,
+      esEstable: this.esEstable,
+      error: this.error,
+    });
+    return () => {
+      this.subscribers.delete(callback);
+    };
+  }
+
+  registrarLectura(peso, hardwareEstable) {
+    const now = Date.now();
+    this.ultimoPeso = peso;
+
+    // Guardar en historial de estabilidad (últimos 800ms)
+    this.recentReadings.push({ peso, time: now, hardwareEstable });
+    this.recentReadings = this.recentReadings.filter(r => now - r.time <= 800);
+
+    let nuevoEstable = false;
+
+    if (hardwareEstable === true) {
+      nuevoEstable = true;
+    } else if (hardwareEstable === false) {
+      nuevoEstable = false;
+    } else {
+      // Estabilidad por software:
+      // Verificamos si en una ventana de ~450ms los pesos varían <= 3 gramos
+      const ventana = this.recentReadings.filter(r => now - r.time <= 450);
+      if (ventana.length >= 2) {
+        const pesos = ventana.map(r => r.peso);
+        const min = Math.min(...pesos);
+        const max = Math.max(...pesos);
+        nuevoEstable = (max - min) <= 0.003;
+      } else {
+        // Si no hay variación respecto al último peso y pasaron más de 300ms
+        nuevoEstable = true;
+      }
+    }
+
+    this.esEstable = nuevoEstable;
+    this.notificar();
   }
 
   async conectar() {
+    if (this.isConectado()) {
+      return true;
+    }
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+
     if (!soportaWebSerial()) {
       const err = new Error('Tu navegador no soporta Web Serial API (usá Chrome, Edge u Opera en PC).');
-      this.onError(err);
+      this.error = err.message;
+      this.notificar();
       throw err;
     }
 
-    try {
-      this.onStatusChange({ conectando: true, conectado: false });
-      this.port = await navigator.serial.requestPort();
-      await this.port.open(SERIAL_SCALE_CONFIG);
+    this.conectando = true;
+    this.error = null;
+    this.notificar();
 
-      this.isReading = true;
-      this.onStatusChange({ conectando: false, conectado: true, error: null });
+    this.connectPromise = (async () => {
+      try {
+        this.port = await navigator.serial.requestPort();
+        await this.port.open(SERIAL_SCALE_CONFIG);
 
-      // Iniciar envío de ENQ (0x05) por si la balanza requiere petición por demanda
-      this.enqInterval = setInterval(() => {
-        this.enviarENQ();
-      }, 400);
+        this.isReading = true;
+        this.conectado = true;
+        this.conectando = false;
+        this.error = null;
 
-      this.leerLoop();
-      return true;
-    } catch (err) {
-      this.onStatusChange({ conectando: false, conectado: false, error: err.message });
-      this.onError(err);
-      return false;
-    }
+        // Iniciar envío de ENQ (0x05) por si la balanza requiere petición por demanda
+        if (this.enqInterval) clearInterval(this.enqInterval);
+        this.enqInterval = setInterval(() => {
+          this.enviarENQ();
+        }, 400);
+
+        this.leerLoop();
+        this.notificar();
+        return true;
+      } catch (err) {
+        this.conectado = false;
+        this.conectando = false;
+        this.error = err.message || 'No se pudo conectar a la balanza';
+        this.port = null;
+        this.notificar();
+        return false;
+      } finally {
+        this.connectPromise = null;
+      }
+    })();
+
+    return this.connectPromise;
   }
 
   async enviarENQ() {
@@ -127,10 +285,9 @@ export class BalanzaSystelSession {
             let etxIdx = buffer.indexOf('\x03');
             while (stxIdx !== -1 && etxIdx !== -1 && etxIdx > stxIdx) {
               const trama = buffer.slice(stxIdx, etxIdx + 1);
-              const p = extraerPesoSystel(trama);
-              if (p !== null) {
-                this.ultimoPeso = p;
-                this.onPeso(p);
+              const datos = extraerDatosSystel(trama);
+              if (datos !== null) {
+                this.registrarLectura(datos.peso, datos.hardwareEstable);
               }
               buffer = buffer.slice(etxIdx + 1);
               stxIdx = buffer.indexOf('\x02');
@@ -143,10 +300,9 @@ export class BalanzaSystelSession {
               for (let i = 0; i < lineas.length - 1; i++) {
                 const linea = lineas[i].trim();
                 if (linea) {
-                  const p = extraerPesoSystel(linea);
-                  if (p !== null) {
-                    this.ultimoPeso = p;
-                    this.onPeso(p);
+                  const datos = extraerDatosSystel(linea);
+                  if (datos !== null) {
+                    this.registrarLectura(datos.peso, datos.hardwareEstable);
                   }
                 }
               }
@@ -162,17 +318,21 @@ export class BalanzaSystelSession {
       }
     } catch (err) {
       if (this.isReading) {
-        this.onError(err);
+        this.error = err.message || 'Error en flujo de lectura de balanza';
+        this.notificar();
       }
     } finally {
       if (this.reader) {
         try { this.reader.releaseLock(); } catch (e) {}
+        this.reader = null;
       }
     }
   }
 
   async desconectar() {
     this.isReading = false;
+    this.conectado = false;
+    this.conectando = false;
     if (this.enqInterval) {
       clearInterval(this.enqInterval);
       this.enqInterval = null;
@@ -186,6 +346,93 @@ export class BalanzaSystelSession {
       try { await this.port.close(); } catch (e) {}
       this.port = null;
     }
-    this.onStatusChange({ conectando: false, conectado: false, error: null });
+    this.ultimoPeso = null;
+    this.esEstable = false;
+    this.recentReadings = [];
+    this.notificar();
+  }
+
+  async toggle() {
+    if (this.isConectado()) {
+      await this.desconectar();
+      return false;
+    } else {
+      return await this.conectar();
+    }
+  }
+}
+
+// Instancia singleton compartida en memoria durante la sesión del navegador
+export const balanzaManager = new BalanzaManager();
+
+/**
+ * Hook de React para usar la balanza Systel en cualquier componente/modal.
+ */
+export function useBalanzaSystel() {
+  const [estado, setEstado] = useState(() => ({
+    conectado: balanzaManager.isConectado(),
+    conectando: balanzaManager.isConectando(),
+    pesoVivo: balanzaManager.getUltimoPeso(),
+    esEstable: balanzaManager.getEsEstable(),
+    error: balanzaManager.getError(),
+  }));
+
+  useEffect(() => {
+    const unsub = balanzaManager.suscribir((nuevoEstado) => {
+      setEstado({ ...nuevoEstado });
+    });
+    return unsub;
+  }, []);
+
+  const conectar = useCallback(() => balanzaManager.conectar(), []);
+  const desconectar = useCallback(() => balanzaManager.desconectar(), []);
+  const toggle = useCallback(() => balanzaManager.toggle(), []);
+
+  return {
+    ...estado,
+    conectar,
+    desconectar,
+    toggle,
+    soportaWebSerial: soportaWebSerial(),
+  };
+}
+
+/**
+ * Wrapper de compatibilidad hacia atrás para código que usa new BalanzaSystelSession().
+ */
+export class BalanzaSystelSession {
+  constructor({ onPeso, onStatusChange, onError }) {
+    this.onPeso = onPeso || (() => {});
+    this.onStatusChange = onStatusChange || (() => {});
+    this.onError = onError || (() => {});
+    this.unsub = null;
+  }
+
+  async conectar() {
+    if (this.unsub) {
+      this.unsub();
+    }
+    this.unsub = balanzaManager.suscribir(({ pesoVivo, esEstable, conectado, conectando, error }) => {
+      this.onStatusChange({ conectando, conectado, error });
+      if (pesoVivo !== null) {
+        this.onPeso(pesoVivo, esEstable);
+      }
+      if (error) {
+        this.onError(new Error(error));
+      }
+    });
+
+    return await balanzaManager.conectar();
+  }
+
+  async desconectar(force = false) {
+    if (this.unsub) {
+      this.unsub();
+      this.unsub = null;
+    }
+    if (force) {
+      await balanzaManager.desconectar();
+    }
+    this.onStatusChange({ conectando: false, conectado: balanzaManager.isConectado(), error: null });
   }
 }
