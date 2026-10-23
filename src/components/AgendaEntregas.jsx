@@ -1,10 +1,25 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, CheckCircle, Sun, Sunset, Printer, FileText, User, Clock, ScanBarcode, X, Trash2, Check, RotateCcw, Lock, AlertTriangle, Sparkles } from 'lucide-react';
+import { 
+  MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, 
+  CheckCircle, Sun, Sunset, Printer, FileText, User, Clock, ScanBarcode, 
+  X, Trash2, Check, RotateCcw, Lock, AlertTriangle, Sparkles, Tag, CheckSquare, Square
+} from 'lucide-react';
 import { HOY } from '../data/mockData';
 import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido } from '../utils/remitoPrinter';
 import { getEanMapping, esCodigoEan } from '../data/productUtils';
 import { syncProductWithSheet } from '../utils/stockSync';
+import { 
+  apiReservarPedido, 
+  apiRegistrarPesadas, 
+  apiGuardarPreparacion, 
+  apiGetPreparaciones, 
+  apiSetDetallePedido, 
+  apiGetReservas, 
+  apiLiberarPedido,
+  apiGetPreciosSugeridos
+} from '../utils/mercaderiaApi';
+import { imprimirEtiquetaBolsa } from '../utils/etiquetaPrinter';
 
 const DIAS_SEMANA = ['Martes', 'Jueves'];
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
@@ -119,12 +134,27 @@ function getTipoByNombre(nombre) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 export default function AgendaEntregas({ rol, usuario }) {
-  const { pedidos: PEDIDOS, actualizarEstadoEnSheet, actualizarRemitoEnSheet, eliminarPedidoOCliente, stockData, setStockData } = useGoogleSheets();
+  const { pedidos: PEDIDOS, actualizarEstadoEnSheet, actualizarRemitoEnSheet, eliminarPedidoOCliente, stockData, setStockData, productosCostos } = useGoogleSheets();
 
   const esRen = (usuario || localStorage.getItem('huerta_auth_usuario') || '').trim().toLowerCase() === 'ren';
 
   const [diaSeleccionado, setDiaSeleccionado] = useState(DIAS_SEMANA[0]);
   const [turnoSeleccionado, setTurnoSeleccionado] = useState('Manana');
+
+  // ── Precios sugeridos / publicados del Sheet para congelar detalle ────────
+  const [preciosSugeridosList, setPreciosSugeridosList] = useState([]);
+
+  // ── Checklist por producto para armado de pedidos (Requisito 6) ───────────
+  const [checksPorPedido, setChecksPorPedido] = useState({}); // { [numPedido]: { [itemIdx]: boolean } }
+
+  // ── Selección para impresión en lote de remitos armados (Requisito 7) ─────
+  const [seleccionadosRemito, setSeleccionadosRemito] = useState([]);
+  const [filtroSoloArmados, setFiltroSoloArmados] = useState(false);
+
+  // ── Estados de proceso y feedback ─────────────────────────────────────────
+  const [guardandoPedidoArmado, setGuardandoPedidoArmado] = useState(false);
+  const [avisoReserva, setAvisoReserva] = useState(null); // { tipo: 'warning' | 'error', mensaje: string }
+  const reservasLlamadasRef = useRef(new Set());
 
   // ── Filtrado ───────────────────────────────────────────────────────────────
   const pedidosDelDia = useMemo(() => {
@@ -193,6 +223,34 @@ export default function AgendaEntregas({ rol, usuario }) {
   const [syncNotice, setSyncNotice] = useState(null); // { tipo: 'retrying' | 'error' | 'success', mensaje: string }
   const syncTimerRef = useRef(null);
 
+  // 1. Cargar preparaciones del Sheet al montar y combinar (gana lo del Sheet)
+  useEffect(() => {
+    let isMounted = true;
+    apiGetPreparaciones({ dias: 14 })
+      .then(res => {
+        if (!isMounted) return;
+        if (res && res.ok && res.preparaciones) {
+          setPreparaciones(prev => {
+            const merged = { ...prev, ...res.preparaciones };
+            try { localStorage.setItem(PREPARACIONES_KEY, JSON.stringify(merged)); } catch (e) {}
+            return merged;
+          });
+        }
+      })
+      .catch(e => console.warn('[AGENDA] Error en apiGetPreparaciones:', e.message));
+
+    apiGetPreciosSugeridos()
+      .then(res => {
+        if (!isMounted) return;
+        if (res && res.ok && Array.isArray(res.precios)) {
+          setPreciosSugeridosList(res.precios);
+        }
+      })
+      .catch(() => {});
+
+    return () => { isMounted = false; };
+  }, []);
+
   const handleSyncStatus = useCallback((info, prodNombre) => {
     if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
     if (info.status === 'retrying') {
@@ -217,6 +275,70 @@ export default function AgendaEntregas({ rol, usuario }) {
 
   useEffect(() => { stockDataRef.current = stockData; }, [stockData]);
   useEffect(() => { try { localStorage.setItem(PREPARACIONES_KEY, JSON.stringify(preparaciones)); } catch (e) {} }, [preparaciones]);
+
+  // Helper para persistir pesadas y preparación completa en el Sheet
+  const sincronizarPesadasSheet = useCallback((numPed, prepObj) => {
+    if (!numPed || !prepObj) return;
+    apiGuardarPreparacion({ numero_pedido: numPed, preparacion: prepObj }).then(res => {
+      if (res && res.ok === false) {
+        setSyncNotice({ tipo: 'error', mensaje: `Error guardando preparación en Sheet: ${res.error}` });
+      }
+    }).catch(err => {
+      setSyncNotice({ tipo: 'error', mensaje: `Error de red al guardar preparación: ${err.message}` });
+    });
+
+    const itemsPesadas = (prepObj.items || []).map(it => {
+      const bolsas = it.bolsasAsignadas || [];
+      let cant = 0;
+      if (it.esUnidad || it.slot === 'unidades') cant = bolsas.length;
+      else cant = Number(bolsas.reduce((s, b) => s + (Number(b.peso) || 0), 0).toFixed(3));
+      return { producto: it.nombre, cantidad_real: cant };
+    });
+
+    apiRegistrarPesadas({ numero_pedido: numPed, items: itemsPesadas }).then(res => {
+      if (res && res.ok === false) {
+        setSyncNotice({ tipo: 'error', mensaje: `Error registrando pesadas en Sheet: ${res.error}` });
+      }
+    }).catch(err => {
+      setSyncNotice({ tipo: 'error', mensaje: `Error de red al registrar pesadas: ${err.message}` });
+    });
+  }, []);
+
+  // Helper para obtener precio unitario congelado por producto
+  const obtenerPrecioCongelado = useCallback((nombreProd) => {
+    const k = norm(nombreProd);
+    // 1. Buscar en precios sugeridos / publicados de mercaderia
+    const pSug = preciosSugeridosList.find(p => {
+      const pNorm = norm(p.producto);
+      return pNorm === k || k.includes(pNorm) || pNorm.includes(k);
+    });
+    if (pSug) {
+      const pr = Number(pSug.precio_publicado) > 0 ? Number(pSug.precio_publicado) : Number(pSug.precio_sugerido);
+      if (pr > 0) return pr;
+    }
+    // 2. Buscar en productosCostos
+    const pCost = (productosCostos || []).find(p => {
+      const pNorm = norm(p.nombre);
+      return pNorm === k || k.includes(pNorm) || pNorm.includes(k);
+    });
+    if (pCost) {
+      if (pCost.precioMaxManual && Number(pCost.precioMaxManual) > 0) return Number(pCost.precioMaxManual);
+      if (pCost.precioCajon && pCost.cantidadCajon) {
+        const costoUnit = Number(pCost.precioCajon) / Number(pCost.cantidadCajon);
+        const margen = Number(pCost.margen || 60);
+        return Math.round(costoUnit * (1 + margen / 100));
+      }
+    }
+    return 0;
+  }, [preciosSugeridosList, productosCostos]);
+
+  const toggleCheckItem = useCallback((numPedido, itemIdx) => {
+    setChecksPorPedido(prev => {
+      const pedChecks = { ...(prev[numPedido] || {}) };
+      pedChecks[itemIdx] = !pedChecks[itemIdx];
+      return { ...prev, [numPedido]: pedChecks };
+    });
+  }, []);
 
   const getCodigosProcesados = () => {
     try { const s = localStorage.getItem(PROCESSED_CODES_KEY); return s ? JSON.parse(s) : {}; } catch (e) { return {}; }
@@ -252,10 +374,51 @@ export default function AgendaEntregas({ rol, usuario }) {
   // ── INICIAR PREPARACIÓN ────────────────────────────────────────────────────
   const iniciarPreparacion = useCallback((pedido) => {
     const numPedido = pedido.numero_pedido;
+    let itemsActuales = preparaciones[numPedido]?.items;
+
     if (!preparaciones[numPedido]) {
-      const items = parsearProductosPedido(pedido.producto, pedido.cantidades);
-      setPreparaciones(prev => ({ ...prev, [numPedido]: { items, completado: false, fechaInicio: new Date().toISOString() } }));
+      itemsActuales = parsearProductosPedido(pedido.producto, pedido.cantidades);
+      const nuevaPrep = { items: itemsActuales, completado: false, fechaInicio: new Date().toISOString() };
+      setPreparaciones(prev => ({ ...prev, [numPedido]: nuevaPrep }));
+      try {
+        const local = JSON.parse(localStorage.getItem(PREPARACIONES_KEY) || '{}');
+        localStorage.setItem(PREPARACIONES_KEY, JSON.stringify({ ...local, [numPedido]: nuevaPrep }));
+      } catch (e) {}
+      apiGuardarPreparacion({ numero_pedido: numPedido, preparacion: nuevaPrep }).catch(() => {});
     }
+
+    // Reservar stock al abrir el pedido (primera vez, idempotente)
+    if (!reservasLlamadasRef.current.has(numPedido)) {
+      reservasLlamadasRef.current.add(numPedido);
+      const itemsParaReserva = (itemsActuales || []).map(it => ({
+        producto: it.nombre,
+        cantidad: it.pesoSolicitado ? Number((it.pesoSolicitado * it.cantidad).toFixed(3)) : Number(it.cantidad || 1)
+      }));
+
+      apiReservarPedido({ numero_pedido: numPedido, items: itemsParaReserva })
+        .then(res => {
+          if (!res || res.ok === false) {
+            setAvisoReserva({
+              tipo: 'error',
+              mensaje: `⚠️ Error al reservar stock en Sheet: ${res?.error || 'Respuesta no válida'}`
+            });
+          } else if (res.no_encontrados && res.no_encontrados.length > 0) {
+            setAvisoReserva({
+              tipo: 'warning',
+              mensaje: `⚠️ Aviso: los siguientes productos no existen en el catálogo de Productos: ${res.no_encontrados.join(', ')}`
+            });
+          } else {
+            setAvisoReserva(null);
+          }
+        })
+        .catch(err => {
+          setAvisoReserva({
+            tipo: 'error',
+            mensaje: `⚠️ Error de red al reservar stock: ${err.message}`
+          });
+        });
+    }
+
     setPreparandoPedido(numPedido);
     setPedidosAbiertos(prev => ({ ...prev, [numPedido]: true }));
     setScanError(null);
@@ -410,14 +573,16 @@ export default function AgendaEntregas({ rol, usuario }) {
       }
 
       const todosCompletos = items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
-      return { ...prev, [numPedido]: { ...prep, items, completado: todosCompletos } };
+      const nuevaPrep = { ...prep, items, completado: todosCompletos };
+      sincronizarPesadasSheet(numPedido, nuevaPrep);
+      return { ...prev, [numPedido]: nuevaPrep };
     });
 
     setModalItemExtra(null);
     setScanSuccess(`✅ Agregado ítem extra: ${nombre.toUpperCase()} (+1 ${esUnidad ? 'ud' : 'bolsa'})`);
     setTimeout(() => setScanSuccess(null), 2500);
     setTimeout(() => modalScanInputRef.current?.focus(), 80);
-  }, [preparaciones, setStockData]);
+  }, [preparaciones, setStockData, sincronizarPesadasSheet]);
 
   // ── ESCANEAR BOLSA / PRODUCTO EAN ──────────────────────────────────────────
   const procesarEscaneoPedido = useCallback((rawCode) => {
@@ -691,39 +856,90 @@ export default function AgendaEntregas({ rol, usuario }) {
       const items = [...prep.items];
       items[matchedItemIdx] = { ...items[matchedItemIdx], bolsasAsignadas: [...(items[matchedItemIdx].bolsasAsignadas || []), nuevaBolsa] };
       const todosCompletos = items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
-      return { ...prev, [preparandoPedido]: { ...prep, items, completado: todosCompletos } };
+      const nuevaPrep = { ...prep, items, completado: todosCompletos };
+      sincronizarPesadasSheet(preparandoPedido, nuevaPrep);
+      return { ...prev, [preparandoPedido]: nuevaPrep };
     });
     
     setScanSuccess(`✅ ${resultado.nombre.toUpperCase()} — ${resultado.peso?.toFixed(3) || '?'} kg asignado`);
     setTimeout(() => setScanSuccess(null), 2500);
     setTimeout(() => modalScanInputRef.current?.focus(), 50);
-  }, [preparandoPedido, preparaciones, setStockData]);
+  }, [preparandoPedido, preparaciones, setStockData, sincronizarPesadasSheet]);
 
-  const marcarPreparado = useCallback((numPedido) => {
-    actualizarEstado(numPedido, 'Preparado');
-    setPreparaciones(prev => ({ ...prev, [numPedido]: { ...prev[numPedido], completado: true, fechaFin: new Date().toISOString() } }));
-    setPreparandoPedido(null);
-  }, []);
+  // ── 4. BOTÓN "PEDIDO ARMADO": CONGELAR DETALLE Y FINALIZAR ─────────────────
+  const handlePedidoArmado = useCallback(async (pedido, numPedido) => {
+    const prep = preparaciones[numPedido];
+    if (!prep || !prep.items) return;
 
-  const cargarRemito = useCallback((numPedido) => {
-    marcarPreparado(numPedido);
-    setModalPreparacion(null);
-    setScanError(null);
-    setScanSuccess(null);
-  }, [marcarPreparado]);
+    setGuardandoPedidoArmado(true);
+    try {
+      // 1. Armar detalle_json con producto, cantidad_real, precio_unitario congelado y subtotal
+      const detalle = prep.items.map(it => {
+        const bolsas = it.bolsasAsignadas || [];
+        const esUnidad = it.esUnidad || it.slot === 'unidades';
+        const cantReal = esUnidad 
+          ? bolsas.length 
+          : Number(bolsas.reduce((acc, b) => acc + (Number(b.peso) || 0), 0).toFixed(3));
+        const precioUnit = obtenerPrecioCongelado(it.nombre);
+        const subtotal = Math.round(cantReal * precioUnit);
+        return {
+          producto: it.nombre,
+          nombre: it.nombre,
+          unidad: esUnidad ? 'un' : 'kg',
+          cantidad_real: cantReal,
+          cantidad: cantReal,
+          precio_unitario: precioUnit,
+          precio_unit: precioUnit,
+          subtotal
+        };
+      });
 
-  const imprimirRemitoDesdeModal = useCallback((pedido, numPedido) => {
-    // Primero marcar como preparado, luego imprimir con la prep actualizada
-    marcarPreparado(numPedido);
-    setModalPreparacion(null);
-    setScanError(null);
-    setScanSuccess(null);
-    // Leer la prep actualizada directamente de preparaciones con el estado final
+      // 2. Guardar detalle_json congelado en el Sheet
+      const resDetalle = await apiSetDetallePedido({ numero_pedido: numPedido, detalle_json: detalle });
+      if (resDetalle && resDetalle.ok === false) {
+        alert(`Aviso: el Sheet no pudo congelar el detalle: ${resDetalle.error}`);
+      }
+
+      // 3. Guardar preparación completada y pesadas finales en el Sheet
+      const prepFinal = { 
+        ...prep, 
+        completado: true, 
+        fechaFin: new Date().toISOString(),
+        detalle_json: detalle 
+      };
+      await apiGuardarPreparacion({ numero_pedido: numPedido, preparacion: prepFinal });
+
+      const itemsPesadas = prep.items.map(it => {
+        const bolsas = it.bolsasAsignadas || [];
+        let cant = 0;
+        if (it.esUnidad || it.slot === 'unidades') cant = bolsas.length;
+        else cant = Number(bolsas.reduce((s, b) => s + (Number(b.peso) || 0), 0).toFixed(3));
+        return { producto: it.nombre, cantidad_real: cant };
+      });
+      await apiRegistrarPesadas({ numero_pedido: numPedido, items: itemsPesadas });
+
+      // 4. Actualizar estado del pedido a 'Preparado' y actualizar objeto local
+      pedido.detalle_json = detalle;
+      setPreparaciones(prev => ({ ...prev, [numPedido]: prepFinal }));
+      actualizarEstado(numPedido, 'Preparado');
+      setPreparandoPedido(null);
+      setModalPreparacion(null);
+      setScanError(null);
+      setScanSuccess(null);
+    } catch (err) {
+      alert(`Error al guardar pedido armado: ${err.message}`);
+    } finally {
+      setGuardandoPedidoArmado(false);
+    }
+  }, [preparaciones, obtenerPrecioCongelado, actualizarEstado]);
+
+  const imprimirRemitoDesdeModal = useCallback(async (pedido, numPedido) => {
+    await handlePedidoArmado(pedido, numPedido);
     const prep = preparaciones[numPedido];
     const prepFinal = { ...(prep || {}), completado: true, fechaFin: new Date().toISOString() };
     imprimirRemitoIndividual(pedido, prepFinal);
     if (pedido.sheetRowIndex) actualizarRemitoEnSheet(pedido.sheetRowIndex, true);
-  }, [marcarPreparado, preparaciones, actualizarRemitoEnSheet]);
+  }, [handlePedidoArmado, preparaciones, actualizarRemitoEnSheet]);
 
   const cancelarRemito = useCallback((numPedido) => {
     // Revertir stock de TODAS las bolsas de este pedido
@@ -744,6 +960,35 @@ export default function AgendaEntregas({ rol, usuario }) {
     actualizarEstado(numPedido, 'Pendiente');
   }, [preparaciones, revertirStockBolsa, actualizarEstado]);
 
+  // ── 8. CANCELAR PEDIDO Y LIBERAR STOCK EN SHEET (REQUISITO 8) ──────────────
+  const handleCancelarPedido = useCallback(async (p) => {
+    const numPedido = p.numero_pedido;
+    const confirmacion = window.confirm(`¿Estás seguro de cancelar el pedido ${numPedido} de ${p.nombre}?\n\nEsta acción liberará en el Sheet el stock que estaba reservado y marcará el pedido como cancelado.`);
+    if (!confirmacion) return;
+
+    try {
+      const res = await apiLiberarPedido({ numero_pedido: numPedido, motivo: 'Cancelado' });
+      if (res && res.ok === false) {
+        alert(`Error al liberar el stock en el Sheet: ${res.error}`);
+        return;
+      }
+
+      // Revertir bolsas de preparación si existían en memoria
+      const prep = preparaciones[numPedido];
+      if (prep?.items) {
+        prep.items.forEach(item => {
+          (item.bolsasAsignadas || []).forEach(bolsa => revertirStockBolsa(bolsa));
+        });
+      }
+
+      setPreparaciones(prev => { const { [numPedido]: _, ...rest } = prev; return rest; });
+      actualizarEstado(numPedido, 'no_entregado', 'Cancelado');
+      alert(`✅ Pedido ${numPedido} cancelado y stock liberado correctamente en el Sheet.`);
+    } catch (err) {
+      alert(`Error de red al cancelar el pedido: ${err.message}`);
+    }
+  }, [preparaciones, revertirStockBolsa, actualizarEstado]);
+
   const quitarBolsaAsignada = useCallback((numPedido, itemIdx, bolsaIdx) => {
     setPreparaciones(prev => {
       const prep = { ...prev[numPedido] };
@@ -759,9 +1004,11 @@ export default function AgendaEntregas({ rol, usuario }) {
         items[itemIdx] = { ...items[itemIdx], bolsasAsignadas: nuevasBolsas };
       }
       const todosCompletos = items.length > 0 && items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
-      return { ...prev, [numPedido]: { ...prep, items, completado: todosCompletos } };
+      const nuevaPrep = { ...prep, items, completado: todosCompletos };
+      sincronizarPesadasSheet(numPedido, nuevaPrep);
+      return { ...prev, [numPedido]: nuevaPrep };
     });
-  }, [revertirStockBolsa]);
+  }, [revertirStockBolsa, sincronizarPesadasSheet]);
 
   const ejecutarReinicioPreparacion = useCallback((numPedido) => {
     // Revertir stock de TODAS las bolsas de este pedido
@@ -805,6 +1052,43 @@ export default function AgendaEntregas({ rol, usuario }) {
       if (p.sheetRowIndex) actualizarRemitoEnSheet(p.sheetRowIndex, true);
     });
   }, [rol, pedidosDelTurno, pedidosDelDia, turnoSeleccionado, diaSeleccionado, preparaciones, actualizarRemitoEnSheet]);
+
+  const toggleSeleccionRemito = useCallback((numPedido) => {
+    setSeleccionadosRemito(prev => 
+      prev.includes(numPedido) ? prev.filter(x => x !== numPedido) : [...prev, numPedido]
+    );
+  }, []);
+
+  const pedidosArmadosDelTurno = useMemo(() => {
+    return pedidosDelTurno.filter(p => {
+      const est = (estados[p.numero_pedido] || p.estado || '').toLowerCase();
+      return est === 'preparado' || est === 'listo';
+    });
+  }, [pedidosDelTurno, estados]);
+
+  const pedidosParaMostrar = useMemo(() => {
+    if (!filtroSoloArmados) return pedidosDelTurno;
+    return pedidosArmadosDelTurno;
+  }, [pedidosDelTurno, pedidosArmadosDelTurno, filtroSoloArmados]);
+
+  const seleccionarTodosArmados = useCallback(() => {
+    const todosIds = pedidosArmadosDelTurno.map(p => p.numero_pedido);
+    const todosEstan = todosIds.length > 0 && todosIds.every(id => seleccionadosRemito.includes(id));
+    if (todosEstan) {
+      setSeleccionadosRemito(prev => prev.filter(id => !todosIds.includes(id)));
+    } else {
+      setSeleccionadosRemito(prev => Array.from(new Set([...prev, ...todosIds])));
+    }
+  }, [pedidosArmadosDelTurno, seleccionadosRemito]);
+
+  const imprimirRemitosArmadosSeleccionados = useCallback(() => {
+    const pedidosAImprimir = (PEDIDOS || []).filter(p => seleccionadosRemito.includes(p.numero_pedido));
+    if (pedidosAImprimir.length === 0) {
+      alert('Seleccioná al menos un pedido armado para imprimir.');
+      return;
+    }
+    imprimirRemitosEnLote(pedidosAImprimir, preparaciones, 'Remitos de Pedidos Armados');
+  }, [PEDIDOS, seleccionadosRemito, preparaciones]);
 
   const handleScanKeyDown = (e) => {
     if (e.key === 'Enter') {
@@ -878,14 +1162,61 @@ export default function AgendaEntregas({ rol, usuario }) {
         </button>
       </div>
 
-      {/* Contador y ruta */}
-      <div className="flex items-center justify-between gap-3 mb-4">
-        <span className="text-sm font-medium text-white bg-gray-800 px-3 py-1 rounded-lg border border-gray-700 w-fit">{pedidosDelTurno.length} pedidos</span>
-        {pedidosDelTurno.length > 0 && (
-          <button onClick={abrirRutaGoogle} className="flex items-center gap-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 font-bold px-4 py-2 rounded-xl text-sm transition-all hover:scale-[1.02] shadow-[0_0_15px_rgba(99,102,241,0.1)] shrink-0">
-            🗺️ Abrir ruta del turno
+      {/* Barra de control: Contador, filtros y botones de remitos armados en lote */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-4 bg-[#111827]/60 border border-white/5 p-3 rounded-2xl">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-bold text-white bg-gray-800 px-3 py-1.5 rounded-xl border border-gray-700">
+            {pedidosDelTurno.length} pedidos
+          </span>
+          <button
+            type="button"
+            onClick={() => setFiltroSoloArmados(prev => !prev)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+              filtroSoloArmados
+                ? 'bg-green-500/20 border-green-500/50 text-green-300'
+                : 'bg-white/5 border-white/10 text-gray-400 hover:text-white'
+            }`}
+          >
+            {filtroSoloArmados ? '✓ Mostrando solo armados' : `Solo armados (${pedidosArmadosDelTurno.length})`}
           </button>
-        )}
+
+          {pedidosArmadosDelTurno.length > 0 && (
+            <button
+              type="button"
+              onClick={seleccionarTodosArmados}
+              className="text-xs text-gray-400 hover:text-white px-2 py-1 rounded-lg hover:bg-white/5 font-semibold transition-all cursor-pointer"
+            >
+              {pedidosArmadosDelTurno.every(p => seleccionadosRemito.includes(p.numero_pedido))
+                ? 'Desmarcar todos'
+                : 'Seleccionar todos los armados'}
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {rol !== 'repartidor' && (
+            <button
+              type="button"
+              onClick={imprimirRemitosArmadosSeleccionados}
+              disabled={seleccionadosRemito.length === 0}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${
+                seleccionadosRemito.length > 0
+                  ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white shadow-lg shadow-indigo-900/30 cursor-pointer active:scale-95'
+                  : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed opacity-60'
+              }`}
+              title="Abre una sola ventana con todos los remitos seleccionados (con sus dos copias), separados por salto de página"
+            >
+              <Printer size={14} />
+              <span>Imprimir remitos ({seleccionadosRemito.length})</span>
+            </button>
+          )}
+
+          {pedidosDelTurno.length > 0 && (
+            <button onClick={abrirRutaGoogle} className="flex items-center gap-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 font-bold px-3 py-1.5 rounded-xl text-xs transition-all hover:scale-[1.02] shadow-[0_0_15px_rgba(99,102,241,0.1)] shrink-0 cursor-pointer">
+              🗺️ Abrir ruta
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Banner de sincronización de stock con el Sheet */}
@@ -902,20 +1233,23 @@ export default function AgendaEntregas({ rol, usuario }) {
         </div>
       )}
 
-      {pedidosDelTurno.length === 0 ? (
+      {pedidosParaMostrar.length === 0 ? (
         <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-12 text-center">
           <MapPin size={32} className="text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-500">No hay entregas asignadas a este turno.</p>
+          <p className="text-gray-500">
+            {filtroSoloArmados ? 'No hay pedidos armados en este turno.' : 'No hay entregas asignadas a este turno.'}
+          </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {pedidosDelTurno.map(p => {
+          {pedidosParaMostrar.map(p => {
             const isOpen = !!pedidosAbiertos[p.numero_pedido];
             const estadoActual = (estados[p.numero_pedido] || p.estado || 'pendiente').toLowerCase();
             const prep = preparaciones[p.numero_pedido];
             const estaPreparando = preparandoPedido === p.numero_pedido;
             const todosCompletos = prep?.completado || false;
             const tieneBolsas = prep?.items?.some(it => it.bolsasAsignadas?.length > 0);
+            const esArmado = estadoActual === 'preparado' || estadoActual === 'listo';
 
             const configEstado = {
               'pendiente':    { icon: '⏳', label: 'PENDIENTE',    color: 'text-amber-400', bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
@@ -933,6 +1267,18 @@ export default function AgendaEntregas({ rol, usuario }) {
                 {/* Cabecera */}
                 <div className="px-4 pr-5 py-4 flex items-center justify-between cursor-pointer hover:bg-white/5" onClick={() => toggleAcordeon(p.numero_pedido)}>
                   <div className="flex items-center gap-3">
+                    {/* Checkbox para lote si está preparado */}
+                    {esArmado && (
+                      <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={seleccionadosRemito.includes(p.numero_pedido)}
+                          onChange={() => toggleSeleccionRemito(p.numero_pedido)}
+                          className="w-4 h-4 rounded text-green-500 bg-black/40 border-gray-600 focus:ring-green-500 cursor-pointer accent-green-500"
+                          title="Seleccionar para imprimir remito en lote"
+                        />
+                      </div>
+                    )}
                     <div className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 text-lg">{conf.icon}</div>
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
@@ -950,6 +1296,15 @@ export default function AgendaEntregas({ rol, usuario }) {
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); handleCancelarPedido(p); }}
+                      className="hidden sm:flex items-center gap-1 text-gray-500 hover:text-red-400 hover:bg-red-500/10 px-2.5 py-1.5 rounded-xl border border-transparent hover:border-red-500/20 transition-all text-xs font-bold cursor-pointer"
+                      title="Cancelar pedido y devolver stock reservado al Sheet"
+                    >
+                      <X size={14} />
+                      <span>Cancelar</span>
+                    </button>
                     {esRen && (
                       <button
                         type="button"
@@ -1488,6 +1843,8 @@ export default function AgendaEntregas({ rol, usuario }) {
         const prep = preparaciones[numPedido];
         const todosCompletos = prep?.completado || false;
         const items = prep?.items || [];
+        const todosChequeados = items.length > 0 && items.every((_, idx) => !!checksPorPedido[numPedido]?.[idx]);
+        const cantChequeados = items.filter((_, idx) => !!checksPorPedido[numPedido]?.[idx]).length;
 
         // Feed de bolsas escaneadas en orden cronológico (todas las bolsas de todos los items)
         const feedBolsas = items
@@ -1541,8 +1898,20 @@ export default function AgendaEntregas({ rol, usuario }) {
               </div>
             </div>
 
-            {/* ── INPUT DE ESCANEO ── */}
+            {/* ── INPUT DE ESCANEO Y AVISOS ── */}
             <div className="px-6 py-3 bg-[#0d1117] border-b border-white/5 shrink-0">
+              {/* Aviso de reserva si hubo productos no encontrados o error */}
+              {avisoReserva && (
+                <div className={`flex items-center gap-2 max-w-2xl mx-auto mb-2 px-3 py-2 rounded-xl border animate-in slide-in-from-top-1 duration-200 ${
+                  avisoReserva.tipo === 'warning'
+                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                    : 'bg-red-500/15 border-red-500/40 text-red-300'
+                }`}>
+                  <AlertTriangle size={14} className="shrink-0" />
+                  <p className="text-xs font-bold leading-tight">{avisoReserva.mensaje}</p>
+                </div>
+              )}
+
               <div className="relative max-w-2xl mx-auto">
                 <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
                   <ScanBarcode size={18} className="text-green-400" />
@@ -1556,7 +1925,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                   value={scanBuffer}
                   onChange={(e) => setScanBuffer(e.target.value)}
                   onKeyDown={handleScanKeyDown}
-                  placeholder={todosCompletos ? '✅ Pedido completo — presioná "Cargar remito"' : 'Escaneá la bolsa con la pistola...'}
+                  placeholder={todosCompletos ? '✅ Pedido completo — revisá el control y finalizá' : 'Escaneá la bolsa con la pistola...'}
                   disabled={todosCompletos}
                   className="w-full bg-black/60 border border-green-500/30 focus:border-green-500/60 text-white text-sm font-mono rounded-2xl pl-14 pr-4 py-3.5 outline-none transition-all placeholder:text-gray-600 focus:bg-black/80 focus:shadow-[0_0_30px_rgba(74,222,128,0.08)] disabled:opacity-50 disabled:cursor-not-allowed"
                   autoComplete="off"
@@ -1593,12 +1962,30 @@ export default function AgendaEntregas({ rol, usuario }) {
             {/* ── CUERPO 2 COLUMNAS ── */}
             <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-0 overflow-hidden">
 
-              {/* ── COL IZQUIERDA: Lista del Pedido ── */}
+              {/* ── COL IZQUIERDA: Lista de Control del Pedido (Requisito 6) ── */}
               <div className="flex flex-col border-r border-white/5 overflow-hidden">
-                <div className="px-5 py-3 border-b border-white/5 bg-[#111827]/50 shrink-0">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">📋 Lista del Pedido</p>
+                <div className="px-5 py-3 border-b border-white/5 bg-[#111827]/50 shrink-0 flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">📋 Lista de Control del Pedido</p>
+                    <p className="text-[10px] text-gray-500">Tildá cada producto para habilitar el cierre</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allChecked = items.every((_, i) => !!checksPorPedido[numPedido]?.[i]);
+                      setChecksPorPedido(prev => {
+                        const pedChecks = {};
+                        items.forEach((_, i) => { pedChecks[i] = !allChecked; });
+                        return { ...prev, [numPedido]: pedChecks };
+                      });
+                    }}
+                    className="text-[11px] font-bold text-green-400 hover:text-green-300 transition-colors cursor-pointer"
+                  >
+                    {todosChequeados ? 'Desmarcar todos' : 'Marcar todos'}
+                  </button>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-2">
+
+                <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
                   {items.length === 0 && (
                     <div className="text-center text-gray-600 text-xs italic py-8">Sin productos en el pedido</div>
                   )}
@@ -1607,37 +1994,44 @@ export default function AgendaEntregas({ rol, usuario }) {
                     const completo = bolsas.length >= item.cantidad;
                     const parcial = bolsas.length > 0 && !completo;
                     const esUnidad = item.esUnidad || item.slot === 'unidades';
-                    const pesoReal = bolsas.reduce((s, b) => s + (b.peso || 0), 0);
+                    const pesoReal = bolsas.reduce((s, b) => s + (Number(b.peso) || 0), 0);
                     const pesoPedido = item.pesoSolicitado ? item.pesoSolicitado * item.cantidad : null;
                     const diff = (!esUnidad && pesoPedido && pesoReal > 0) ? Math.round((pesoReal - pesoPedido) * 1000) / 1000 : null;
+                    const isChecked = !!checksPorPedido[numPedido]?.[idx];
 
                     return (
                       <div
                         key={idx}
-                        className={`rounded-2xl border p-4 transition-all duration-500 ${
-                          completo
-                            ? 'bg-green-500/8 border-green-500/25 shadow-[0_0_20px_rgba(34,197,94,0.06)]'
+                        className={`rounded-2xl border p-4 transition-all duration-300 ${
+                          isChecked
+                            ? 'bg-green-500/10 border-green-500/40 shadow-[0_0_20px_rgba(34,197,94,0.08)]'
+                            : completo
+                            ? 'bg-green-500/5 border-green-500/20'
                             : parcial
                             ? 'bg-amber-500/5 border-amber-500/20'
                             : 'bg-white/[0.02] border-white/5'
                         }`}
                       >
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
-                            {/* Indicador visual */}
-                            <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shrink-0 transition-all duration-300 ${
-                              completo
-                                ? 'bg-green-500 text-white shadow-[0_0_15px_rgba(34,197,94,0.4)]'
-                                : parcial
-                                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                                : 'bg-gray-800 text-gray-500 border border-gray-700'
-                            }`}>
-                              {completo ? <Check size={16} /> : `${bolsas.length}/${item.cantidad}`}
-                            </div>
+                            {/* Checkbox de control individual */}
+                            <button
+                              type="button"
+                              onClick={() => toggleCheckItem(numPedido, idx)}
+                              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border transition-all cursor-pointer ${
+                                isChecked
+                                  ? 'bg-green-500 text-white border-green-400 shadow-[0_0_12px_rgba(34,197,94,0.5)]'
+                                  : 'bg-white/5 border-white/10 text-gray-500 hover:text-gray-300 hover:border-gray-500'
+                              }`}
+                              title={isChecked ? 'Controlado (clic para desmarcar)' : 'Marcar como controlado'}
+                            >
+                              {isChecked ? <Check size={18} /> : <Square size={16} />}
+                            </button>
+
                             <div>
                               <div className="flex items-center gap-2">
-                                <p className={`text-sm font-bold uppercase tracking-wide transition-colors duration-300 ${
-                                  completo ? 'text-green-300' : parcial ? 'text-amber-300' : 'text-gray-400'
+                                <p className={`text-sm font-bold uppercase tracking-wide transition-colors ${
+                                  isChecked ? 'text-green-300' : completo ? 'text-white' : 'text-gray-400'
                                 }`}>
                                   {item.nombre}
                                 </p>
@@ -1647,49 +2041,80 @@ export default function AgendaEntregas({ rol, usuario }) {
                                   </span>
                                 )}
                               </div>
-                              <p className="text-[11px] text-gray-600 font-mono mt-0.5">
-                                {item.cantidad} {esUnidad ? (item.cantidad === 1 ? 'unidad' : 'unidades') : (item.cantidad === 1 ? 'bolsa' : 'bolsas')}
-                                {(!esUnidad && pesoPedido) ? ` · Pedido: ${pesoPedido.toFixed(3)} kg` : ''}
+                              <p className="text-[11px] text-gray-400 font-mono mt-0.5">
+                                Solicitado: <span className="text-gray-300 font-bold">{item.cantidad} {esUnidad ? (item.cantidad === 1 ? 'unidad' : 'unidades') : (item.cantidad === 1 ? 'bolsa' : 'bolsas')}</span>
+                                {(!esUnidad && pesoPedido) ? ` · ${pesoPedido.toFixed(3)} kg` : ''}
                               </p>
                             </div>
                           </div>
-                          {/* Peso real o unidades + diferencia */}
-                          {(esUnidad ? bolsas.length > 0 : pesoReal > 0) && (
-                            <div className="text-right shrink-0">
-                              <p className="text-green-400 font-mono text-sm font-bold">
-                                {esUnidad ? `${bolsas.length} ud${bolsas.length !== 1 ? 's' : ''}` : `${pesoReal.toFixed(3)} kg`}
-                              </p>
-                              {diff !== null && diff !== 0 && (
-                                <p className={`text-[11px] font-bold font-mono ${
-                                  diff > 0 ? 'text-emerald-400' : 'text-red-400'
-                                }`}>
-                                  {diff > 0 ? '+' : ''}{diff.toFixed(3)} kg
-                                  {diff > 0 && <span className="ml-1 text-[9px] font-black text-emerald-500 uppercase tracking-wider">regalo</span>}
+
+                          {/* Peso o cantidad armada + diferencia */}
+                          <div className="text-right shrink-0">
+                            {(esUnidad ? bolsas.length > 0 : pesoReal > 0) ? (
+                              <>
+                                <p className="text-green-400 font-mono text-sm font-bold">
+                                  {esUnidad ? `${bolsas.length} ud${bolsas.length !== 1 ? 's' : ''}` : `${pesoReal.toFixed(3)} kg`}
                                 </p>
-                              )}
-                            </div>
-                          )}
+                                {diff !== null && diff !== 0 && (
+                                  <p className={`text-[11px] font-bold font-mono ${
+                                    diff > 0 ? 'text-emerald-400' : 'text-red-400'
+                                  }`}>
+                                    {diff > 0 ? '+' : ''}{diff.toFixed(3)} kg
+                                    {diff > 0 && <span className="ml-1 text-[9px] font-black text-emerald-500 uppercase tracking-wider">regalo</span>}
+                                  </p>
+                                )}
+                              </>
+                            ) : (
+                              <span className="text-xs text-gray-600 italic">Sin pesar</span>
+                            )}
+                          </div>
                         </div>
 
-                        {/* Sub-bolsas / unidades asignadas */}
+                        {/* Sub-bolsas / unidades asignadas con botón de Etiqueta Térmica */}
                         {bolsas.length > 0 && (
-                          <div className="mt-3 space-y-1 pl-11">
+                          <div className="mt-3 space-y-1.5 pl-12 border-t border-white/5 pt-2">
                             {bolsas.map((bolsa, bIdx) => (
-                              <div key={bIdx} className="flex items-center justify-between text-[10px] bg-black/30 rounded-lg px-2.5 py-1.5 group">
+                              <div key={bIdx} className="flex items-center justify-between text-[11px] bg-black/40 border border-white/5 rounded-xl px-3 py-1.5 group">
                                 <div className="flex items-center gap-2">
-                                  <span className="text-green-400">✓</span>
-                                  <span className="text-gray-400 font-mono">{bolsa.rawCode || bolsa.uniqueCode}</span>
+                                  <span className="text-green-400 font-bold">✓</span>
+                                  <span className="text-gray-300 font-mono">{bolsa.rawCode || bolsa.uniqueCode}</span>
+                                  <span className="text-gray-500">—</span>
                                   <span className="text-green-400 font-bold font-mono">
-                                    {bolsa.esUnidad ? '1 ud' : `${bolsa.peso?.toFixed(3)} kg`}
+                                    {bolsa.esUnidad ? '1 ud' : `${Number(bolsa.peso || 0).toFixed(3)} kg`}
                                   </span>
+                                  {bolsa.tagId && <span className="text-gray-500 font-mono text-[10px]">[{bolsa.tagId}]</span>}
                                 </div>
-                                <button
-                                  onClick={() => quitarBolsaAsignada(numPedido, idx, bIdx)}
-                                  className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 cursor-pointer transition-all p-0.5"
-                                  title="Quitar"
-                                >
-                                  <X size={11} />
-                                </button>
+                                <div className="flex items-center gap-1.5">
+                                  {/* Botón Imprimir Etiqueta de Bolsa (Requisito 5) */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const precioUnit = obtenerPrecioCongelado(item.nombre);
+                                      imprimirEtiquetaBolsa({
+                                        producto: item.nombre,
+                                        pesoReal: bolsa.peso,
+                                        precioUnitario: precioUnit,
+                                        unidad: bolsa.esUnidad ? 'un' : 'kg',
+                                        tagId: bolsa.tagId,
+                                        uniqueCode: bolsa.uniqueCode,
+                                        esUnidad: bolsa.esUnidad
+                                      });
+                                    }}
+                                    className="text-gray-400 hover:text-green-400 hover:bg-green-500/10 p-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 text-[10px] font-bold"
+                                    title="🏷️ Imprimir etiqueta térmica de bolsa"
+                                  >
+                                    <Tag size={12} />
+                                    <span>Etiqueta</span>
+                                  </button>
+
+                                  <button
+                                    onClick={() => quitarBolsaAsignada(numPedido, idx, bIdx)}
+                                    className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 hover:bg-red-500/10 p-1 rounded-lg cursor-pointer transition-all"
+                                    title="Quitar esta bolsa"
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -1700,11 +2125,11 @@ export default function AgendaEntregas({ rol, usuario }) {
                 </div>
               </div>
 
-              {/* ── COL DERECHA: Feed de bolsas escaneadas ── */}
+              {/* ── COL DERECHA: Feed de bolsas escaneadas en tiempo real ── */}
               <div className="flex flex-col overflow-hidden">
                 <div className="px-5 py-3 border-b border-white/5 bg-[#111827]/50 shrink-0 flex items-center justify-between">
                   <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">📡 Escaneado en tiempo real</p>
-                  <span className="text-[10px] font-mono text-gray-600 bg-black/30 px-2 py-0.5 rounded-lg border border-white/5">
+                  <span className="text-[10px] font-mono text-gray-400 bg-black/30 px-2 py-0.5 rounded-lg border border-white/5">
                     {feedBolsas.length} {feedBolsas.length === 1 ? 'ítem' : 'ítems'}
                   </span>
                 </div>
@@ -1715,8 +2140,8 @@ export default function AgendaEntregas({ rol, usuario }) {
                         <ScanBarcode size={28} className="text-gray-700" />
                       </div>
                       <div>
-                        <p className="text-gray-600 text-sm font-medium">Esperando escaneo...</p>
-                        <p className="text-gray-700 text-xs mt-1">Apuntá la pistola al código de barras o EAN</p>
+                        <p className="text-gray-500 text-sm font-medium">Esperando escaneo...</p>
+                        <p className="text-gray-600 text-xs mt-1">Apuntá la pistola al código de barras o balanza</p>
                       </div>
                     </div>
                   )}
@@ -1739,7 +2164,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                           <div>
                             <div className="flex items-center gap-1.5">
                               <p className={`text-xs font-bold uppercase tracking-wide ${
-                                i === 0 ? 'text-green-300' : 'text-gray-400'
+                                i === 0 ? 'text-green-300' : 'text-gray-300'
                               }`}>
                                 {bolsa.itemNombre}
                               </p>
@@ -1749,24 +2174,46 @@ export default function AgendaEntregas({ rol, usuario }) {
                                 </span>
                               )}
                             </div>
-                            <p className="text-[10px] text-gray-600 font-mono">{bolsa.rawCode || bolsa.uniqueCode}</p>
+                            <p className="text-[10px] text-gray-500 font-mono">{bolsa.rawCode || bolsa.uniqueCode}</p>
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
                           <div className="text-right">
                             <p className={`font-mono text-sm font-bold ${
-                              i === 0 ? 'text-green-400' : 'text-gray-400'
+                              i === 0 ? 'text-green-400' : 'text-gray-300'
                             }`}>
-                              {bolsa.esUnidad ? '1 ud' : `${bolsa.peso?.toFixed(3)} kg`}
+                              {bolsa.esUnidad ? '1 ud' : `${Number(bolsa.peso || 0).toFixed(3)} kg`}
                             </p>
-                            <p className="text-[9px] text-gray-700 font-mono">
+                            <p className="text-[9px] text-gray-600 font-mono">
                               #{feedBolsas.length - i}
                             </p>
                           </div>
+
+                          {/* Botón Etiqueta Bolsa desde el feed */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const precioUnit = obtenerPrecioCongelado(bolsa.itemNombre);
+                              imprimirEtiquetaBolsa({
+                                producto: bolsa.itemNombre,
+                                pesoReal: bolsa.peso,
+                                precioUnitario: precioUnit,
+                                unidad: bolsa.esUnidad ? 'un' : 'kg',
+                                tagId: bolsa.tagId,
+                                uniqueCode: bolsa.uniqueCode,
+                                esUnidad: bolsa.esUnidad
+                              });
+                            }}
+                            className="w-7 h-7 rounded-lg bg-green-500/10 hover:bg-green-500/20 border border-green-500/20 text-green-400 flex items-center justify-center transition-all cursor-pointer shrink-0"
+                            title={`Imprimir etiqueta térmica para ${bolsa.itemNombre}`}
+                          >
+                            <Tag size={12} />
+                          </button>
+
                           {/* Botón Deshacer bolsa individual */}
                           <button
                             onClick={() => quitarBolsaAsignada(numPedido, bolsa.itemIdx, bolsa.bIdx)}
-                            className="ml-1 opacity-0 group-hover:opacity-100 w-7 h-7 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-transparent hover:border-red-500/30 text-gray-600 hover:text-red-400 flex items-center justify-center transition-all cursor-pointer shrink-0"
+                            className="opacity-0 group-hover:opacity-100 w-7 h-7 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-transparent hover:border-red-500/30 text-gray-500 hover:text-red-400 flex items-center justify-center transition-all cursor-pointer shrink-0"
                             title={`Deshacer: quitar ${bolsa.itemNombre} y devolver al stock`}
                           >
                             <Trash2 size={12} />
@@ -1779,51 +2226,61 @@ export default function AgendaEntregas({ rol, usuario }) {
               </div>
             </div>
 
-            {/* ── FOOTER: 3 botones siempre visibles ── */}
-            <div className="px-6 py-4 border-t border-white/10 bg-[#111827]/80 shrink-0">
-              {todosCompletos ? (
-                /* Pedido completo: 3 botones de acción */
-                <div className="grid grid-cols-3 gap-3">
-                  {/* Cancelar remito */}
-                  <button
-                    onClick={() => cancelarRemito(numPedido)}
-                    className="flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 text-red-400 hover:text-red-300 font-bold text-sm transition-all active:scale-[0.98] cursor-pointer"
-                  >
-                    <RotateCcw size={16} />
-                    <span>Cancelar</span>
-                  </button>
-                  {/* Cargar remito (sin imprimir) */}
-                  <button
-                    onClick={() => cargarRemito(numPedido)}
-                    className="flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-green-500/15 hover:bg-green-500/25 border border-green-500/30 hover:border-green-500/50 text-green-300 hover:text-green-200 font-bold text-sm transition-all active:scale-[0.98] cursor-pointer shadow-[0_0_20px_rgba(34,197,94,0.1)]"
-                  >
-                    <CheckCircle size={16} />
-                    <span>Cargar remito</span>
-                  </button>
-                  {/* Imprimir remito */}
-                  <button
-                    onClick={() => imprimirRemitoDesdeModal(mp, numPedido)}
-                    className="flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 border border-indigo-500/50 text-white font-bold text-sm transition-all active:scale-[0.98] cursor-pointer shadow-[0_4px_20px_rgba(99,102,241,0.3)]"
-                  >
-                    <Printer size={16} />
-                    <span>Imprimir remito</span>
-                  </button>
+            {/* ── FOOTER: Control de cierre y botones de acción (Requisito 4 y 6) ── */}
+            <div className="px-6 py-4 border-t border-white/10 bg-[#111827]/90 shrink-0 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
+                <button
+                  onClick={() => cancelarRemito(numPedido)}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 hover:text-red-300 text-xs font-bold transition-all cursor-pointer"
+                >
+                  <RotateCcw size={14} />
+                  <span>Cancelar y salir</span>
+                </button>
+
+                <div className="text-xs">
+                  {todosChequeados ? (
+                    <span className="text-green-400 font-bold flex items-center gap-1.5">
+                      <CheckCircle size={15} /> Lista de control completa ({items.length}/{items.length})
+                    </span>
+                  ) : (
+                    <span className="text-amber-400 font-semibold flex items-center gap-1.5">
+                      <AlertCircle size={15} /> Tildá la lista de control para habilitar ({cantChequeados}/{items.length})
+                    </span>
+                  )}
                 </div>
-              ) : (
-                /* Pedido incompleto: aviso + botón cancelar */
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-2 text-gray-600 text-xs">
-                    <AlertCircle size={13} className="text-gray-600" />
-                    <span>Completá todos los productos para guardar o imprimir</span>
-                  </div>
-                  <button
-                    onClick={() => cancelarRemito(numPedido)}
-                    className="flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 text-red-400 hover:text-red-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all cursor-pointer"
-                  >
-                    <RotateCcw size={13} /> Cancelar y deshacer
-                  </button>
-                </div>
-              )}
+              </div>
+
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                {/* Botón PEDIDO ARMADO (Requisito 4 y 6) */}
+                <button
+                  onClick={() => handlePedidoArmado(mp, numPedido)}
+                  disabled={!todosChequeados || guardandoPedidoArmado}
+                  className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 py-3 px-6 rounded-2xl font-black text-sm uppercase tracking-wide transition-all shadow-lg ${
+                    todosChequeados && !guardandoPedidoArmado
+                      ? 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white shadow-green-900/30 cursor-pointer active:scale-95'
+                      : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed opacity-60'
+                  }`}
+                  title={todosChequeados ? 'Congelar detalle, guardar pesadas y marcar como preparado' : 'Tildá todos los productos en la lista de control'}
+                >
+                  <CheckCircle size={18} />
+                  <span>{guardandoPedidoArmado ? 'Guardando en Sheet...' : 'Pedido armado'}</span>
+                </button>
+
+                {/* Botón Imprimir remito */}
+                <button
+                  onClick={() => imprimirRemitoDesdeModal(mp, numPedido)}
+                  disabled={!todosChequeados || guardandoPedidoArmado}
+                  className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 py-3 px-5 rounded-2xl font-bold text-sm transition-all shadow-md ${
+                    todosChequeados && !guardandoPedidoArmado
+                      ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white cursor-pointer active:scale-95'
+                      : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed opacity-60'
+                  }`}
+                  title={todosChequeados ? 'Guarda el pedido armado e imprime el remito fiscal con precios congelados' : 'Tildá todos los productos en la lista de control'}
+                >
+                  <Printer size={16} />
+                  <span>Imprimir remito</span>
+                </button>
+              </div>
             </div>
           </div>
         );

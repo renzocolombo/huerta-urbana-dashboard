@@ -105,15 +105,16 @@ export async function obtenerNumeroRemito(numeroPedido) {
  * @returns {Object} { tieneDetalleJson, items, subtotal, descuentos, credito, totalACobrar }
  */
 export function obtenerPesosReales(pedido, preparacion) {
-  // 1. Verificar si existe detalle_json nuevo
+  // 1. Verificar si existe detalle_json nuevo (en pedido o en preparacion)
   let detalleItems = null;
-  if (pedido?.detalle_json) {
+  const rawDetalle = pedido?.detalle_json || preparacion?.detalle_json;
+  if (rawDetalle) {
     try {
-      detalleItems = typeof pedido.detalle_json === 'string'
-        ? JSON.parse(pedido.detalle_json)
-        : (Array.isArray(pedido.detalle_json) ? pedido.detalle_json : null);
+      detalleItems = typeof rawDetalle === 'string'
+        ? JSON.parse(rawDetalle)
+        : (Array.isArray(rawDetalle) ? rawDetalle : null);
     } catch (e) {
-      console.warn('[REMITO] Error parseando pedido.detalle_json:', e);
+      console.warn('[REMITO] Error parseando detalle_json:', e);
       detalleItems = null;
     }
   }
@@ -125,7 +126,7 @@ export function obtenerPesosReales(pedido, preparacion) {
   const buscarBolsasParaProducto = (nombreProd) => {
     const k = norm(nombreProd);
     const pItem = prepItems.find(pi => {
-      const pNorm = norm(pi.nombre);
+      const pNorm = norm(pi.nombre || pi.producto);
       return pNorm === k || pNorm.includes(k) || k.includes(pNorm);
     });
     return (pItem && Array.isArray(pItem.bolsasAsignadas)) ? pItem.bolsasAsignadas : [];
@@ -134,13 +135,17 @@ export function obtenerPesosReales(pedido, preparacion) {
   // ── CASO 1: Existe detalle_json con precios unitarios y desglose ────────────
   if (Array.isArray(detalleItems) && detalleItems.length > 0) {
     const itemsProcesados = detalleItems.map(item => {
-      const nombre = (item.nombre || '').trim();
+      const nombre = String(item.producto || item.nombre || '').trim();
       const unidadRaw = (item.unidad || '').toLowerCase().trim();
       const unidad = unidadRaw === 'kg' ? 'kg' : (unidadRaw === 'atado' ? 'atado' : 'un');
       const bolsas = buscarBolsasParaProducto(nombre);
 
       let cantidadReal = 0;
-      if (bolsas.length > 0) {
+      if (item.cantidad_real != null && Number(item.cantidad_real) > 0) {
+        cantidadReal = Number(item.cantidad_real);
+      } else if (item.cantidad != null && Number(item.cantidad) > 0) {
+        cantidadReal = Number(item.cantidad);
+      } else if (bolsas.length > 0) {
         if (unidad === 'kg') {
           const sumaKg = bolsas.reduce((acc, b) => acc + (Number(b.peso) || 0), 0);
           cantidadReal = Number(sumaKg.toFixed(3));
@@ -161,10 +166,10 @@ export function obtenerPesosReales(pedido, preparacion) {
         cantidadFormateada = `${Math.round(cantidadReal)} un`;
       }
 
-      const precioUnit = Number(item.precio_unit) || 0;
-      const dtoUnit = Number(item.dto_unit) || 0;
+      const precioUnit = Number(item.precio_unitario != null ? item.precio_unitario : (item.precio_unit != null ? item.precio_unit : (item.precio || 0)));
+      const dtoUnit = Number(item.dto_unit || item.descuento_unitario || 0);
       const precioNeto = Math.max(0, precioUnit - dtoUnit);
-      const totalLinea = Number((cantidadReal * precioNeto).toFixed(2));
+      const totalLinea = item.subtotal != null ? Number(item.subtotal) : Number((cantidadReal * precioNeto).toFixed(2));
       const subtotalLinea = Number((cantidadReal * precioUnit).toFixed(2));
       const descuentoLinea = Number((cantidadReal * dtoUnit).toFixed(2));
 
@@ -800,11 +805,12 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
       `;
     }
 
-    const precioUnitStr = item.precioUnitario !== null ? `$${item.precioUnitario.toLocaleString('es-AR')}` : '—';
+    const avisoSinPrecios = '<span style="font-size:7.5pt; color:#b45309; font-weight:600; font-style:italic;">pedido sin precios congelados</span>';
+    const precioUnitStr = item.precioUnitario !== null ? `$${item.precioUnitario.toLocaleString('es-AR')}` : avisoSinPrecios;
     const descuentoStr = (item.descuentoUnitario !== null && item.descuentoUnitario > 0)
       ? `$${item.descuentoUnitario.toLocaleString('es-AR')}`
       : '—';
-    const totalLineaStr = item.totalLinea !== null ? `$${item.totalLinea.toLocaleString('es-AR')}` : '—';
+    const totalLineaStr = item.totalLinea !== null ? `$${item.totalLinea.toLocaleString('es-AR')}` : avisoSinPrecios;
 
     return `
       <tr>
@@ -821,6 +827,10 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
   }).join('');
 
   // Cuadro de Totales: si hay detalle_json se calcula sumando líneas con pesadas reales; si no, usa pedido.total
+  const avisoTotalSinPrecios = !calculo.tieneDetalleJson 
+    ? '<div style="margin-top:4px; font-size:7.5pt; color:#b45309; font-weight:700; text-align:right;">⚠️ pedido sin precios congelados</div>' 
+    : '';
+
   const subtotalStr = calculo.tieneDetalleJson
     ? `$${calculo.subtotal.toLocaleString('es-AR')}`
     : `$${Number(pedido?.total || 0).toLocaleString('es-AR')}`;
@@ -833,7 +843,7 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
 
   const totalFinalStr = calculo.tieneDetalleJson
     ? `$${calculo.totalACobrar.toLocaleString('es-AR')}`
-    : `$${Number(pedido?.total || 0).toLocaleString('es-AR')}`;
+    : `$${Number(pedido?.total || 0).toLocaleString('es-AR')}${avisoTotalSinPrecios}`;
 
   // Generación local 100% offline del código QR
   const qrUrlDestino = `https://www.huertaurbana.com.ar/pedido/${encodeURIComponent(pedido?.numero_pedido || '')}`;

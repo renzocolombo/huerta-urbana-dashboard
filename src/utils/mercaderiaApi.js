@@ -38,8 +38,8 @@ export async function llamarAppsScript(accion, params = {}, timeoutMs = 20000) {
       return { ok: false, error: `Respuesta no válida del Apps Script: ${text.slice(0, 120)}` };
     }
 
-    if (data && data.ok === false) {
-      return { ok: false, error: data.error || 'Error reportado por el Apps Script' };
+    if (data && (data.ok === false || data.success === false)) {
+      return { ok: false, error: data.error || 'Error reportado por el Apps Script', ...data };
     }
 
     return { ok: true, ...data };
@@ -254,3 +254,58 @@ export function clearHogarPinSession() {
   _hogarPinMemory = null;
   _hogarPinExpiresAt = 0;
 }
+
+// ── 5. ARMADO DE PEDIDOS & RESERVAS DE STOCK (APPS SCRIPT V8) ────────────────
+
+export async function apiReservarPedido({ numero_pedido, items }) {
+  return llamarAppsScript('reservarPedido', {
+    numero_pedido: String(numero_pedido).trim(),
+    items: (items || []).map(it => ({
+      producto: String(it.producto || it.nombre || '').trim(),
+      cantidad: Number(it.cantidad || 0),
+    })),
+  });
+}
+
+export async function apiRegistrarPesadas({ numero_pedido, items }) {
+  return llamarAppsScript('registrarPesadas', {
+    numero_pedido: String(numero_pedido).trim(),
+    items: (items || []).map(it => ({
+      producto: String(it.producto || it.nombre || '').trim(),
+      cantidad_real: Number(it.cantidad_real != null ? it.cantidad_real : (it.cantidad || 0)),
+    })),
+  });
+}
+
+export async function apiGuardarPreparacion({ numero_pedido, preparacion }) {
+  return llamarAppsScript('guardarPreparacion', {
+    numero_pedido: String(numero_pedido).trim(),
+    preparacion: preparacion || {},
+  });
+}
+
+export async function apiGetPreparaciones({ dias = 7 } = {}) {
+  return llamarAppsScript('getPreparaciones', {
+    dias: Number(dias) || 7,
+  });
+}
+
+export async function apiSetDetallePedido({ numero_pedido, detalle_json }) {
+  const jsonStr = typeof detalle_json === 'string' ? detalle_json : JSON.stringify(detalle_json);
+  return llamarAppsScript('setDetallePedido', {
+    numero_pedido: String(numero_pedido).trim(),
+    detalle_json: jsonStr,
+  });
+}
+
+export async function apiGetReservas({ numero_pedido } = {}) {
+  return llamarAppsScript('getReservas', numero_pedido ? { numero_pedido: String(numero_pedido).trim() } : {});
+}
+
+export async function apiLiberarPedido({ numero_pedido, motivo = 'Cancelado' }) {
+  return llamarAppsScript('liberarPedido', {
+    numero_pedido: String(numero_pedido).trim(),
+    motivo: String(motivo || 'Cancelado').trim(),
+  });
+}
+
