@@ -134,6 +134,11 @@ export function GoogleSheetsProvider({ children }) {
           acepto_publicidad: obj.acepto_publicidad || '',
           motivo_no_entrega: obj.motivo_no_entrega || obj.motivo || obj.motivo_rechazo || '',
           fecha_no_entrega:  obj.fecha_no_entrega || '',
+          fecha_entrega:     obj.fecha_entrega || '',
+          fecha_cierre:      obj.fecha_cierre || '',
+          fecha_cobro:       obj.fecha_cobro || '',
+          reembolso_estado:  (obj.reembolso_estado || obj.estado_reembolso || '').toLowerCase().trim(),
+          cobrado:           obj.cobrado === true || obj.cobrado === 'TRUE' || obj.cobrado === 'true' || Boolean(obj.fecha_cobro) || Boolean(obj.monto_cobrado != null && obj.monto_cobrado !== ''),
         };
       });
 
@@ -420,13 +425,30 @@ export function GoogleSheetsProvider({ children }) {
   }, [fetchSheetPedidos, fetchPanelCostos, fetchControlStock]);
 
   const actualizarEstadoEnSheet = useCallback(async (fila, nuevoEstado, motivo = null) => {
+    const ahora = new Date();
+    const y = ahora.getFullYear();
+    const m = String(ahora.getMonth() + 1).padStart(2, '0');
+    const d = String(ahora.getDate()).padStart(2, '0');
+    const hh = String(ahora.getHours()).padStart(2, '0');
+    const mm = String(ahora.getMinutes()).padStart(2, '0');
+    const ahoraStr = `${y}-${m}-${d} ${hh}:${mm}`;
+
     setPedidos(current =>
       current.map(p => {
         if (p.sheetRowIndex === fila) {
-          return {
-            ...p,
+          const updates = {
             estado: nuevoEstado,
             ...(motivo !== null ? { motivo_no_entrega: motivo } : {})
+          };
+          const norm = (nuevoEstado || '').toLowerCase().trim();
+          if (norm === 'entregado' && !p.fecha_entrega) {
+            updates.fecha_entrega = ahoraStr;
+          } else if (norm === 'cancelado' && !p.fecha_cierre) {
+            updates.fecha_cierre = ahoraStr;
+          }
+          return {
+            ...p,
+            ...updates
           };
         }
         return p;

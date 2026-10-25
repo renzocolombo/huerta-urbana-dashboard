@@ -137,6 +137,38 @@ export function esPedidoPendienteDeEntrega(p, estadoActualOverride) {
   return true;
 }
 
+// ── Helpers de fechas y cierre de pedidos ────────────────────────────────────
+export function extraerFechaYMD(fechaStr) {
+  if (!fechaStr) return '';
+  const s = String(fechaStr).trim();
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) return m[1];
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    const y = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${y}-${mm}-${dd}`;
+  }
+  return '';
+}
+
+export function getHoyYMD() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mm}-${dd}`;
+}
+
+export function obtenerFechaCierreEfectiva(p, estadoActual) {
+  const est = (estadoActual || p?.estado || '').toLowerCase().trim();
+  if (est === 'cancelado' || est === 'cancelled' || est.includes('cancel')) {
+    return p?.fecha_cierre || p?.fecha_entrega || p?.fecha_cobro || '';
+  }
+  return p?.fecha_entrega || p?.fecha_cierre || p?.fecha_cobro || '';
+}
+
 // ── Normalizar texto para matcheo fuzzy ────────────────────────────────────
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
@@ -259,20 +291,66 @@ export default function AgendaEntregas({ rol, usuario }) {
     return map;
   });
 
-  // ── Filtrado (Requisito 1) ─────────────────────────────────────────────────
+  // ── Vistas y filtros de Lista Fresca / Historial (Requisitos 1, 2, 4) ────────
+  const [vistaActual, setVistaActual] = useState('agenda'); // 'agenda' | 'historial'
+  const [periodoHistorial, setPeriodoHistorial] = useState('7d'); // '7d' | '30d' | 'todos'
+  const [busquedaHistorial, setBusquedaHistorial] = useState('');
+  const [entregadosHoyAbierto, setEntregadosHoyAbierto] = useState(false);
+
+  // ── Lista principal "Activos" (Requisitos 1, 3, 5) ─────────────────────────
+  // Solo pedidos pendientes (no Entregado y no Cancelado) de hoy y de días anteriores sin cerrar.
+  // A los pedidos de un día anterior que siguen pendientes se les pone etiqueta roja "ATRASADO" y se muestran primero.
+  // Siempre se muestran los pedidos con reembolso pendiente (reembolso_estado = pendiente), aunque estén cancelados.
   const pedidosDelDia = useMemo(() => {
-    return (PEDIDOS || []).filter(p => {
-      if (p.dia_entrega !== diaSeleccionado) return false;
+    const hoyYMD = getHoyYMD();
+
+    const activos = (PEDIDOS || []).filter(p => {
+      const estadoActual = (estados[p.numero_pedido] || p.estado || 'pendiente').toLowerCase().trim();
+      const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
+      const esEntregado = estadoActual === 'entregado' || estadoActual === 'delivered';
+      const esCancelado = estadoActual === 'cancelado' || estadoActual === 'cancelled' || (estadoActual === 'no_entregado' && (p.motivo_no_entrega || '').toLowerCase().includes('cancel'));
+
+      // Si está cerrado y NO tiene reembolso pendiente, NO va en la lista de trabajo ni en contadores
+      if ((esEntregado || esCancelado) && !tieneReembolsoPendiente) {
+        return false;
+      }
+
       const estadoPago = (p.estado_pago || '').toLowerCase().trim();
       const formaPago = (p.forma_pago || '').toLowerCase().trim();
-      const estadoActual = (estados[p.numero_pedido] || p.estado || '').toLowerCase().trim();
-      const esCanceladoOEntregado = ['cancelado', 'cancelled', 'entregado', 'delivered'].includes(estadoActual);
-
       const esAprobado = estadoPago === 'approved' || estadoPago === 'pagado';
       const esFormaEntregaOLink = formaPago === 'entrega' || formaPago === 'link';
 
-      // Mostrá el pedido si estado_pago es approved, O si forma_pago es entrega o link y no está cancelado ni entregado
-      return esAprobado || (esFormaEntregaOLink && !esCanceladoOEntregado);
+      // Pedido válido para reparto
+      if (!esAprobado && !esFormaEntregaOLink && !tieneReembolsoPendiente) {
+        return false;
+      }
+
+      // Evaluar si es de un día anterior aún pendiente
+      const fechaPedidoYMD = extraerFechaYMD(p.fecha);
+      const esDeDiaAnterior = Boolean(fechaPedidoYMD && fechaPedidoYMD < hoyYMD);
+
+      // Pertenece a la lista activa del día seleccionado si coincide el día de entrega, o si está atrasado de un día anterior sin cerrar
+      const coincideDia = p.dia_entrega === diaSeleccionado;
+      return coincideDia || esDeDiaAnterior;
+    }).map(p => {
+      const hoyYMD = getHoyYMD();
+      const fechaPedidoYMD = extraerFechaYMD(p.fecha);
+      const esAtrasado = Boolean(fechaPedidoYMD && fechaPedidoYMD < hoyYMD);
+      const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
+      return {
+        ...p,
+        esAtrasado,
+        esReembolsoPendiente: tieneReembolsoPendiente
+      };
+    });
+
+    // Ordenar: primero los ATRASADOS (etiqueta roja), luego reembolsos pendientes, luego el resto
+    return activos.sort((a, b) => {
+      if (a.esAtrasado && !b.esAtrasado) return -1;
+      if (!a.esAtrasado && b.esAtrasado) return 1;
+      if (a.esReembolsoPendiente && !b.esReembolsoPendiente) return -1;
+      if (!a.esReembolsoPendiente && b.esReembolsoPendiente) return 1;
+      return 0;
     });
   }, [PEDIDOS, diaSeleccionado, estados]);
 
@@ -283,6 +361,95 @@ export default function AgendaEntregas({ rol, usuario }) {
       return (turnoSeleccionado === 'Manana' && isManana) || (turnoSeleccionado === 'Tarde' && !isManana);
     });
   }, [pedidosDelDia, turnoSeleccionado]);
+
+  // ── Bloque "Entregados hoy" (Requisito 2) ──────────────────────────────────
+  // Pedidos Entregados o Cancelados cuya fecha de cierre (fecha_entrega, o fecha_cierre si es cancelado) sea de hoy.
+  const pedidosEntregadosHoyDelTurno = useMemo(() => {
+    const hoyYMD = getHoyYMD();
+
+    return (PEDIDOS || []).filter(p => {
+      const estadoActual = (estados[p.numero_pedido] || p.estado || '').toLowerCase().trim();
+      const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
+      const esEntregado = estadoActual === 'entregado' || estadoActual === 'delivered';
+      const esCancelado = estadoActual === 'cancelado' || estadoActual === 'cancelled' || (estadoActual === 'no_entregado' && (p.motivo_no_entrega || '').toLowerCase().includes('cancel'));
+      const esCerrado = (esEntregado || esCancelado) && !tieneReembolsoPendiente;
+
+      if (!esCerrado) return false;
+
+      const fechaCierre = obtenerFechaCierreEfectiva(p, estadoActual);
+      const fechaCierreYMD = extraerFechaYMD(fechaCierre);
+      if (fechaCierreYMD !== hoyYMD) return false;
+
+      // Filtrar por turno para mantener consistencia con la vista de turno
+      const horaInicio = parseInt((p.horario_entrega || '09:00').split(':')[0], 10);
+      const isManana = isNaN(horaInicio) || horaInicio < 13;
+      return (turnoSeleccionado === 'Manana' && isManana) || (turnoSeleccionado === 'Tarde' && !isManana);
+    });
+  }, [PEDIDOS, estados, turnoSeleccionado]);
+
+  // ── Vista Historial (Requisito 4) ─────────────────────────────────────────
+  // Pedidos cerrados de los últimos 7 días (selector: 7 días, 30 días, todos), ordenados del más reciente al más viejo,
+  // con buscador por número de pedido o nombre del cliente. Si no tiene fecha_entrega ni fecha_cierre, usa p.fecha; si tampoco hay, 'sin fecha'.
+  const pedidosHistorial = useMemo(() => {
+    const hace7 = new Date();
+    hace7.setDate(hace7.getDate() - 7);
+    const hace7YMD = extraerFechaYMD(hace7);
+
+    const hace30 = new Date();
+    hace30.setDate(hace30.getDate() - 30);
+    const hace30YMD = extraerFechaYMD(hace30);
+
+    const busqNorm = norm(busquedaHistorial);
+
+    return (PEDIDOS || []).filter(p => {
+      const estadoActual = (estados[p.numero_pedido] || p.estado || '').toLowerCase().trim();
+      const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
+      const esEntregado = estadoActual === 'entregado' || estadoActual === 'delivered';
+      const esCancelado = estadoActual === 'cancelado' || estadoActual === 'cancelled' || (estadoActual === 'no_entregado' && (p.motivo_no_entrega || '').toLowerCase().includes('cancel'));
+      const esCerrado = (esEntregado || esCancelado) && !tieneReembolsoPendiente;
+
+      if (!esCerrado) return false;
+
+      // Fecha de entrega o cierre, con respaldo en la fecha del pedido
+      const fechaCierreRaw = obtenerFechaCierreEfectiva(p, estadoActual);
+      const fechaEfectiva = fechaCierreRaw || p.fecha || '';
+      const fechaYMD = extraerFechaYMD(fechaEfectiva);
+
+      // Selector de periodo: 7 días, 30 días, todos
+      if (periodoHistorial === '7d') {
+        if (fechaYMD && fechaYMD < hace7YMD) return false;
+      } else if (periodoHistorial === '30d') {
+        if (fechaYMD && fechaYMD < hace30YMD) return false;
+      }
+
+      // Buscador por número de pedido o nombre del cliente
+      if (busqNorm) {
+        const numNorm = norm(p.numero_pedido);
+        const nomNorm = norm(p.nombre);
+        if (!numNorm.includes(busqNorm) && !nomNorm.includes(busqNorm)) {
+          return false;
+        }
+      }
+
+      return true;
+    }).map(p => {
+      const estadoActual = (estados[p.numero_pedido] || p.estado || '').toLowerCase().trim();
+      const fechaCierreRaw = obtenerFechaCierreEfectiva(p, estadoActual);
+      const fechaDisplay = fechaCierreRaw || p.fecha || 'sin fecha';
+      const fechaComparable = extraerFechaYMD(fechaCierreRaw || p.fecha || '') || '1970-01-01';
+
+      return {
+        ...p,
+        _estadoActual: estadoActual,
+        _fechaDisplay: fechaDisplay,
+        _fechaComparable: fechaComparable
+      };
+    }).sort((a, b) => {
+      if (a._fechaComparable > b._fechaComparable) return -1;
+      if (a._fechaComparable < b._fechaComparable) return 1;
+      return String(b.numero_pedido).localeCompare(String(a.numero_pedido));
+    });
+  }, [PEDIDOS, estados, periodoHistorial, busquedaHistorial]);
 
   const [pedidosAbiertos, setPedidosAbiertos] = useState({});
 
@@ -499,6 +666,19 @@ export default function AgendaEntregas({ rol, usuario }) {
     }
     return Math.round(Number(p.total) || 0);
   }, [obtenerPrecioCongelado]);
+
+  // ── Total a cobrar del turno calculado SOLO sobre pedidos Activos (Requisito 5) ──
+  const totalACobrarTurno = useMemo(() => {
+    return pedidosDelTurno.reduce((sum, p) => {
+      const formaPago = (p.forma_pago || '').toLowerCase().trim();
+      const fueCobrado = Boolean(p.cobrado || p.monto_cobrado != null || (p.medio_pago && (formaPago === 'entrega' || formaPago === 'link')));
+      const esPorCobrar = (formaPago === 'entrega' || formaPago === 'link') && !fueCobrado;
+      if (!esPorCobrar) return sum;
+      const prep = preparaciones[p.numero_pedido];
+      const monto = calcularTotalDetalle(p, prep);
+      return sum + monto;
+    }, 0);
+  }, [pedidosDelTurno, preparaciones, calcularTotalDetalle]);
 
   // ── Helper: obtener items para enviar a cobrarPedido con pesadas reales ───
   const obtenerItemsParaCobro = useCallback((p, prep) => {
@@ -1647,14 +1827,46 @@ export default function AgendaEntregas({ rol, usuario }) {
     <div>
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
         <div>
-          <h2 className="text-xl font-bold text-white">Agenda de Entregas</h2>
-          <p className="text-gray-500 text-sm mt-1">Preparación con escaneo, remitos con peso real y estados.</p>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h2 className="text-xl font-bold text-white">Agenda de Entregas</h2>
+            {/* Selector de Vista: Activos (Lista fresca) vs Historial (Requisito 4) */}
+            <div className="flex items-center bg-[#1f2937] p-1 rounded-xl border border-gray-700">
+              <button
+                type="button"
+                onClick={() => setVistaActual('agenda')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  vistaActual === 'agenda'
+                    ? 'bg-green-500 text-white shadow-sm'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Activos ({pedidosDelDia.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setVistaActual('historial')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  vistaActual === 'historial'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                <Clock size={13} />
+                <span>Historial</span>
+              </button>
+            </div>
+          </div>
+          <p className="text-gray-500 text-sm mt-1">
+            {vistaActual === 'agenda'
+              ? 'Preparación con escaneo, remitos con peso real y pedidos activos.'
+              : 'Pedidos cerrados (entregados y cancelados) con búsqueda y reimpresión de remitos.'}
+          </p>
         </div>
-        {rol !== 'repartidor' && (
+        {rol !== 'repartidor' && vistaActual === 'agenda' && (
           <div className="flex flex-col sm:flex-row gap-2">
             <button 
               onClick={() => imprimir('turno')} 
-              className="flex items-center justify-center gap-2 bg-[#1f2937] hover:bg-gray-800 border border-gray-700 hover:border-gray-500 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all shadow-sm"
+              className="flex items-center justify-center gap-2 bg-[#1f2937] hover:bg-gray-800 border border-gray-700 hover:border-gray-500 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all shadow-sm cursor-pointer"
               title="Imprime todos los remitos del turno en una sola ventana consolidada"
             >
               <Printer size={15} className="text-amber-400" />
@@ -1662,7 +1874,7 @@ export default function AgendaEntregas({ rol, usuario }) {
             </button>
             <button 
               onClick={() => imprimir('dia')} 
-              className="flex items-center justify-center gap-2 bg-green-500/10 hover:bg-green-500/20 border border-green-500/30 text-green-400 font-medium px-4 py-2 rounded-xl text-sm transition-all shadow-sm"
+              className="flex items-center justify-center gap-2 bg-green-500/10 hover:bg-green-500/20 border border-green-500/30 text-green-400 font-medium px-4 py-2 rounded-xl text-sm transition-all shadow-sm cursor-pointer"
               title="Imprime todos los remitos del día completo en una sola ventana consolidada"
             >
               <FileText size={15} className="text-green-400" />
@@ -1672,33 +1884,205 @@ export default function AgendaEntregas({ rol, usuario }) {
         )}
       </div>
 
-      {/* Tabs Días */}
-      <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
-        {DIAS_SEMANA.map(dia => (
-          <button key={dia} onClick={() => { setDiaSeleccionado(dia); setPedidosAbiertos({}); setPreparandoPedido(null); }}
-            className={`whitespace-nowrap px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${diaSeleccionado === dia ? 'bg-green-500 text-white shadow-[0_4px_15px_rgba(34,197,94,0.3)]' : 'bg-[#1f2937] border border-gray-800 text-gray-400 hover:text-white hover:border-gray-600'}`}>
-            {dia}
-          </button>
-        ))}
-      </div>
+      {vistaActual === 'historial' ? (
+        /* ═══════ VISTA HISTORIAL: PEDIDOS CERRADOS (REQUISITOS 4 Y 6) ═══════ */
+        <div className="space-y-4">
+          {/* Barra de filtros del Historial */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-[#111827]/80 border border-white/5 p-4 rounded-2xl">
+            {/* Selector de periodo: 7 días, 30 días, todos */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-400 font-semibold mr-1">Periodo:</span>
+              <div className="flex gap-1.5 bg-black/40 p-1 rounded-xl border border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => setPeriodoHistorial('7d')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    periodoHistorial === '7d'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  7 días
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPeriodoHistorial('30d')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    periodoHistorial === '30d'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  30 días
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPeriodoHistorial('todos')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    periodoHistorial === 'todos'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  Todos
+                </button>
+              </div>
+            </div>
 
-      {/* Tabs Turnos */}
-      <div className="flex gap-2 mb-6 bg-[#1f2937]/50 p-1.5 rounded-2xl w-fit">
-        <button onClick={() => setTurnoSeleccionado('Manana')} className={`flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-medium transition-all ${turnoSeleccionado === 'Manana' ? 'bg-[#111827] text-amber-400 border border-gray-700 shadow-md' : 'text-gray-500 hover:text-gray-300'}`}>
-          <Sun size={16} /> Turno Mañana (8-12 hs)
-        </button>
-        <button onClick={() => setTurnoSeleccionado('Tarde')} className={`flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-medium transition-all ${turnoSeleccionado === 'Tarde' ? 'bg-[#111827] text-indigo-400 border border-gray-700 shadow-md' : 'text-gray-500 hover:text-gray-300'}`}>
-          <Sunset size={16} /> Turno Tarde (14-18 hs)
-        </button>
-      </div>
+            {/* Buscador por número de pedido o nombre del cliente */}
+            <div className="flex items-center gap-2 flex-1 max-w-md">
+              <div className="relative w-full">
+                <input
+                  type="text"
+                  placeholder="Buscar por nro pedido o cliente..."
+                  value={busquedaHistorial}
+                  onChange={(e) => setBusquedaHistorial(e.target.value)}
+                  className="w-full bg-black/40 border border-gray-700/60 rounded-xl px-4 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 transition-all"
+                />
+                {busquedaHistorial && (
+                  <button
+                    type="button"
+                    onClick={() => setBusquedaHistorial('')}
+                    className="absolute right-3 top-2.5 text-gray-400 hover:text-white cursor-pointer"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
 
-      {/* Barra de control: Contador, filtros y botones de remitos armados en lote */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-4 bg-[#111827]/60 border border-white/5 p-3 rounded-2xl">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-bold text-white bg-gray-800 px-3 py-1.5 rounded-xl border border-gray-700">
-            {pedidosDelTurno.length} pedidos
-          </span>
-          <button
+            {/* Contador de cerrados encontrados */}
+            <div className="shrink-0 text-xs font-bold text-gray-400 bg-white/5 border border-white/10 px-3 py-2 rounded-xl">
+              {pedidosHistorial.length} {pedidosHistorial.length === 1 ? 'pedido cerrado' : 'pedidos cerrados'}
+            </div>
+          </div>
+
+          {/* Tabla / Lista de pedidos del Historial */}
+          {pedidosHistorial.length === 0 ? (
+            <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-12 text-center">
+              <Clock size={32} className="text-gray-600 mx-auto mb-3" />
+              <p className="text-gray-400 font-medium">No se encontraron pedidos cerrados para este filtro.</p>
+              <p className="text-gray-500 text-xs mt-1">Probá cambiando el selector de días o el término de búsqueda.</p>
+            </div>
+          ) : (
+            <div className="bg-[#111827]/60 border border-white/5 rounded-2xl overflow-hidden shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-gray-300">
+                  <thead className="bg-black/30 border-b border-white/5 text-[11px] uppercase tracking-wider text-gray-400 font-bold">
+                    <tr>
+                      <th className="px-4 py-3.5">Fecha Cierre / Entrega</th>
+                      <th className="px-4 py-3.5">Pedido / Cliente</th>
+                      <th className="px-4 py-3.5">Estado</th>
+                      <th className="px-4 py-3.5">Medio de Pago</th>
+                      <th className="px-4 py-3.5">Monto Cobrado</th>
+                      <th className="px-4 py-3.5 text-right">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {pedidosHistorial.map(p => {
+                      const esEntregado = p._estadoActual === 'entregado' || p._estadoActual === 'delivered';
+                      const medioPagoStr = MEDIOS_LABELS[p.medio_pago] || p.medio_pago || p.forma_pago || '-';
+                      const montoCobradoDisplay = p.monto_cobrado != null && p.monto_cobrado !== '' 
+                        ? $$ (p.monto_cobrado) 
+                        : (p.total ? $$ (p.total) : '-');
+
+                      return (
+                        <tr key={p.numero_pedido} className="hover:bg-white/[0.02] transition-colors">
+                          {/* Fecha de entrega o cierre (o respaldo fecha del pedido, o 'sin fecha') */}
+                          <td className="px-4 py-3.5 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5 font-mono text-gray-300">
+                              <Calendar size={13} className="text-gray-500" />
+                              <span>{p._fechaDisplay}</span>
+                            </div>
+                          </td>
+
+                          {/* Pedido y Cliente */}
+                          <td className="px-4 py-3.5">
+                            <div className="font-bold text-white">{p.nombre}</div>
+                            <div className="font-mono text-[11px] text-gray-500">{p.numero_pedido}</div>
+                          </td>
+
+                          {/* Estado */}
+                          <td className="px-4 py-3.5 whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black uppercase border ${
+                              esEntregado
+                                ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                                : 'bg-red-500/10 text-red-400 border-red-500/20'
+                            }`}>
+                              {p._estadoActual}
+                            </span>
+                          </td>
+
+                          {/* Medio de Pago */}
+                          <td className="px-4 py-3.5 whitespace-nowrap">
+                            <span className="font-medium text-gray-300 uppercase text-[11px]">
+                              {medioPagoStr}
+                            </span>
+                          </td>
+
+                          {/* Monto Cobrado */}
+                          <td className="px-4 py-3.5 whitespace-nowrap">
+                            <span className="font-bold text-emerald-400 font-mono">
+                              {montoCobradoDisplay}
+                            </span>
+                          </td>
+
+                          {/* Botón Reimprimir Remito */}
+                          <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => imprimirRemitoConPesoReal(p)}
+                              className="inline-flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-gray-500 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition-all shadow-sm cursor-pointer active:scale-95"
+                              title="Reimprimir remito de este pedido"
+                            >
+                              <Printer size={13} className="text-amber-400" />
+                              <span>Reimprimir remito</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* Tabs Días */}
+          <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
+            {DIAS_SEMANA.map(dia => (
+              <button key={dia} onClick={() => { setDiaSeleccionado(dia); setPedidosAbiertos({}); setPreparandoPedido(null); }}
+                className={`whitespace-nowrap px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${diaSeleccionado === dia ? 'bg-green-500 text-white shadow-[0_4px_15px_rgba(34,197,94,0.3)]' : 'bg-[#1f2937] border border-gray-800 text-gray-400 hover:text-white hover:border-gray-600'}`}>
+                {dia}
+              </button>
+            ))}
+          </div>
+
+          {/* Tabs Turnos */}
+          <div className="flex gap-2 mb-6 bg-[#1f2937]/50 p-1.5 rounded-2xl w-fit">
+            <button onClick={() => setTurnoSeleccionado('Manana')} className={`flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-medium transition-all ${turnoSeleccionado === 'Manana' ? 'bg-[#111827] text-amber-400 border border-gray-700 shadow-md' : 'text-gray-500 hover:text-gray-300'}`}>
+              <Sun size={16} /> Turno Mañana (8-12 hs)
+            </button>
+            <button onClick={() => setTurnoSeleccionado('Tarde')} className={`flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-medium transition-all ${turnoSeleccionado === 'Tarde' ? 'bg-[#111827] text-indigo-400 border border-gray-700 shadow-md' : 'text-gray-500 hover:text-gray-300'}`}>
+              <Sunset size={16} /> Turno Tarde (14-18 hs)
+            </button>
+          </div>
+
+          {/* Barra de control: Contador, filtros y botones de remitos armados en lote */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-4 bg-[#111827]/60 border border-white/5 p-3 rounded-2xl">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-bold text-white bg-gray-800 px-3 py-1.5 rounded-xl border border-gray-700">
+                {pedidosDelTurno.length} pedidos
+              </span>
+              {totalACobrarTurno > 0 && (
+                <span className="text-xs font-bold text-amber-300 bg-amber-500/15 px-3 py-1.5 rounded-xl border border-amber-500/30 flex items-center gap-1 shadow-sm">
+                  <DollarSign size={13} className="text-amber-400" />
+                  <span>A cobrar: {$$ (totalACobrarTurno)}</span>
+                </span>
+              )}
+              <button
             type="button"
             onClick={() => setFiltroSoloArmados(prev => !prev)}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
@@ -1862,6 +2246,16 @@ export default function AgendaEntregas({ rol, usuario }) {
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-bold text-sm text-white">{p.nombre}</p>
+                        {p.esAtrasado && (
+                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border bg-red-500/20 text-red-300 border-red-500/40 shadow-sm flex items-center gap-1 animate-pulse">
+                            🚨 ATRASADO
+                          </span>
+                        )}
+                        {p.esReembolsoPendiente && (
+                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-sm flex items-center gap-1">
+                            💳 REEMBOLSO PENDIENTE
+                          </span>
+                        )}
                         <span className={`text-[10px] font-black uppercase px-1.5 py-0.5 rounded border ${conf.color} ${conf.border} bg-black/20`}>{conf.label}</span>
                         {prep && tieneBolsas && !todosCompletos && (
                           <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse">EN PREPARACIÓN</span>
@@ -2368,6 +2762,100 @@ export default function AgendaEntregas({ rol, usuario }) {
           })}
         </div>
       )}
+
+      {/* ── Bloque plegado "Entregados hoy (N)" al final de la lista (Requisito 2) ── */}
+      <div className="mt-6 border border-gray-800 bg-[#111827]/40 rounded-2xl overflow-hidden shadow-sm">
+        <button
+          type="button"
+          onClick={() => setEntregadosHoyAbierto(prev => !prev)}
+          className="w-full px-5 py-4 flex items-center justify-between bg-white/[0.02] hover:bg-white/[0.05] transition-all cursor-pointer text-left"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+              <CheckCircle size={16} />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-gray-200">
+                Entregados hoy ({pedidosEntregadosHoyDelTurno.length})
+              </p>
+              <p className="text-[11px] text-gray-500">
+                Pedidos entregados o cancelados cuya fecha de cierre sea de hoy
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-gray-400">
+            <span className="text-xs text-gray-500 font-medium">
+              {entregadosHoyAbierto ? 'Plegar' : 'Desplegar'}
+            </span>
+            {entregadosHoyAbierto ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+          </div>
+        </button>
+        {entregadosHoyAbierto && (
+          <div className="p-4 border-t border-white/5 bg-black/20 space-y-3">
+            {pedidosEntregadosHoyDelTurno.length === 0 ? (
+              <p className="text-xs text-gray-500 text-center py-4">No hay pedidos entregados o cancelados hoy en este turno.</p>
+            ) : (
+              pedidosEntregadosHoyDelTurno.map(p => {
+                const estadoActual = (estados[p.numero_pedido] || p.estado || '').toLowerCase().trim();
+                const esEntregado = estadoActual === 'entregado' || estadoActual === 'delivered';
+                const fechaCierreRaw = obtenerFechaCierreEfectiva(p, estadoActual);
+                const fechaDisplay = fechaCierreRaw || p.fecha || 'hoy';
+                const medioPagoStr = MEDIOS_LABELS[p.medio_pago] || p.medio_pago || p.forma_pago || '-';
+                const montoDisplay = p.monto_cobrado != null && p.monto_cobrado !== '' ? $$ (p.monto_cobrado) : (p.total ? $$ (p.total) : '-');
+
+                return (
+                  <div key={p.numero_pedido} className="p-3.5 bg-black/40 border border-white/10 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-white/20 transition-all">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-white text-sm">{p.nombre}</span>
+                        <span className="font-mono text-[11px] text-gray-400">{p.numero_pedido}</span>
+                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded border ${
+                          esEntregado
+                            ? 'bg-blue-500/20 text-blue-300 border-blue-500/40'
+                            : 'bg-red-500/20 text-red-300 border-red-500/40'
+                        }`}>
+                          {estadoActual}
+                        </span>
+                        {p.cobrado && (
+                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                            PAGADO
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-400 mt-1 flex items-center gap-2 flex-wrap">
+                        <span className="flex items-center gap-1"><Calendar size={12} className="text-gray-500" /> Cierre: {fechaDisplay}</span>
+                        <span>·</span>
+                        <span>Medio: <strong className="text-gray-300">{medioPagoStr}</strong></span>
+                        <span>·</span>
+                        <span>Monto: <strong className="text-emerald-400">{montoDisplay}</strong></span>
+                        {p.direccion && (
+                          <>
+                            <span>·</span>
+                            <span className="text-gray-500 truncate max-w-[200px]">{p.direccion}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => imprimirRemitoConPesoReal(p)}
+                        className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 hover:border-gray-500 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition-all shadow-sm cursor-pointer active:scale-95"
+                        title="Reimprimir remito"
+                      >
+                        <Printer size={13} className="text-amber-400" />
+                        <span>Reimprimir remito</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  )}
 
       {/* ═══════ MODAL CUADRO DE DIÁLOGO: PEDIDO NO ENTREGADO (REQUISITOS 4 Y 5) ═══════ */}
       {modalNoEntrega && (
