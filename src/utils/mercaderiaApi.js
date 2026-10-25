@@ -348,5 +348,21 @@ export async function apiGetNoEntregasCliente({ numero_pedido }) {
   });
 }
 
+// ── 8. REEMBOLSOS ────────────────────────────────────────────────────────────
+
+export async function apiRegistrarReembolso({ numero_pedido, estado, monto, nota }) {
+  return llamarAppsScript('registrarReembolso', {
+    numero_pedido: String(numero_pedido).trim(),
+    estado: String(estado || '').trim().toLowerCase(), // "pendiente" | "devuelto"
+    ...(monto != null ? { monto: Number(monto) } : {}),
+    ...(nota ? { nota: String(nota).trim() } : {}),
+  });
+}
+
+export async function apiGetReembolsosPendientes() {
+  return llamarAppsScript('getReembolsosPendientes', {});
+}
+
+
 
 

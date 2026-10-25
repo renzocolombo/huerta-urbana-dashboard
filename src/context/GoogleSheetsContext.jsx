@@ -138,6 +138,8 @@ export function GoogleSheetsProvider({ children }) {
           fecha_cierre:      obj.fecha_cierre || '',
           fecha_cobro:       obj.fecha_cobro || '',
           reembolso_estado:  (obj.reembolso_estado || obj.estado_reembolso || '').toLowerCase().trim(),
+          reembolso_monto:   obj.reembolso_monto != null && obj.reembolso_monto !== '' ? Number(obj.reembolso_monto) : null,
+          fecha_reembolso:   obj.fecha_reembolso || '',
           cobrado:           obj.cobrado === true || obj.cobrado === 'TRUE' || obj.cobrado === 'true' || Boolean(obj.fecha_cobro) || Boolean(obj.monto_cobrado != null && obj.monto_cobrado !== ''),
         };
       });

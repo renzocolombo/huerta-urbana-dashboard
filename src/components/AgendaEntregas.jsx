@@ -22,7 +22,9 @@ import {
   apiCobrarPedido,
   apiEntregarPedido,
   apiRegistrarNoEntrega,
-  apiGetNoEntregasCliente
+  apiGetNoEntregasCliente,
+  apiRegistrarReembolso,
+  apiGetReembolsosPendientes
 } from '../utils/mercaderiaApi';
 import { imprimirEtiquetaBolsa } from '../utils/etiquetaPrinter';
 
@@ -578,6 +580,7 @@ export default function AgendaEntregas({ rol, usuario }) {
   const stockDataRef = useRef(stockData);
   const [syncNotice, setSyncNotice] = useState(null); // { tipo: 'retrying' | 'error' | 'success', mensaje: string }
   const syncTimerRef = useRef(null);
+  const [reembolsosPendientesList, setReembolsosPendientesList] = useState([]);
 
   // 1. Cargar preparaciones del Sheet al montar y combinar (gana lo del Sheet)
   useEffect(() => {
@@ -603,6 +606,15 @@ export default function AgendaEntregas({ rol, usuario }) {
         }
       })
       .catch(() => {});
+
+    apiGetReembolsosPendientes()
+      .then(res => {
+        if (!isMounted) return;
+        if (res && res.ok && Array.isArray(res.reembolsos)) {
+          setReembolsosPendientesList(res.reembolsos);
+        }
+      })
+      .catch(e => console.warn('[AGENDA] Error en apiGetReembolsosPendientes:', e.message));
 
     return () => { isMounted = false; };
   }, []);
@@ -1695,14 +1707,46 @@ export default function AgendaEntregas({ rol, usuario }) {
         return; // NO continuar con cancelar si falla
       }
 
-      // 2. Llamar a liberarPedido con motivo "No entregado: <motivo>"
+      // 2. Si el pedido pagó online (estado_pago approved/pagado): registrar reembolso pendiente
+      const estadoPago = (p.estado_pago || '').toLowerCase().trim();
+      const esPagadoOnline = estadoPago === 'approved' || estadoPago === 'pagado';
+      const montoPagado = Number(p.total) || 0;
+
+      if (esPagadoOnline) {
+        const resReembolso = await apiRegistrarReembolso({
+          numero_pedido: p.numero_pedido,
+          estado: 'pendiente',
+          monto: montoPagado,
+          nota: `No entregado: ${motivoFinal}`,
+        });
+
+        if (!resReembolso || resReembolso.ok === false) {
+          setModalNoEntrega(prev => ({
+            ...prev,
+            guardando: false,
+            error: resReembolso?.error || 'Error al registrar el reembolso pendiente en el servidor.'
+          }));
+          return; // NO continuar si falla
+        }
+
+        p.reembolso_estado = 'pendiente';
+        p.reembolso_monto = montoPagado;
+
+        setReembolsosPendientesList(prev => {
+          const yaExiste = prev.some(r => String(r.pedido).trim() === String(p.numero_pedido).trim());
+          if (yaExiste) return prev;
+          return [...prev, { pedido: p.numero_pedido, cliente: p.nombre || '', monto: montoPagado }];
+        });
+      }
+
+      // 3. Llamar a liberarPedido con motivo "No entregado: <motivo>"
       const res = await apiLiberarPedido({ numero_pedido: p.numero_pedido, motivo: motivoCompleto });
       if (res && res.ok === false) {
         setModalNoEntrega(prev => ({ ...prev, guardando: false, error: res.error || 'Error al liberar el stock en el Sheet.' }));
         return;
       }
 
-      // 3. Revertir bolsas de preparación si existían en memoria
+      // 4. Revertir bolsas de preparación si existían en memoria
       const prep = preparaciones[p.numero_pedido];
       if (prep?.items) {
         prep.items.forEach(item => {
@@ -1712,12 +1756,12 @@ export default function AgendaEntregas({ rol, usuario }) {
 
       setPreparaciones(prev => { const { [p.numero_pedido]: _, ...rest } = prev; return rest; });
 
-      // 4. Marcar pedido como cancelado
+      // 5. Marcar pedido como cancelado
       actualizarEstado(p.numero_pedido, 'Cancelado', motivoFinal);
       p.motivo_no_entrega = motivoFinal;
       p.fecha_no_entrega = fechaActual;
 
-      // 5. Actualizar mapa de no entregas en memoria
+      // 6. Actualizar mapa de no entregas en memoria
       const nroFinal = resNoEntrega.nro || (Number(noEntregasMap[p.numero_pedido]?.total || 0) + 1);
       const nivelFinal = resNoEntrega.nivel || 'primera';
       setNoEntregasMap(prev => ({
@@ -1728,7 +1772,7 @@ export default function AgendaEntregas({ rol, usuario }) {
         }
       }));
 
-      // 6. Mostrar alerta / aviso según nivel
+      // 7. Mostrar alerta / aviso según nivel
       setModalNoEntrega(prev => ({
         ...prev,
         guardando: false,
@@ -1746,6 +1790,34 @@ export default function AgendaEntregas({ rol, usuario }) {
       setModalNoEntrega(prev => ({ ...prev, guardando: false, error: err.message || 'Error al cancelar pedido' }));
     }
   }, [modalNoEntrega, preparaciones, revertirStockBolsa, actualizarEstado, noEntregasMap, fetchSheetPedidos]);
+
+  const handleMarcarReembolsoDevuelto = useCallback(async (p) => {
+    const monto = p.reembolso_monto != null ? Number(p.reembolso_monto) : Math.round(Number(p.total) || 0);
+    const confirmar = window.confirm(`¿Ya devolviste $${monto.toLocaleString('es-AR')} desde Mercado Pago?`);
+    if (!confirmar) return;
+
+    try {
+      const res = await apiRegistrarReembolso({
+        numero_pedido: p.numero_pedido,
+        estado: 'devuelto',
+      });
+
+      if (!res || res.ok === false) {
+        alert(`Error al registrar reembolso devuelto: ${res?.error || 'Error en el servidor'}`);
+        return;
+      }
+
+      p.reembolso_estado = 'devuelto';
+      p.fecha_reembolso = new Date().toISOString();
+
+      // Quitar de la lista de pendientes arriba de la Agenda
+      setReembolsosPendientesList(prev => prev.filter(r => String(r.pedido).trim() !== String(p.numero_pedido).trim()));
+
+      if (fetchSheetPedidos) fetchSheetPedidos();
+    } catch (err) {
+      alert(`Error: ${err.message || 'Error inesperado'}`);
+    }
+  }, [fetchSheetPedidos]);
 
   const quitarBolsaAsignada = useCallback((numPedido, itemIdx, bolsaIdx) => {
     setPreparaciones(prev => {
@@ -1873,6 +1945,30 @@ export default function AgendaEntregas({ rol, usuario }) {
 
   return (
     <div>
+      {/* Resumen de Reembolsos Pendientes arriba de la Agenda */}
+      {reembolsosPendientesList.length > 0 && (
+        <div className="mb-5 bg-gradient-to-r from-red-500/20 via-red-500/10 to-transparent border border-red-500/40 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-red-200 shadow-lg shadow-red-950/20">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-red-500/20 border border-red-500/30 flex items-center justify-center text-red-400 text-lg">
+              💳
+            </div>
+            <div>
+              <p className="font-black text-sm text-white flex items-center gap-2">
+                <span>Reembolsos pendientes: {reembolsosPendientesList.length} · ${Math.round(
+                  reembolsosPendientesList.reduce((acc, r) => acc + (Number(r.monto) || 0), 0)
+                ).toLocaleString('es-AR')}</span>
+              </p>
+              <p className="text-xs text-red-300/80">
+                Pedidos cancelados pagados online pendientes de devolución en Mercado Pago.
+              </p>
+            </div>
+          </div>
+          <span className="text-[10px] font-black uppercase tracking-wider bg-red-500/20 border border-red-500/40 text-red-300 px-3 py-1.5 rounded-xl w-fit">
+            A Resolver en MP
+          </span>
+        </div>
+      )}
+
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
         <div>
           <div className="flex items-center gap-3 flex-wrap">
@@ -2233,7 +2329,23 @@ export default function AgendaEntregas({ rol, usuario }) {
 
             // 1. Cartel de pago visible (exactamente uno por tarjeta, reemplazan a los anteriores si se pisan)
             let cartelPago = null;
-            if (fueCobradoPorBoton) {
+            const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
+            const tieneReembolsoDevuelto = (p.reembolso_estado || '').toLowerCase().trim() === 'devuelto';
+            const montoReembolso = p.reembolso_monto != null ? Number(p.reembolso_monto) : Math.round(Number(p.total) || 0);
+
+            if (tieneReembolsoPendiente) {
+              cartelPago = {
+                tipo: 'rojo',
+                texto: `A REEMBOLSAR $${montoReembolso.toLocaleString('es-AR')}`,
+                className: 'bg-red-500/20 text-red-300 border-red-500/40 shadow-sm animate-pulse'
+              };
+            } else if (tieneReembolsoDevuelto) {
+              cartelPago = {
+                tipo: 'gris',
+                texto: `REEMBOLSADO $${montoReembolso.toLocaleString('es-AR')}`,
+                className: 'bg-gray-500/20 text-gray-300 border-gray-500/40 shadow-sm'
+              };
+            } else if (fueCobradoPorBoton) {
               const rawMedio = p.medio_pago || p.medio_cobro || p.medio || 'Cobro';
               const medioLabel = (MEDIOS_LABELS[rawMedio] || rawMedio).toUpperCase();
               const montoVal = p.monto_cobrado != null ? Number(p.monto_cobrado) : totalExactoPedido;
@@ -2269,8 +2381,12 @@ export default function AgendaEntregas({ rol, usuario }) {
               'entregado':    { icon: '🚚', label: 'ENTREGADO',    color: 'text-blue-400',  bg: 'bg-blue-500/10',  border: 'border-blue-500/20' },
               'no_entregado': { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400',   bg: 'bg-red-500/10',   border: 'border-red-500/20' },
               'no entregado': { icon: '❌', label: 'NO ENTREGADO', color: 'text-red-400',   bg: 'bg-red-500/10',   border: 'border-red-500/20' },
+              'cancelado':    { icon: '🛑', label: 'CANCELADO',    color: 'text-red-400',   bg: 'bg-red-500/10',   border: 'border-red-500/20' },
             };
-            const conf = configEstado[estadoActual] || configEstado.pendiente;
+            const estadoClave = tieneReembolsoPendiente 
+              ? (estadoActual === 'cancelado' ? 'cancelado' : 'pendiente')
+              : estadoActual;
+            const conf = configEstado[estadoClave] || configEstado.pendiente;
 
             return (
               <div key={p.numero_pedido} className={`transition-all duration-300 rounded-2xl overflow-hidden border ${conf.bg} ${estaPreparando ? 'ring-2 ring-green-500/60 shadow-[0_0_30px_rgba(34,197,94,0.15)]' : isOpen ? 'ring-1 ring-white/10' : conf.border}`}>
@@ -2299,16 +2415,11 @@ export default function AgendaEntregas({ rol, usuario }) {
                             🚨 ATRASADO
                           </span>
                         )}
-                        {p.esReembolsoPendiente && (
-                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-sm flex items-center gap-1">
-                            💳 REEMBOLSO PENDIENTE
-                          </span>
-                        )}
                         <span className={`text-[10px] font-black uppercase px-1.5 py-0.5 rounded border ${conf.color} ${conf.border} bg-black/20`}>{conf.label}</span>
-                        {prep && tieneBolsas && !todosCompletos && (
+                        {prep && tieneBolsas && !todosCompletos && !tieneReembolsoPendiente && (
                           <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse">EN PREPARACIÓN</span>
                         )}
-                        {/* Cartel único de Estado de Pago (Problema 2) */}
+                        {/* Cartel único de Estado de Pago (Problema 2 & Reembolsos) */}
                         {cartelPago && (
                           <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border shadow-sm flex items-center gap-1 ${cartelPago.className}`}>
                             {cartelPago.texto}
@@ -2338,8 +2449,24 @@ export default function AgendaEntregas({ rol, usuario }) {
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
+                    {/* Botón Marcar reembolso devuelto si tiene reembolso pendiente */}
+                    {tieneReembolsoPendiente && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleMarcarReembolsoDevuelto(p);
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white transition-all shadow-md active:scale-95 cursor-pointer border border-red-400/40"
+                        title="Confirmar devolución efectuada en Mercado Pago"
+                      >
+                        <span>💸</span>
+                        <span>Marcar reembolso devuelto</span>
+                      </button>
+                    )}
+
                     {/* Botón Cobrar en cabecera de pedido por cobrar (Requisito 2 y 3) */}
-                    {esPorCobrar && esPedidoPendienteDeEntrega(p, estadoActual) && (
+                    {esPorCobrar && esPedidoPendienteDeEntrega(p, estadoActual) && !tieneReembolsoPendiente && (
                       <button
                         type="button"
                         disabled={!esArmado}
@@ -2425,9 +2552,17 @@ export default function AgendaEntregas({ rol, usuario }) {
                             </div>
                           ) : (
                             <div className="bg-red-500/15 border border-red-500/40 p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-red-200 text-xs">
-                              <div className="flex items-center gap-2 font-black text-red-300">
-                                <AlertCircle size={16} className="text-red-400 shrink-0" />
-                                <span>{p.nombre} llegó a 3 no entregas. Corresponde darlo de baja.</span>
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2 font-black text-red-300">
+                                  <AlertCircle size={16} className="text-red-400 shrink-0" />
+                                  <span>{p.nombre} llegó a 3 no entregas. Corresponde darlo de baja.</span>
+                                </div>
+                                {tieneReembolsoPendiente && (
+                                  <div className="text-[11px] font-bold text-amber-300 flex items-center gap-1.5 ml-6">
+                                    <span>⚠️</span>
+                                    <span>Hay un reembolso pendiente: resolvelo antes de dar de baja.</span>
+                                  </div>
+                                )}
                               </div>
                               {p.telefono && (
                                 <button
@@ -2528,6 +2663,16 @@ export default function AgendaEntregas({ rol, usuario }) {
                                   <span className="text-gray-500 text-xs">Sin información</span>
                                 )}
                               </div>
+                              {tieneReembolsoPendiente && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleMarcarReembolsoDevuelto(p)}
+                                  className="w-full mt-3 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-md active:scale-95 bg-red-600 hover:bg-red-500 text-white cursor-pointer shadow-red-950/40 border border-red-400/30"
+                                >
+                                  <span>💸</span>
+                                  <span>Marcar reembolso devuelto</span>
+                                </button>
+                              )}
                               {esPorCobrar && !estaCobrado && !esEntregado && (
                                 <button
                                   type="button"
@@ -3073,33 +3218,52 @@ export default function AgendaEntregas({ rol, usuario }) {
                     <label className="block text-[11px] font-black uppercase tracking-wider text-gray-400">
                       Seleccioná la acción:
                     </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setModalNoEntrega(prev => ({ ...prev, accion: 'reagendar' }))}
-                        className="p-4 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 hover:border-blue-500/50 text-blue-200 font-bold text-left transition-all cursor-pointer space-y-1 group"
-                      >
-                        <div className="flex items-center gap-2 text-sm font-black text-blue-400 group-hover:text-blue-300">
-                          <span>🗓️</span> Reagendar
-                        </div>
-                        <p className="text-[11px] text-gray-400 font-normal">
-                          Elegí día y horario nuevo. El stock sigue reservado.
-                        </p>
-                      </button>
+                    {(() => {
+                      const estPago = (modalNoEntrega.pedido?.estado_pago || '').toLowerCase().trim();
+                      const esOnline = estPago === 'approved' || estPago === 'pagado';
+                      const montoTotalModal = Number(modalNoEntrega.pedido?.total) || 0;
 
-                      <button
-                        type="button"
-                        onClick={() => setModalNoEntrega(prev => ({ ...prev, accion: 'cancelar', confirmandoCancelar: true }))}
-                        className="p-4 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 hover:border-red-500/50 text-red-200 font-bold text-left transition-all cursor-pointer space-y-1 group"
-                      >
-                        <div className="flex items-center gap-2 text-sm font-black text-red-400 group-hover:text-red-300">
-                          <span>🛑</span> Cancelar pedido
+                      return (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setModalNoEntrega(prev => ({ ...prev, accion: 'reagendar' }))}
+                            className={`p-4 rounded-xl text-left transition-all cursor-pointer space-y-1 group ${
+                              esOnline
+                                ? 'bg-blue-600/20 hover:bg-blue-600/30 border-2 border-blue-500 text-blue-100 shadow-md shadow-blue-950/40 ring-1 ring-blue-500/30'
+                                : 'bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 hover:border-blue-500/50 text-blue-200'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 text-sm font-black text-blue-400 group-hover:text-blue-300">
+                              <span>🗓️</span> Reagendar
+                              {esOnline && (
+                                <span className="text-[9px] bg-blue-500 text-white font-black px-1.5 py-0.5 rounded uppercase ml-auto">
+                                  Recomendado
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-gray-400 font-normal">
+                              Elegí día y horario nuevo. El stock sigue reservado.
+                            </p>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setModalNoEntrega(prev => ({ ...prev, accion: 'cancelar', confirmandoCancelar: true }))}
+                            className="p-4 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 hover:border-red-500/50 text-red-200 font-bold text-left transition-all cursor-pointer space-y-1 group"
+                          >
+                            <div className="flex items-center gap-2 text-sm font-black text-red-400 group-hover:text-red-300">
+                              <span>🛑</span> Cancelar pedido
+                            </div>
+                            <p className="text-[11px] text-gray-400 font-normal">
+                              {esOnline
+                                ? `Registra reembolso pendiente de $${montoTotalModal.toLocaleString('es-AR')} y libera el stock.`
+                                : 'Libera el stock con liberarPedido y cancela el pedido.'}
+                            </p>
+                          </button>
                         </div>
-                        <p className="text-[11px] text-gray-400 font-normal">
-                          Libera el stock con liberarPedido y cancela el pedido.
-                        </p>
-                      </button>
-                    </div>
+                      );
+                    })()}
                   </div>
                 ) : modalNoEntrega.accion === 'reagendar' ? (
                   <div className="space-y-3 bg-black/30 border border-blue-500/20 rounded-xl p-4">
@@ -3164,9 +3328,26 @@ export default function AgendaEntregas({ rol, usuario }) {
                     <p className="text-xs text-gray-300">
                       ¿Estás seguro de cancelar el pedido <strong>{modalNoEntrega.pedido.numero_pedido}</strong>?
                     </p>
-                    <div className="bg-black/40 p-2.5 rounded-lg text-[11px] text-red-200 border border-red-500/20">
-                      Se llamará a <code>liberarPedido</code> con motivo: <strong className="text-white">"No entregado: {modalNoEntrega.motivoSeleccionado === 'Otro' ? (modalNoEntrega.motivoOtro || 'Otro') : modalNoEntrega.motivoSeleccionado}"</strong> y el stock reservado volverá a estar disponible en el depósito.
-                    </div>
+                    {(() => {
+                      const estPago = (modalNoEntrega.pedido?.estado_pago || '').toLowerCase().trim();
+                      const esOnline = estPago === 'approved' || estPago === 'pagado';
+                      const montoTotalModal = Number(modalNoEntrega.pedido?.total) || 0;
+
+                      return esOnline ? (
+                        <div className="bg-black/40 p-3 rounded-lg text-[11px] text-red-200 border border-red-500/30 space-y-1.5">
+                          <p className="font-bold text-red-300 flex items-center gap-1.5">
+                            <span>💳</span> Pedido Pagado Online (${montoTotalModal.toLocaleString('es-AR')})
+                          </p>
+                          <p>
+                            Al confirmar, se registrará el reembolso pendiente por <strong>${montoTotalModal.toLocaleString('es-AR')}</strong> (100% de lo pagado) para devolver desde Mercado Pago y luego se liberará el stock reservado.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="bg-black/40 p-2.5 rounded-lg text-[11px] text-red-200 border border-red-500/20">
+                          Se llamará a <code>liberarPedido</code> con motivo: <strong className="text-white">"No entregado: {modalNoEntrega.motivoSeleccionado === 'Otro' ? (modalNoEntrega.motivoOtro || 'Otro') : modalNoEntrega.motivoSeleccionado}"</strong> y el stock reservado volverá a estar disponible en el depósito.
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 
