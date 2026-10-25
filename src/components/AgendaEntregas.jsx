@@ -20,6 +20,7 @@ import {
   apiLiberarPedido,
   apiGetPreciosSugeridos,
   apiCobrarPedido,
+  apiEntregarPedido,
   apiRegistrarNoEntrega,
   apiGetNoEntregasCliente
 } from '../utils/mercaderiaApi';
@@ -525,6 +526,18 @@ export default function AgendaEntregas({ rol, usuario }) {
       }));
 
       if (fetchSheetPedidos) fetchSheetPedidos();
+      apiGetNoEntregasCliente({ numero_pedido: pedido.numero_pedido }).then(resNE => {
+        if (resNE && resNE.ok && resNE.total != null) {
+          setNoEntregasMap(prev => ({
+            ...prev,
+            [pedido.numero_pedido]: {
+              total: Number(resNE.total),
+              nivel: resNE.nivel,
+              eventos: resNE.eventos
+            }
+          }));
+        }
+      }).catch(() => {});
     } catch (err) {
       setModalCobrar(prev => ({
         ...prev,
@@ -631,6 +644,98 @@ export default function AgendaEntregas({ rol, usuario }) {
       actualizarEstadoEnSheet(pedido.sheetRowIndex, estadoAAsignar, motivo);
     }
   };
+
+  const [entregandoPedido, setEntregandoPedido] = useState(null);
+
+  const handleMarcarEntregado = useCallback(async (p) => {
+    const estadoActual = (estados[p.numero_pedido] || p.estado || 'pendiente').toLowerCase();
+    const formaPago = (p.forma_pago || '').toLowerCase().trim();
+    const estadoPago = (p.estado_pago || '').toLowerCase().trim();
+    const estaCobrado = Boolean(p.cobrado || p.monto_cobrado != null || (p.medio_pago && (formaPago === 'entrega' || formaPago === 'link')));
+
+    // Un pedido que ya está cobrado o entregado no puede volver a cobrarse ni a entregarse
+    if (estaCobrado || estadoActual === 'entregado') {
+      return;
+    }
+
+    // 1. Si el pedido es de pago en la entrega o link y no está cobrado:
+    // ese botón no debe marcar como entregado. En su lugar abre el modal de cobro (el mismo del botón Cobrar).
+    // Entregado se marca solo desde el cobro (cobrarPedido ya marca Entregado y descuenta el stock).
+    if ((formaPago === 'entrega' || formaPago === 'link') && !estaCobrado) {
+      abrirModalCobrar(p);
+      return;
+    }
+
+    // 2. Si el pedido es approved (pagó online):
+    // al marcar Entregado, primero llamá a la acción entregarPedido del Apps Script { numero_pedido, items:[{producto, cantidad_real}] }
+    if (estadoPago === 'approved' || estadoPago === 'pagado') {
+      const prep = preparaciones[p.numero_pedido];
+      const items = obtenerItemsParaCobro(p, prep);
+
+      setEntregandoPedido(p.numero_pedido);
+      try {
+        const res = await apiEntregarPedido({
+          numero_pedido: p.numero_pedido,
+          items,
+        });
+
+        if (!res || res.ok === false) {
+          setSyncNotice({
+            tipo: 'error',
+            mensaje: `Error al entregar pedido ${p.numero_pedido}: ${res?.error || 'Error reportado por el servidor'}`
+          });
+          setEntregandoPedido(null);
+          return; // Si falla, no cambiar estado
+        }
+
+        // Mostrar avisos de stock negativo que devuelva el servidor
+        if (res.avisos && (Array.isArray(res.avisos) ? res.avisos.length > 0 : res.avisos)) {
+          const msgAvisos = Array.isArray(res.avisos) ? res.avisos.join('\n') : String(res.avisos);
+          setSyncNotice({
+            tipo: 'warning',
+            mensaje: `Pedido ${p.numero_pedido} entregado. Avisos:\n${msgAvisos}`
+          });
+        } else {
+          setSyncNotice({
+            tipo: 'success',
+            mensaje: `✅ Pedido ${p.numero_pedido} entregado y stock descontado.`
+          });
+        }
+
+        // Solo si responde ok, cambiar estado a Entregado en la tarjeta
+        actualizarEstado(p.numero_pedido, 'Entregado');
+        p.estado = 'Entregado';
+
+        // Refrescar datos de la tarjeta y alertas sin recargar la página
+        if (fetchSheetPedidos) await fetchSheetPedidos();
+        apiGetNoEntregasCliente({ numero_pedido: p.numero_pedido }).then(resNE => {
+          if (resNE && resNE.ok && resNE.total != null) {
+            setNoEntregasMap(prev => ({
+              ...prev,
+              [p.numero_pedido]: {
+                total: Number(resNE.total),
+                nivel: resNE.nivel,
+                eventos: resNE.eventos
+              }
+            }));
+          }
+        }).catch(() => {});
+      } catch (err) {
+        setSyncNotice({
+          tipo: 'error',
+          mensaje: `Error de red al entregar pedido: ${err.message}`
+        });
+      } finally {
+        setEntregandoPedido(null);
+      }
+      return;
+    }
+
+    // 3. Fallback para otros casos
+    actualizarEstado(p.numero_pedido, 'Entregado');
+    p.estado = 'Entregado';
+    if (fetchSheetPedidos) fetchSheetPedidos();
+  }, [estados, preparaciones, obtenerItemsParaCobro, abrirModalCobrar, actualizarEstado, fetchSheetPedidos]);
 
   const abrirWhatsApp = (telefono, nombre) => {
     const primerNombre = (nombre || '').split(' ')[0] || 'Cliente';
@@ -1605,14 +1710,50 @@ export default function AgendaEntregas({ rol, usuario }) {
             const tieneBolsas = prep?.items?.some(it => it.bolsasAsignadas?.length > 0);
             const esArmado = todosCompletos || estadoActual === 'preparado' || estadoActual === 'listo';
 
-            // Estados de cobro (Requisitos 1, 2, 3)
+            // Estados de cobro y entrega (Requisitos 1, 2, 3)
+            const formaPago = (p.forma_pago || '').toLowerCase().trim();
             const estadoPago = (p.estado_pago || '').toLowerCase().trim();
-            const estaCobrado = Boolean(p.cobrado || estadoPago === 'approved' || estadoPago === 'pagado');
-            const esPorCobrar = !estaCobrado;
-            const rawMedioCobrado = p.medio_pago || p.medio || p.metodo_pago || '';
-            const medioCobradoLabel = MEDIOS_LABELS[rawMedioCobrado] || (rawMedioCobrado ? rawMedioCobrado.toUpperCase() : '');
-            const montoCobradoVal = p.monto_cobrado != null && !isNaN(Number(p.monto_cobrado)) ? Number(p.monto_cobrado) : null;
+            const esEntregado = estadoActual === 'entregado';
+            const esCancelado = estadoActual === 'cancelado';
+            const esEntregadoOCancelado = esEntregado || esCancelado;
+
             const totalExactoPedido = calcularTotalDetalle(p, prep);
+
+            // Identificar si el pedido fue cobrado por el botón Cobrar (o registrado con cobrarPedido)
+            const fueCobradoPorBoton = Boolean(p.cobrado || p.monto_cobrado != null || (p.medio_pago && (formaPago === 'entrega' || formaPago === 'link')));
+            const estaCobrado = fueCobradoPorBoton;
+            const esPorCobrar = (formaPago === 'entrega' || formaPago === 'link') && !fueCobradoPorBoton;
+
+            // 1. Cartel de pago visible (exactamente uno por tarjeta, reemplazan a los anteriores si se pisan)
+            let cartelPago = null;
+            if (fueCobradoPorBoton) {
+              const rawMedio = p.medio_pago || p.medio_cobro || p.medio || 'Cobro';
+              const medioLabel = (MEDIOS_LABELS[rawMedio] || rawMedio).toUpperCase();
+              const montoVal = p.monto_cobrado != null ? Number(p.monto_cobrado) : totalExactoPedido;
+              cartelPago = {
+                tipo: 'verde',
+                texto: `PAGADO Y ENTREGADO · ${medioLabel} · $${Math.round(montoVal).toLocaleString('es-AR')}`,
+                className: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-sm'
+              };
+            } else if (estadoPago === 'approved' || estadoPago === 'pagado') {
+              cartelPago = {
+                tipo: 'azul',
+                texto: esEntregado ? 'PAGADO ONLINE Y ENTREGADO' : 'PAGADO ONLINE',
+                className: 'bg-blue-500/20 text-blue-300 border-blue-500/40 shadow-sm'
+              };
+            } else if (formaPago === 'entrega' || formaPago === 'link') {
+              const tienePesadasReales = esArmado && (p.detalle_json || prep?.detalle_json || prep?.completado);
+              const montoACobrar = tienePesadasReales ? totalExactoPedido : Math.round(Number(p.total) || 0);
+              const sufijo = tienePesadasReales ? '' : ' (estimado)';
+              cartelPago = {
+                tipo: 'naranja',
+                texto: `A COBRAR $${montoACobrar.toLocaleString('es-AR')}${sufijo}`,
+                className: 'bg-orange-500/20 text-orange-300 border-orange-500/40 shadow-sm'
+              };
+            }
+
+            // 2. Alerta de no entregas (Problema 1)
+            const totalNoEntregas = Number(noEntregasMap[p.numero_pedido]?.total || 0);
 
             const configEstado = {
               'pendiente':    { icon: '⏳', label: 'PENDIENTE',    color: 'text-amber-400', bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
@@ -1650,24 +1791,32 @@ export default function AgendaEntregas({ rol, usuario }) {
                         {prep && tieneBolsas && !todosCompletos && (
                           <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse">EN PREPARACIÓN</span>
                         )}
-                        {/* Etiqueta POR COBRAR o COBRADO (Requisito 1 y 3) */}
-                        {esPorCobrar ? (
-                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm animate-pulse flex items-center gap-1">
-                            💰 POR COBRAR
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm flex items-center gap-1">
-                            ✅ COBRADO {medioCobradoLabel ? `· ${medioCobradoLabel}` : ''} {montoCobradoVal ? `$${Number(montoCobradoVal).toLocaleString('es-AR')}` : ''}
+                        {/* Cartel único de Estado de Pago (Problema 2) */}
+                        {cartelPago && (
+                          <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border shadow-sm flex items-center gap-1 ${cartelPago.className}`}>
+                            {cartelPago.texto}
                           </span>
                         )}
-                        {/* Insignia chica de No Entregas si el cliente tiene 1 o más (Requisito 4) */}
-                        {noEntregasMap[p.numero_pedido]?.total > 0 && (
-                          <span
-                            className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg bg-red-500/15 text-red-300 border border-red-500/30 shadow-sm flex items-center gap-1"
-                            title={`${noEntregasMap[p.numero_pedido].total} no entrega(s) registrada(s)`}
-                          >
-                            ⚠️ {noEntregasMap[p.numero_pedido].total} {noEntregasMap[p.numero_pedido].total === 1 ? 'no entrega' : 'no entregas'}
-                          </span>
+                        {/* Alerta de No Entregas (Problema 1) */}
+                        {totalNoEntregas > 0 && (
+                          esEntregadoOCancelado ? (
+                            <span className="text-[10px] font-medium text-gray-400 bg-white/5 border border-white/10 px-2 py-0.5 rounded-lg">
+                              Historial: {totalNoEntregas} {totalNoEntregas === 1 ? 'no entrega anterior' : 'no entregas anteriores'}
+                            </span>
+                          ) : (
+                            <span
+                              className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border shadow-sm flex items-center gap-1 ${
+                                totalNoEntregas >= 3
+                                  ? 'bg-red-500/20 text-red-300 border-red-500/40'
+                                  : totalNoEntregas === 2
+                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                  : 'bg-orange-500/15 text-orange-300 border-orange-500/30'
+                              }`}
+                              title={`${totalNoEntregas} no entrega(s) registrada(s)`}
+                            >
+                              ⚠️ {totalNoEntregas} {totalNoEntregas === 1 ? 'no entrega' : 'no entregas'}
+                            </span>
+                          )
                         )}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
@@ -1679,7 +1828,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     {/* Botón Cobrar en cabecera de pedido por cobrar (Requisito 2 y 3) */}
-                    {esPorCobrar && (
+                    {esPorCobrar && !estaCobrado && !esEntregado && (
                       <button
                         type="button"
                         disabled={!esArmado}
@@ -1726,10 +1875,76 @@ export default function AgendaEntregas({ rol, usuario }) {
 
                 {/* Acordeón expandido */}
                 {isOpen && (
-                  <div className="px-5 pb-5 pt-2 border-t border-white/5 bg-black/20 slide-in space-y-5">
+                  <div className="px-5 pb-5 pt-2 border-t border-white/5 bg-black/20 slide-in space-y-4">
                     
+                    {/* Alerta / Historial de no entregas (Problema 1) */}
+                    {totalNoEntregas > 0 && (
+                      esEntregadoOCancelado ? (
+                        <div className="text-[11px] text-gray-400 font-medium py-1">
+                          Historial: {totalNoEntregas} {totalNoEntregas === 1 ? 'no entrega anterior' : 'no entregas anteriores'}
+                        </div>
+                      ) : (
+                        <div className="mt-2">
+                          {totalNoEntregas === 1 ? (
+                            <div className="bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl flex items-center gap-2 text-amber-300 text-xs font-medium">
+                              <span>ℹ️ Primera no entrega registrada para {p.nombre}.</span>
+                            </div>
+                          ) : totalNoEntregas === 2 ? (
+                            <div className="bg-amber-500/15 border border-amber-500/40 p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-200 text-xs">
+                              <div className="flex items-center gap-2 font-bold text-amber-300">
+                                <span>⚠️ 2ª no entrega de {p.nombre}. Avisale por WhatsApp que a la próxima queda dado de baja.</span>
+                              </div>
+                              {(() => {
+                                const telClean = String(p.telefono || '').replace(/\D/g, '');
+                                if (!telClean) return null;
+                                const primerNombre = (p.nombre || 'Cliente').trim().split(' ')[0] || 'Cliente';
+                                const msgWa = `Hola ${primerNombre}, soy de Huerta Urbana. No pudimos entregarte tu pedido. Es la segunda vez. Si vuelve a pasar, no vamos a poder seguir entregándote. ¿Reagendamos?`;
+                                const waUrl = `https://wa.me/${telClean}?text=${encodeURIComponent(msgWa)}`;
+                                return (
+                                  <a
+                                    href={waUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs shadow-md shadow-green-900/30 transition-all shrink-0 w-fit"
+                                  >
+                                    <MessageCircle size={14} />
+                                    <span>Abrir WhatsApp</span>
+                                  </a>
+                                );
+                              })()}
+                            </div>
+                          ) : (
+                            <div className="bg-red-500/15 border border-red-500/40 p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-red-200 text-xs">
+                              <div className="flex items-center gap-2 font-black text-red-300">
+                                <AlertCircle size={16} className="text-red-400 shrink-0" />
+                                <span>{p.nombre} llegó a 3 no entregas. Corresponde darlo de baja.</span>
+                              </div>
+                              {(() => {
+                                const telClean = String(p.telefono || '').replace(/\D/g, '');
+                                if (!telClean) return null;
+                                const primerNombre = (p.nombre || 'Cliente').trim().split(' ')[0] || 'Cliente';
+                                const msgWa = `Hola ${primerNombre}, soy de Huerta Urbana. Es la tercera vez que no podemos entregarte, así que damos de baja tu cuenta de pedidos. Si querés retomar, escribinos.`;
+                                const waUrl = `https://wa.me/${telClean}?text=${encodeURIComponent(msgWa)}`;
+                                return (
+                                  <a
+                                    href={waUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs shadow-md shadow-green-900/30 transition-all shrink-0 w-fit"
+                                  >
+                                    <MessageCircle size={14} />
+                                    <span>Abrir WhatsApp</span>
+                                  </a>
+                                );
+                              })()}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    )}
+
                     {/* Info del pedido */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
                       <div className="space-y-4">
                         <div className="bg-black/40 border border-white/5 p-3 rounded-xl flex justify-between items-center">
                           <div className="flex items-center gap-2">
@@ -1798,17 +2013,15 @@ export default function AgendaEntregas({ rol, usuario }) {
                               </div>
                               <div className="flex justify-between items-center border-t border-white/5 pt-2 mt-1 text-sm">
                                 <span className="text-gray-500">Estado de pago</span>
-                                {esPorCobrar ? (
-                                  <span className="font-black text-amber-400 bg-amber-500/20 px-2 py-0.5 rounded-md border border-amber-500/30 text-xs">
-                                    💰 POR COBRAR
+                                {cartelPago ? (
+                                  <span className={`font-black text-xs px-2 py-0.5 rounded-md border ${cartelPago.className}`}>
+                                    {cartelPago.texto}
                                   </span>
                                 ) : (
-                                  <span className="font-bold text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-md border border-emerald-500/30 text-xs">
-                                    ✅ COBRADO {medioCobradoLabel ? `(${medioCobradoLabel})` : ''}
-                                  </span>
+                                  <span className="text-gray-500 text-xs">Sin información</span>
                                 )}
                               </div>
-                              {esPorCobrar && (
+                              {esPorCobrar && !estaCobrado && !esEntregado && (
                                 <button
                                   type="button"
                                   disabled={!esArmado}
@@ -1967,13 +2180,25 @@ export default function AgendaEntregas({ rol, usuario }) {
 
                             {/* Botonera de estado */}
                             <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-white/5">
-                              <button onClick={() => actualizarEstado(p.numero_pedido, 'Pendiente')} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all cursor-pointer ${estadoActual === 'pendiente' ? 'bg-amber-500/20 border-amber-500/30 text-amber-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-amber-400'}`}>
+                              <button
+                                disabled={estaCobrado || estadoActual === 'entregado'}
+                                onClick={() => !(estaCobrado || estadoActual === 'entregado') && actualizarEstado(p.numero_pedido, 'Pendiente')}
+                                className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/5 text-gray-600' : 'cursor-pointer ' + (estadoActual === 'pendiente' ? 'bg-amber-500/20 border-amber-500/30 text-amber-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-amber-400')}`}
+                              >
                                 <span>⏳</span> Pendiente
                               </button>
-                              <button onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'Preparado' : 'Entregado')} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all cursor-pointer ${estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/30 text-blue-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-blue-400'}`}>
-                                <span>🚚</span> Entregado
+                              <button
+                                disabled={estaCobrado || estadoActual === 'entregado' || entregandoPedido === p.numero_pedido}
+                                onClick={() => handleMarcarEntregado(p)}
+                                className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-50 cursor-not-allowed bg-blue-500/20 border-blue-500/30 text-blue-400' : 'cursor-pointer ' + (estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/30 text-blue-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-blue-400')}`}
+                              >
+                                <span>🚚</span> {entregandoPedido === p.numero_pedido ? 'Entregando...' : 'Entregado'}
                               </button>
-                              <button onClick={() => abrirModalNoEntrega(p)} className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all cursor-pointer ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/30 text-red-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-red-400'}`}>
+                              <button
+                                disabled={estaCobrado || estadoActual === 'entregado'}
+                                onClick={() => !(estaCobrado || estadoActual === 'entregado') && abrirModalNoEntrega(p)}
+                                className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/5 text-gray-600' : 'cursor-pointer ' + ((estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/30 text-red-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-red-400')}`}
+                              >
                                 <span>❌</span> No entregado
                               </button>
                             </div>
@@ -1983,16 +2208,32 @@ export default function AgendaEntregas({ rol, usuario }) {
                         {/* Botonera legado (sin preparación en memoria) */}
                         {!prep && !estaPreparando && estadoActual !== 'pendiente' && (
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                            <button onClick={() => rol !== 'repartidor' ? actualizarEstado(p.numero_pedido, 'Pendiente') : null} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 ${estadoActual === 'pendiente' ? 'bg-amber-500/20 border-amber-500/40 text-amber-400' : 'bg-amber-500/5 border-amber-500/10 text-amber-400 hover:bg-amber-500/10'} ${rol === 'repartidor' ? 'opacity-50 cursor-default' : 'cursor-pointer hover:scale-[1.02]'}`}>
+                            <button
+                              disabled={estaCobrado || estadoActual === 'entregado'}
+                              onClick={() => (rol !== 'repartidor' && !estaCobrado && estadoActual !== 'entregado') ? actualizarEstado(p.numero_pedido, 'Pendiente') : null}
+                              className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-40 cursor-not-allowed bg-amber-500/5 border-amber-500/10 text-gray-600' : 'active:scale-95 ' + (estadoActual === 'pendiente' ? 'bg-amber-500/20 border-amber-500/40 text-amber-400' : 'bg-amber-500/5 border-amber-500/10 text-amber-400 hover:bg-amber-500/10') + (rol === 'repartidor' ? ' opacity-50 cursor-default' : ' cursor-pointer hover:scale-[1.02]')}`}
+                            >
                               <span className="text-xl">⏳</span> PENDIENTE
                             </button>
-                            <button onClick={() => rol !== 'repartidor' ? actualizarEstado(p.numero_pedido, 'Preparado') : null} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 ${(estadoActual === 'preparado' || estadoActual === 'listo') ? 'bg-green-500/20 border-green-500/40 text-green-400' : 'bg-green-500/5 border-green-500/10 text-green-500 hover:bg-green-500/10'} ${rol === 'repartidor' ? 'opacity-50 cursor-default' : 'cursor-pointer hover:scale-[1.02]'}`}>
+                            <button
+                              disabled={estaCobrado || estadoActual === 'entregado'}
+                              onClick={() => (rol !== 'repartidor' && !estaCobrado && estadoActual !== 'entregado') ? actualizarEstado(p.numero_pedido, 'Preparado') : null}
+                              className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-40 cursor-not-allowed bg-green-500/5 border-green-500/10 text-gray-600' : 'active:scale-95 ' + ((estadoActual === 'preparado' || estadoActual === 'listo') ? 'bg-green-500/20 border-green-500/40 text-green-400' : 'bg-green-500/5 border-green-500/10 text-green-500 hover:bg-green-500/10') + (rol === 'repartidor' ? ' opacity-50 cursor-default' : ' cursor-pointer hover:scale-[1.02]')}`}
+                            >
                               <span className="text-xl">✅</span> PREPARADO
                             </button>
-                            <button onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'Preparado' : 'Entregado')} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-blue-500/5 border-blue-500/10 text-blue-500 hover:bg-blue-500/10'}`}>
-                              <span className="text-xl">🚚</span> ENTREGADO
+                            <button
+                              disabled={estaCobrado || estadoActual === 'entregado' || entregandoPedido === p.numero_pedido}
+                              onClick={() => handleMarcarEntregado(p)}
+                              className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-50 cursor-not-allowed bg-blue-500/20 border-blue-500/40 text-blue-400' : 'active:scale-95 cursor-pointer hover:scale-[1.02] ' + (estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-blue-500/5 border-blue-500/10 text-blue-500 hover:bg-blue-500/10')}`}
+                            >
+                              <span className="text-xl">🚚</span> {entregandoPedido === p.numero_pedido ? 'ENTREGANDO...' : 'ENTREGADO'}
                             </button>
-                            <button onClick={() => abrirModalNoEntrega(p)} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10'}`}>
+                            <button
+                              disabled={estaCobrado || estadoActual === 'entregado'}
+                              onClick={() => !(estaCobrado || estadoActual === 'entregado') && abrirModalNoEntrega(p)}
+                              className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-40 cursor-not-allowed bg-red-500/5 border-red-500/10 text-gray-600' : 'active:scale-95 cursor-pointer hover:scale-[1.02] ' + ((estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10')}`}
+                            >
                               <span className="text-xl">❌</span> NO ENTREGADO
                             </button>
                           </div>
@@ -2007,8 +2248,20 @@ export default function AgendaEntregas({ rol, usuario }) {
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                           <button className="flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] bg-amber-500/5 border-amber-500/10 text-amber-400 opacity-50 cursor-default"><span className="text-xl">⏳</span> PENDIENTE</button>
                           <button className="flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] bg-green-500/5 border-green-500/10 text-green-500 opacity-50 cursor-default"><span className="text-xl">✅</span> PREPARADO</button>
-                          <button onClick={() => actualizarEstado(p.numero_pedido, estadoActual === 'entregado' ? 'Preparado' : 'Entregado')} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-blue-500/5 border-blue-500/10 text-blue-500 hover:bg-blue-500/10'}`}><span className="text-xl">🚚</span> ENTREGADO</button>
-                          <button onClick={() => abrirModalNoEntrega(p)} className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all active:scale-95 cursor-pointer hover:scale-[1.02] ${(estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10'}`}><span className="text-xl">❌</span> NO ENTREGADO</button>
+                          <button
+                            disabled={estaCobrado || estadoActual === 'entregado' || entregandoPedido === p.numero_pedido}
+                            onClick={() => handleMarcarEntregado(p)}
+                            className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-50 cursor-not-allowed bg-blue-500/20 border-blue-500/40 text-blue-400' : 'active:scale-95 cursor-pointer hover:scale-[1.02] ' + (estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-blue-500/5 border-blue-500/10 text-blue-500 hover:bg-blue-500/10')}`}
+                          >
+                            <span className="text-xl">🚚</span> {entregandoPedido === p.numero_pedido ? 'ENTREGANDO...' : 'ENTREGADO'}
+                          </button>
+                          <button
+                            disabled={estaCobrado || estadoActual === 'entregado'}
+                            onClick={() => !(estaCobrado || estadoActual === 'entregado') && abrirModalNoEntrega(p)}
+                            className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-40 cursor-not-allowed bg-red-500/5 border-red-500/10 text-gray-600' : 'active:scale-95 cursor-pointer hover:scale-[1.02] ' + ((estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10')}`}
+                          >
+                            <span className="text-xl">❌</span> NO ENTREGADO
+                          </button>
                         </div>
                         <p className="text-center text-[9px] text-gray-600 mt-4 leading-relaxed italic">Los estados "Pendiente" y "Preparado" son solo de lectura para el repartidor.</p>
                       </div>

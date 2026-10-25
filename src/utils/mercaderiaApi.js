@@ -322,6 +322,16 @@ export async function apiCobrarPedido({ numero_pedido, medio, monto, items, nota
   });
 }
 
+export async function apiEntregarPedido({ numero_pedido, items }) {
+  return llamarAppsScript('entregarPedido', {
+    numero_pedido: String(numero_pedido).trim(),
+    items: (items || []).map(it => ({
+      producto: String(it.producto || it.nombre || '').trim(),
+      cantidad_real: Number(it.cantidad_real != null ? it.cantidad_real : (it.cantidad || 0)),
+    })),
+  });
+}
+
 // ── 7. NO ENTREGAS & ALERTAS DE CLIENTE ─────────────────────────────────────
 
 export async function apiRegistrarNoEntrega({ numero_pedido, motivo, accion_tomada }) {
