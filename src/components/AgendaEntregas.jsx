@@ -65,6 +65,78 @@ const MOTIVOS_PREDEFINIDOS = [
   { label: 'Teléfono apagado / Sin respuesta', icon: '📵' },
 ];
 
+// ── Helper: Formato internacional argentino para WhatsApp Web ────────────────
+export function formatearTelefonoWhatsApp(telefono) {
+  if (!telefono) return '';
+  let digits = String(telefono).replace(/\D/g, '');
+  if (!digits) return '';
+
+  // Quitar ceros iniciales (código interurbano nacional ej. 011 -> 11, 02320 -> 2320)
+  digits = digits.replace(/^0+/, '');
+
+  // Si ya tiene código de país 54:
+  if (digits.startsWith('54')) {
+    let sin54 = digits.slice(2).replace(/^0+/, '');
+    if (sin54.startsWith('9')) {
+      let sin9 = sin54.slice(1).replace(/^0+/, '');
+      if (sin9.startsWith('1115')) {
+        sin9 = '11' + sin9.slice(4);
+      } else if (sin9.startsWith('15')) {
+        sin9 = sin9.slice(2);
+      }
+      return '549' + sin9;
+    }
+    if (sin54.startsWith('1115')) {
+      sin54 = '11' + sin54.slice(4);
+    } else if (sin54.startsWith('15')) {
+      sin54 = sin54.slice(2);
+    }
+    return '549' + sin54;
+  }
+
+  // Si no tiene prefijo 54:
+  if (digits.startsWith('1115')) {
+    digits = '11' + digits.slice(4);
+  } else if (digits.startsWith('15')) {
+    digits = digits.slice(2);
+  }
+
+  if (digits.startsWith('9')) {
+    return '54' + digits;
+  }
+
+  return '549' + digits;
+}
+
+export function abrirWhatsAppWeb(telefono, texto) {
+  const phone = formatearTelefonoWhatsApp(telefono);
+  const url = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(texto || '')}`;
+  window.open(url, '_blank', 'noopener');
+}
+
+// ── Helper: Condición única de pedido pendiente de entrega ──────────────────
+export function esPedidoPendienteDeEntrega(p, estadoActualOverride) {
+  if (!p) return false;
+  const est = (estadoActualOverride || p.estado || 'pendiente').toLowerCase().trim();
+  // Si está Entregado o Cancelado, NO es pendiente
+  if (est === 'entregado' || est === 'cancelado') return false;
+
+  // Si ya fue cobrado (botón Cobrar, monto cobrado o medio registrado), NO es pendiente
+  const formaPago = (p.forma_pago || '').toLowerCase().trim();
+  const estaCobrado = Boolean(
+    p.cobrado === true ||
+    p.cobrado === 'true' ||
+    p.cobrado === 'TRUE' ||
+    (p.monto_cobrado != null && p.monto_cobrado !== '' && Number(p.monto_cobrado) > 0) ||
+    (p.medio_pago && (formaPago === 'entrega' || formaPago === 'link')) ||
+    p.medio_cobro ||
+    p.fecha_cobro
+  );
+  if (estaCobrado) return false;
+
+  return true;
+}
+
 // ── Normalizar texto para matcheo fuzzy ────────────────────────────────────
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
@@ -653,8 +725,8 @@ export default function AgendaEntregas({ rol, usuario }) {
     const estadoPago = (p.estado_pago || '').toLowerCase().trim();
     const estaCobrado = Boolean(p.cobrado || p.monto_cobrado != null || (p.medio_pago && (formaPago === 'entrega' || formaPago === 'link')));
 
-    // Un pedido que ya está cobrado o entregado no puede volver a cobrarse ni a entregarse
-    if (estaCobrado || estadoActual === 'entregado') {
+    // Un pedido que ya no está pendiente de entrega no puede volver a cobrarse ni a entregarse
+    if (!esPedidoPendienteDeEntrega(p, estadoActual)) {
       return;
     }
 
@@ -739,9 +811,8 @@ export default function AgendaEntregas({ rol, usuario }) {
 
   const abrirWhatsApp = (telefono, nombre) => {
     const primerNombre = (nombre || '').split(' ')[0] || 'Cliente';
-    const texto = `Hola ${primerNombre}! %F0%9F%91%8B ¿Cómo estás? Te escribimos desde Huerta Urbana %F0%9F%A5%A6`;
-    const url = `https://web.whatsapp.com/send?phone=${(telefono || '').replace(/\D/g, '')}&text=${texto}`;
-    window.open(url, '_blank');
+    const texto = `Hola ${primerNombre}! 👋 ¿Cómo estás? Te escribimos desde Huerta Urbana 🥬`;
+    abrirWhatsAppWeb(telefono, texto);
   };
 
   const abrirRutaGoogle = () => {
@@ -1717,6 +1788,10 @@ export default function AgendaEntregas({ rol, usuario }) {
             const esCancelado = estadoActual === 'cancelado';
             const esEntregadoOCancelado = esEntregado || esCancelado;
 
+            // Condición unificada: pedido pendiente de entrega
+            const esPendiente = esPedidoPendienteDeEntrega(p, estadoActual);
+            const noEsPendiente = !esPendiente;
+
             const totalExactoPedido = calcularTotalDetalle(p, prep);
 
             // Identificar si el pedido fue cobrado por el botón Cobrar (o registrado con cobrarPedido)
@@ -1797,26 +1872,20 @@ export default function AgendaEntregas({ rol, usuario }) {
                             {cartelPago.texto}
                           </span>
                         )}
-                        {/* Alerta de No Entregas (Problema 1) */}
-                        {totalNoEntregas > 0 && (
-                          esEntregadoOCancelado ? (
-                            <span className="text-[10px] font-medium text-gray-400 bg-white/5 border border-white/10 px-2 py-0.5 rounded-lg">
-                              Historial: {totalNoEntregas} {totalNoEntregas === 1 ? 'no entrega anterior' : 'no entregas anteriores'}
-                            </span>
-                          ) : (
-                            <span
-                              className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border shadow-sm flex items-center gap-1 ${
-                                totalNoEntregas >= 3
-                                  ? 'bg-red-500/20 text-red-300 border-red-500/40'
-                                  : totalNoEntregas === 2
-                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                                  : 'bg-orange-500/15 text-orange-300 border-orange-500/30'
-                              }`}
-                              title={`${totalNoEntregas} no entrega(s) registrada(s)`}
-                            >
-                              ⚠️ {totalNoEntregas} {totalNoEntregas === 1 ? 'no entrega' : 'no entregas'}
-                            </span>
-                          )
+                        {/* Alerta de No Entregas: solo visible si el pedido está pendiente (no entregado, no cancelado y no cobrado) */}
+                        {totalNoEntregas > 0 && esPedidoPendienteDeEntrega(p, estadoActual) && (
+                          <span
+                            className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border shadow-sm flex items-center gap-1 ${
+                              totalNoEntregas >= 3
+                                ? 'bg-red-500/20 text-red-300 border-red-500/40'
+                                : totalNoEntregas === 2
+                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                : 'bg-orange-500/15 text-orange-300 border-orange-500/30'
+                            }`}
+                            title={`${totalNoEntregas} no entrega(s) registrada(s)`}
+                          >
+                            ⚠️ {totalNoEntregas} {totalNoEntregas === 1 ? 'no entrega' : 'no entregas'}
+                          </span>
                         )}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
@@ -1828,7 +1897,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     {/* Botón Cobrar en cabecera de pedido por cobrar (Requisito 2 y 3) */}
-                    {esPorCobrar && !estaCobrado && !esEntregado && (
+                    {esPorCobrar && esPedidoPendienteDeEntrega(p, estadoActual) && (
                       <button
                         type="button"
                         disabled={!esArmado}
@@ -1848,15 +1917,17 @@ export default function AgendaEntregas({ rol, usuario }) {
                       </button>
                     )}
 
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); abrirModalNoEntrega(p); }}
-                      className="hidden sm:flex items-center gap-1 text-gray-400 hover:text-red-400 hover:bg-red-500/10 px-2.5 py-1.5 rounded-xl border border-transparent hover:border-red-500/20 transition-all text-xs font-bold cursor-pointer"
-                      title="Registrar pedido no entregado"
-                    >
-                      <X size={14} />
-                      <span>No entregado</span>
-                    </button>
+                    {esPedidoPendienteDeEntrega(p, estadoActual) && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); abrirModalNoEntrega(p); }}
+                        className="hidden sm:flex items-center gap-1 text-gray-400 hover:text-red-400 hover:bg-red-500/10 px-2.5 py-1.5 rounded-xl border border-transparent hover:border-red-500/20 transition-all text-xs font-bold cursor-pointer"
+                        title="Registrar pedido no entregado"
+                      >
+                        <X size={14} />
+                        <span>No entregado</span>
+                      </button>
+                    )}
                     {esRen && (
                       <button
                         type="button"
@@ -1879,7 +1950,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                     
                     {/* Alerta / Historial de no entregas (Problema 1) */}
                     {totalNoEntregas > 0 && (
-                      esEntregadoOCancelado ? (
+                      !esPedidoPendienteDeEntrega(p, estadoActual) ? (
                         <div className="text-[11px] text-gray-400 font-medium py-1">
                           Historial: {totalNoEntregas} {totalNoEntregas === 1 ? 'no entrega anterior' : 'no entregas anteriores'}
                         </div>
@@ -1894,24 +1965,21 @@ export default function AgendaEntregas({ rol, usuario }) {
                               <div className="flex items-center gap-2 font-bold text-amber-300">
                                 <span>⚠️ 2ª no entrega de {p.nombre}. Avisale por WhatsApp que a la próxima queda dado de baja.</span>
                               </div>
-                              {(() => {
-                                const telClean = String(p.telefono || '').replace(/\D/g, '');
-                                if (!telClean) return null;
-                                const primerNombre = (p.nombre || 'Cliente').trim().split(' ')[0] || 'Cliente';
-                                const msgWa = `Hola ${primerNombre}, soy de Huerta Urbana. No pudimos entregarte tu pedido. Es la segunda vez. Si vuelve a pasar, no vamos a poder seguir entregándote. ¿Reagendamos?`;
-                                const waUrl = `https://wa.me/${telClean}?text=${encodeURIComponent(msgWa)}`;
-                                return (
-                                  <a
-                                    href={waUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs shadow-md shadow-green-900/30 transition-all shrink-0 w-fit"
-                                  >
-                                    <MessageCircle size={14} />
-                                    <span>Abrir WhatsApp</span>
-                                  </a>
-                                );
-                              })()}
+                              {p.telefono && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const primerNombre = (p.nombre || 'Cliente').trim().split(' ')[0] || 'Cliente';
+                                    const msgWa = `Hola ${primerNombre}, soy de Huerta Urbana. No pudimos entregarte tu pedido. Es la segunda vez. Si vuelve a pasar, no vamos a poder seguir entregándote. ¿Reagendamos?`;
+                                    abrirWhatsAppWeb(p.telefono, msgWa);
+                                  }}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs shadow-md shadow-green-900/30 transition-all shrink-0 w-fit cursor-pointer"
+                                >
+                                  <MessageCircle size={14} />
+                                  <span>Abrir WhatsApp</span>
+                                </button>
+                              )}
                             </div>
                           ) : (
                             <div className="bg-red-500/15 border border-red-500/40 p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-red-200 text-xs">
@@ -1919,24 +1987,21 @@ export default function AgendaEntregas({ rol, usuario }) {
                                 <AlertCircle size={16} className="text-red-400 shrink-0" />
                                 <span>{p.nombre} llegó a 3 no entregas. Corresponde darlo de baja.</span>
                               </div>
-                              {(() => {
-                                const telClean = String(p.telefono || '').replace(/\D/g, '');
-                                if (!telClean) return null;
-                                const primerNombre = (p.nombre || 'Cliente').trim().split(' ')[0] || 'Cliente';
-                                const msgWa = `Hola ${primerNombre}, soy de Huerta Urbana. Es la tercera vez que no podemos entregarte, así que damos de baja tu cuenta de pedidos. Si querés retomar, escribinos.`;
-                                const waUrl = `https://wa.me/${telClean}?text=${encodeURIComponent(msgWa)}`;
-                                return (
-                                  <a
-                                    href={waUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs shadow-md shadow-green-900/30 transition-all shrink-0 w-fit"
-                                  >
-                                    <MessageCircle size={14} />
-                                    <span>Abrir WhatsApp</span>
-                                  </a>
-                                );
-                              })()}
+                              {p.telefono && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const primerNombre = (p.nombre || 'Cliente').trim().split(' ')[0] || 'Cliente';
+                                    const msgWa = `Hola ${primerNombre}, soy de Huerta Urbana. Es la tercera vez que no podemos entregarte, así que damos de baja tu cuenta de pedidos. Si querés retomar, escribinos.`;
+                                    abrirWhatsAppWeb(p.telefono, msgWa);
+                                  }}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs shadow-md shadow-green-900/30 transition-all shrink-0 w-fit cursor-pointer"
+                                >
+                                  <MessageCircle size={14} />
+                                  <span>Abrir WhatsApp</span>
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -2181,23 +2246,23 @@ export default function AgendaEntregas({ rol, usuario }) {
                             {/* Botonera de estado */}
                             <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-white/5">
                               <button
-                                disabled={estaCobrado || estadoActual === 'entregado'}
-                                onClick={() => !(estaCobrado || estadoActual === 'entregado') && actualizarEstado(p.numero_pedido, 'Pendiente')}
-                                className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/5 text-gray-600' : 'cursor-pointer ' + (estadoActual === 'pendiente' ? 'bg-amber-500/20 border-amber-500/30 text-amber-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-amber-400')}`}
+                                disabled={noEsPendiente}
+                                onClick={() => !noEsPendiente && actualizarEstado(p.numero_pedido, 'Pendiente')}
+                                className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all ${noEsPendiente ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/5 text-gray-600' : 'cursor-pointer ' + (estadoActual === 'pendiente' ? 'bg-amber-500/20 border-amber-500/30 text-amber-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-amber-400')}`}
                               >
                                 <span>⏳</span> Pendiente
                               </button>
                               <button
-                                disabled={estaCobrado || estadoActual === 'entregado' || entregandoPedido === p.numero_pedido}
+                                disabled={noEsPendiente || entregandoPedido === p.numero_pedido}
                                 onClick={() => handleMarcarEntregado(p)}
-                                className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-50 cursor-not-allowed bg-blue-500/20 border-blue-500/30 text-blue-400' : 'cursor-pointer ' + (estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/30 text-blue-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-blue-400')}`}
+                                className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all ${noEsPendiente ? 'opacity-50 cursor-not-allowed bg-blue-500/20 border-blue-500/30 text-blue-400' : 'cursor-pointer ' + (estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/30 text-blue-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-blue-400')}`}
                               >
                                 <span>🚚</span> {entregandoPedido === p.numero_pedido ? 'Entregando...' : 'Entregado'}
                               </button>
                               <button
-                                disabled={estaCobrado || estadoActual === 'entregado'}
-                                onClick={() => !(estaCobrado || estadoActual === 'entregado') && abrirModalNoEntrega(p)}
-                                className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/5 text-gray-600' : 'cursor-pointer ' + ((estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/30 text-red-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-red-400')}`}
+                                disabled={noEsPendiente}
+                                onClick={() => !noEsPendiente && abrirModalNoEntrega(p)}
+                                className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-[10px] font-bold transition-all ${noEsPendiente ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/5 text-gray-600' : 'cursor-pointer ' + ((estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/30 text-red-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-red-400')}`}
                               >
                                 <span>❌</span> No entregado
                               </button>
@@ -2209,30 +2274,30 @@ export default function AgendaEntregas({ rol, usuario }) {
                         {!prep && !estaPreparando && estadoActual !== 'pendiente' && (
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                             <button
-                              disabled={estaCobrado || estadoActual === 'entregado'}
-                              onClick={() => (rol !== 'repartidor' && !estaCobrado && estadoActual !== 'entregado') ? actualizarEstado(p.numero_pedido, 'Pendiente') : null}
-                              className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-40 cursor-not-allowed bg-amber-500/5 border-amber-500/10 text-gray-600' : 'active:scale-95 ' + (estadoActual === 'pendiente' ? 'bg-amber-500/20 border-amber-500/40 text-amber-400' : 'bg-amber-500/5 border-amber-500/10 text-amber-400 hover:bg-amber-500/10') + (rol === 'repartidor' ? ' opacity-50 cursor-default' : ' cursor-pointer hover:scale-[1.02]')}`}
+                              disabled={noEsPendiente}
+                              onClick={() => (rol !== 'repartidor' && !noEsPendiente) ? actualizarEstado(p.numero_pedido, 'Pendiente') : null}
+                              className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${noEsPendiente ? 'opacity-40 cursor-not-allowed bg-amber-500/5 border-amber-500/10 text-gray-600' : 'active:scale-95 ' + (estadoActual === 'pendiente' ? 'bg-amber-500/20 border-amber-500/40 text-amber-400' : 'bg-amber-500/5 border-amber-500/10 text-amber-400 hover:bg-amber-500/10') + (rol === 'repartidor' ? ' opacity-50 cursor-default' : ' cursor-pointer hover:scale-[1.02]')}`}
                             >
                               <span className="text-xl">⏳</span> PENDIENTE
                             </button>
                             <button
-                              disabled={estaCobrado || estadoActual === 'entregado'}
-                              onClick={() => (rol !== 'repartidor' && !estaCobrado && estadoActual !== 'entregado') ? actualizarEstado(p.numero_pedido, 'Preparado') : null}
-                              className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-40 cursor-not-allowed bg-green-500/5 border-green-500/10 text-gray-600' : 'active:scale-95 ' + ((estadoActual === 'preparado' || estadoActual === 'listo') ? 'bg-green-500/20 border-green-500/40 text-green-400' : 'bg-green-500/5 border-green-500/10 text-green-500 hover:bg-green-500/10') + (rol === 'repartidor' ? ' opacity-50 cursor-default' : ' cursor-pointer hover:scale-[1.02]')}`}
+                              disabled={noEsPendiente}
+                              onClick={() => (rol !== 'repartidor' && !noEsPendiente) ? actualizarEstado(p.numero_pedido, 'Preparado') : null}
+                              className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${noEsPendiente ? 'opacity-40 cursor-not-allowed bg-green-500/5 border-green-500/10 text-gray-600' : 'active:scale-95 ' + ((estadoActual === 'preparado' || estadoActual === 'listo') ? 'bg-green-500/20 border-green-500/40 text-green-400' : 'bg-green-500/5 border-green-500/10 text-green-500 hover:bg-green-500/10') + (rol === 'repartidor' ? ' opacity-50 cursor-default' : ' cursor-pointer hover:scale-[1.02]')}`}
                             >
                               <span className="text-xl">✅</span> PREPARADO
                             </button>
                             <button
-                              disabled={estaCobrado || estadoActual === 'entregado' || entregandoPedido === p.numero_pedido}
+                              disabled={noEsPendiente || entregandoPedido === p.numero_pedido}
                               onClick={() => handleMarcarEntregado(p)}
-                              className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-50 cursor-not-allowed bg-blue-500/20 border-blue-500/40 text-blue-400' : 'active:scale-95 cursor-pointer hover:scale-[1.02] ' + (estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-blue-500/5 border-blue-500/10 text-blue-500 hover:bg-blue-500/10')}`}
+                              className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${noEsPendiente ? 'opacity-50 cursor-not-allowed bg-blue-500/20 border-blue-500/40 text-blue-400' : 'active:scale-95 cursor-pointer hover:scale-[1.02] ' + (estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-blue-500/5 border-blue-500/10 text-blue-500 hover:bg-blue-500/10')}`}
                             >
                               <span className="text-xl">🚚</span> {entregandoPedido === p.numero_pedido ? 'ENTREGANDO...' : 'ENTREGADO'}
                             </button>
                             <button
-                              disabled={estaCobrado || estadoActual === 'entregado'}
-                              onClick={() => !(estaCobrado || estadoActual === 'entregado') && abrirModalNoEntrega(p)}
-                              className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-40 cursor-not-allowed bg-red-500/5 border-red-500/10 text-gray-600' : 'active:scale-95 cursor-pointer hover:scale-[1.02] ' + ((estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10')}`}
+                              disabled={noEsPendiente}
+                              onClick={() => !noEsPendiente && abrirModalNoEntrega(p)}
+                              className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${noEsPendiente ? 'opacity-40 cursor-not-allowed bg-red-500/5 border-red-500/10 text-gray-600' : 'active:scale-95 cursor-pointer hover:scale-[1.02] ' + ((estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10')}`}
                             >
                               <span className="text-xl">❌</span> NO ENTREGADO
                             </button>
@@ -2249,16 +2314,16 @@ export default function AgendaEntregas({ rol, usuario }) {
                           <button className="flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] bg-amber-500/5 border-amber-500/10 text-amber-400 opacity-50 cursor-default"><span className="text-xl">⏳</span> PENDIENTE</button>
                           <button className="flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] bg-green-500/5 border-green-500/10 text-green-500 opacity-50 cursor-default"><span className="text-xl">✅</span> PREPARADO</button>
                           <button
-                            disabled={estaCobrado || estadoActual === 'entregado' || entregandoPedido === p.numero_pedido}
+                            disabled={noEsPendiente || entregandoPedido === p.numero_pedido}
                             onClick={() => handleMarcarEntregado(p)}
-                            className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-50 cursor-not-allowed bg-blue-500/20 border-blue-500/40 text-blue-400' : 'active:scale-95 cursor-pointer hover:scale-[1.02] ' + (estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-blue-500/5 border-blue-500/10 text-blue-500 hover:bg-blue-500/10')}`}
+                            className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${noEsPendiente ? 'opacity-50 cursor-not-allowed bg-blue-500/20 border-blue-500/40 text-blue-400' : 'active:scale-95 cursor-pointer hover:scale-[1.02] ' + (estadoActual === 'entregado' ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-blue-500/5 border-blue-500/10 text-blue-500 hover:bg-blue-500/10')}`}
                           >
                             <span className="text-xl">🚚</span> {entregandoPedido === p.numero_pedido ? 'ENTREGANDO...' : 'ENTREGADO'}
                           </button>
                           <button
-                            disabled={estaCobrado || estadoActual === 'entregado'}
-                            onClick={() => !(estaCobrado || estadoActual === 'entregado') && abrirModalNoEntrega(p)}
-                            className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${(estaCobrado || estadoActual === 'entregado') ? 'opacity-40 cursor-not-allowed bg-red-500/5 border-red-500/10 text-gray-600' : 'active:scale-95 cursor-pointer hover:scale-[1.02] ' + ((estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10')}`}
+                            disabled={noEsPendiente}
+                            onClick={() => !noEsPendiente && abrirModalNoEntrega(p)}
+                            className={`flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-2xl border font-black text-[11px] transition-all ${noEsPendiente ? 'opacity-40 cursor-not-allowed bg-red-500/5 border-red-500/10 text-gray-600' : 'active:scale-95 cursor-pointer hover:scale-[1.02] ' + ((estadoActual === 'no_entregado' || estadoActual === 'no entregado') ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-red-500/5 border-red-500/10 text-red-500 hover:bg-red-500/10')}`}
                           >
                             <span className="text-xl">❌</span> NO ENTREGADO
                           </button>
@@ -2358,27 +2423,23 @@ export default function AgendaEntregas({ rol, usuario }) {
                         ? `El pedido quedó reagendado para el ${modalNoEntrega.resultado.nuevoDia} (${modalNoEntrega.resultado.nuevoHorario}).`
                         : 'El pedido fue cancelado y el stock liberado.'}
                     </p>
-                    {(() => {
-                      const telClean = String(modalNoEntrega.resultado.telefono || '').replace(/\D/g, '');
-                      if (!telClean) return null;
-                      const nombreCliente = (modalNoEntrega.resultado.cliente || modalNoEntrega.pedido.nombre || 'Cliente').trim();
-                      const primerNombre = nombreCliente.split(' ')[0] || 'Cliente';
-                      const msgWa = `Hola ${primerNombre}, soy de Huerta Urbana. No pudimos entregarte tu pedido. Es la segunda vez. Si vuelve a pasar, no vamos a poder seguir entregándote. ¿Reagendamos?`;
-                      const waUrl = `https://wa.me/${telClean}?text=${encodeURIComponent(msgWa)}`;
-                      return (
-                        <div className="pt-1">
-                          <a
-                            href={waUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs shadow-lg shadow-green-900/30 transition-all cursor-pointer"
-                          >
-                            <MessageCircle size={16} />
-                            <span>Abrir WhatsApp</span>
-                          </a>
-                        </div>
-                      );
-                    })()}
+                    {modalNoEntrega.resultado.telefono && (
+                      <div className="pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nombreCliente = (modalNoEntrega.resultado.cliente || modalNoEntrega.pedido.nombre || 'Cliente').trim();
+                            const primerNombre = nombreCliente.split(' ')[0] || 'Cliente';
+                            const msgWa = `Hola ${primerNombre}, soy de Huerta Urbana. No pudimos entregarte tu pedido. Es la segunda vez. Si vuelve a pasar, no vamos a poder seguir entregándote. ¿Reagendamos?`;
+                            abrirWhatsAppWeb(modalNoEntrega.resultado.telefono, msgWa);
+                          }}
+                          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs shadow-lg shadow-green-900/30 transition-all cursor-pointer"
+                        >
+                          <MessageCircle size={16} />
+                          <span>Abrir WhatsApp</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -2394,27 +2455,23 @@ export default function AgendaEntregas({ rol, usuario }) {
                         ? `El pedido quedó reagendado para el ${modalNoEntrega.resultado.nuevoDia} (${modalNoEntrega.resultado.nuevoHorario}).`
                         : 'El pedido fue cancelado y el stock liberado.'}
                     </p>
-                    {(() => {
-                      const telClean = String(modalNoEntrega.resultado.telefono || '').replace(/\D/g, '');
-                      if (!telClean) return null;
-                      const nombreCliente = (modalNoEntrega.resultado.cliente || modalNoEntrega.pedido.nombre || 'Cliente').trim();
-                      const primerNombre = nombreCliente.split(' ')[0] || 'Cliente';
-                      const msgWa = `Hola ${primerNombre}, soy de Huerta Urbana. Es la tercera vez que no podemos entregarte, así que damos de baja tu cuenta de pedidos. Si querés retomar, escribinos.`;
-                      const waUrl = `https://wa.me/${telClean}?text=${encodeURIComponent(msgWa)}`;
-                      return (
-                        <div className="pt-1">
-                          <a
-                            href={waUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs shadow-lg shadow-green-900/30 transition-all cursor-pointer"
-                          >
-                            <MessageCircle size={16} />
-                            <span>Abrir WhatsApp</span>
-                          </a>
-                        </div>
-                      );
-                    })()}
+                    {modalNoEntrega.resultado.telefono && (
+                      <div className="pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nombreCliente = (modalNoEntrega.resultado.cliente || modalNoEntrega.pedido.nombre || 'Cliente').trim();
+                            const primerNombre = nombreCliente.split(' ')[0] || 'Cliente';
+                            const msgWa = `Hola ${primerNombre}, soy de Huerta Urbana. Es la tercera vez que no podemos entregarte, así que damos de baja tu cuenta de pedidos. Si querés retomar, escribinos.`;
+                            abrirWhatsAppWeb(modalNoEntrega.resultado.telefono, msgWa);
+                          }}
+                          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs shadow-lg shadow-green-900/30 transition-all cursor-pointer"
+                        >
+                          <MessageCircle size={16} />
+                          <span>Abrir WhatsApp</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
