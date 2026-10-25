@@ -138,19 +138,32 @@ export function esPedidoPendienteDeEntrega(p, estadoActualOverride) {
 }
 
 // ── Helpers de fechas y cierre de pedidos ────────────────────────────────────
+export function parsearFecha(raw) {
+  if (!raw) return null;
+  if (raw instanceof Date && !isNaN(raw.getTime())) return raw;
+  const s = String(raw).trim();
+  const mDate = s.match(/Date\((\d+),(\d+),(\d+)/);
+  if (mDate) return new Date(parseInt(mDate[1], 10), parseInt(mDate[2], 10), parseInt(mDate[3], 10));
+  const mDMY = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (mDMY) return new Date(parseInt(mDMY[3], 10), parseInt(mDMY[2], 10) - 1, parseInt(mDMY[1], 10));
+  const mYMD = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (mYMD) return new Date(parseInt(mYMD[1], 10), parseInt(mYMD[2], 10) - 1, parseInt(mYMD[3], 10));
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+export function fechaA_YMD(d) {
+  if (!d || isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mm}-${dd}`;
+}
+
 export function extraerFechaYMD(fechaStr) {
   if (!fechaStr) return '';
-  const s = String(fechaStr).trim();
-  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (m) return m[1];
-  const d = new Date(s);
-  if (!isNaN(d.getTime())) {
-    const y = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${y}-${mm}-${dd}`;
-  }
-  return '';
+  const d = parsearFecha(fechaStr);
+  return d ? fechaA_YMD(d) : '';
 }
 
 export function getHoyYMD() {
@@ -159,6 +172,36 @@ export function getHoyYMD() {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${y}-${mm}-${dd}`;
+}
+
+export function calcularFechaEntregaProgramada(fechaPedidoRaw, diaEntregaNombre) {
+  const dPedido = parsearFecha(fechaPedidoRaw);
+  if (!dPedido) return null;
+
+  const diaNorm = (diaEntregaNombre || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const DIAS_MAP = {
+    'domingo': 0,
+    'lunes': 1,
+    'martes': 2,
+    'miercoles': 3,
+    'jueves': 4,
+    'viernes': 5,
+    'sabado': 6
+  };
+
+  const targetDay = DIAS_MAP[diaNorm];
+  if (targetDay === undefined) {
+    return new Date(dPedido.getFullYear(), dPedido.getMonth(), dPedido.getDate());
+  }
+
+  const orderDay = dPedido.getDay();
+  let diff = targetDay - orderDay;
+  if (diff < 0) {
+    diff += 7;
+  }
+  const dEntrega = new Date(dPedido.getFullYear(), dPedido.getMonth(), dPedido.getDate());
+  dEntrega.setDate(dEntrega.getDate() + diff);
+  return dEntrega;
 }
 
 export function obtenerFechaCierreEfectiva(p, estadoActual) {
@@ -325,20 +368,25 @@ export default function AgendaEntregas({ rol, usuario }) {
         return false;
       }
 
-      // Evaluar si es de un día anterior aún pendiente
-      const fechaPedidoYMD = extraerFechaYMD(p.fecha);
-      const esDeDiaAnterior = Boolean(fechaPedidoYMD && fechaPedidoYMD < hoyYMD);
+      // Calcular fecha real programada de entrega a partir de la fecha del pedido y el día de entrega
+      const dEntrega = calcularFechaEntregaProgramada(p.fecha, p.dia_entrega);
+      const fechaEntregaYMD = fechaA_YMD(dEntrega);
+
+      // Un pedido solo es ATRASADO si su día de entrega ya pasó (fechaEntregaYMD < hoyYMD)
+      const esAtrasado = Boolean(fechaEntregaYMD && fechaEntregaYMD < hoyYMD);
 
       // Pertenece a la lista activa del día seleccionado si coincide el día de entrega, o si está atrasado de un día anterior sin cerrar
       const coincideDia = p.dia_entrega === diaSeleccionado;
-      return coincideDia || esDeDiaAnterior;
+      return coincideDia || esAtrasado;
     }).map(p => {
       const hoyYMD = getHoyYMD();
-      const fechaPedidoYMD = extraerFechaYMD(p.fecha);
-      const esAtrasado = Boolean(fechaPedidoYMD && fechaPedidoYMD < hoyYMD);
+      const dEntrega = calcularFechaEntregaProgramada(p.fecha, p.dia_entrega);
+      const fechaEntregaYMD = fechaA_YMD(dEntrega);
+      const esAtrasado = Boolean(fechaEntregaYMD && fechaEntregaYMD < hoyYMD);
       const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
       return {
         ...p,
+        fechaEntregaProgramadaYMD: fechaEntregaYMD,
         esAtrasado,
         esReembolsoPendiente: tieneReembolsoPendiente
       };
