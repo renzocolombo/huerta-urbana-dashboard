@@ -3,7 +3,8 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { 
   MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, 
   CheckCircle, Sun, Sunset, Printer, FileText, User, Clock, ScanBarcode, 
-  X, Trash2, Check, RotateCcw, Lock, AlertTriangle, Sparkles, Tag, CheckSquare, Square
+  X, Trash2, Check, RotateCcw, Lock, AlertTriangle, Sparkles, Tag, CheckSquare, Square,
+  CreditCard, DollarSign, Calendar, ArrowRight
 } from 'lucide-react';
 import { HOY } from '../data/mockData';
 import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido } from '../utils/remitoPrinter';
@@ -17,7 +18,10 @@ import {
   apiSetDetallePedido, 
   apiGetReservas, 
   apiLiberarPedido,
-  apiGetPreciosSugeridos
+  apiGetPreciosSugeridos,
+  apiCobrarPedido,
+  apiRegistrarNoEntrega,
+  apiGetNoEntregasCliente
 } from '../utils/mercaderiaApi';
 import { imprimirEtiquetaBolsa } from '../utils/etiquetaPrinter';
 
@@ -37,9 +41,19 @@ const PAGO_CONFIG = {
   cancelado: { label: 'Cancelado', color: 'text-gray-500' },
 };
 
+const MEDIOS_LABELS = {
+  debito: 'Débito',
+  credito: 'Crédito',
+  prepaga: 'Prepaga',
+  qr: 'QR',
+  transferencia: 'Transferencia',
+  link_pago: 'Link de Pago',
+};
+
 const PREPARACIONES_KEY = 'huerta_preparaciones_v1';
 const PROCESSED_CODES_KEY = 'huerta_codigos_procesados_v1';
 const MOTIVOS_KEY = 'huerta_motivos_no_entrega_v1';
+const FECHAS_NO_ENTREGA_KEY = 'huerta_fechas_no_entrega_v1';
 
 const MOTIVOS_PREDEFINIDOS = [
   { label: 'Cliente ausente / No atiende', icon: '🚪' },
@@ -134,7 +148,17 @@ function getTipoByNombre(nombre) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 export default function AgendaEntregas({ rol, usuario }) {
-  const { pedidos: PEDIDOS, actualizarEstadoEnSheet, actualizarRemitoEnSheet, eliminarPedidoOCliente, stockData, setStockData, productosCostos } = useGoogleSheets();
+  const { 
+    pedidos: PEDIDOS, 
+    actualizarEstadoEnSheet, 
+    actualizarRemitoEnSheet, 
+    actualizarDatosCliente,
+    eliminarPedidoOCliente, 
+    stockData, 
+    setStockData, 
+    productosCostos,
+    fetchSheetPedidos
+  } = useGoogleSheets();
 
   const esRen = (usuario || localStorage.getItem('huerta_auth_usuario') || '').trim().toLowerCase() === 'ren';
 
@@ -156,10 +180,28 @@ export default function AgendaEntregas({ rol, usuario }) {
   const [avisoReserva, setAvisoReserva] = useState(null); // { tipo: 'warning' | 'error', mensaje: string }
   const reservasLlamadasRef = useRef(new Set());
 
-  // ── Filtrado ───────────────────────────────────────────────────────────────
+  const [estados, setEstados] = useState(() => {
+    const map = {};
+    (PEDIDOS || []).forEach(p => { map[p.numero_pedido] = p.estado; });
+    return map;
+  });
+
+  // ── Filtrado (Requisito 1) ─────────────────────────────────────────────────
   const pedidosDelDia = useMemo(() => {
-    return (PEDIDOS || []).filter(p => p.dia_entrega === diaSeleccionado && (p.estado_pago || '').toLowerCase() === 'approved');
-  }, [PEDIDOS, diaSeleccionado]);
+    return (PEDIDOS || []).filter(p => {
+      if (p.dia_entrega !== diaSeleccionado) return false;
+      const estadoPago = (p.estado_pago || '').toLowerCase().trim();
+      const formaPago = (p.forma_pago || '').toLowerCase().trim();
+      const estadoActual = (estados[p.numero_pedido] || p.estado || '').toLowerCase().trim();
+      const esCanceladoOEntregado = ['cancelado', 'cancelled', 'entregado', 'delivered'].includes(estadoActual);
+
+      const esAprobado = estadoPago === 'approved' || estadoPago === 'pagado';
+      const esFormaEntregaOLink = formaPago === 'entrega' || formaPago === 'link';
+
+      // Mostrá el pedido si estado_pago es approved, O si forma_pago es entrega o link y no está cancelado ni entregado
+      return esAprobado || (esFormaEntregaOLink && !esCanceladoOEntregado);
+    });
+  }, [PEDIDOS, diaSeleccionado, estados]);
 
   const pedidosDelTurno = useMemo(() => {
     return pedidosDelDia.filter(p => {
@@ -169,41 +211,67 @@ export default function AgendaEntregas({ rol, usuario }) {
     });
   }, [pedidosDelDia, turnoSeleccionado]);
 
-  const [estados, setEstados] = useState(() => {
-    const map = {};
-    (PEDIDOS || []).forEach(p => { map[p.numero_pedido] = p.estado; });
-    return map;
-  });
   const [pedidosAbiertos, setPedidosAbiertos] = useState({});
 
-  // ── Motivos de No Entrega ──────────────────────────────────────────────────
-  const [motivosNoEntrega, setMotivosNoEntrega] = useState(() => {
-    try {
-      const s = localStorage.getItem(MOTIVOS_KEY);
-      return s ? JSON.parse(s) : {};
-    } catch (e) {
-      return {};
-    }
-  });
+  // ── No Entregas y Alertas por Cliente ──────────────────────────────────────
+  const [noEntregasMap, setNoEntregasMap] = useState({}); // { [numPedido]: { total, nivel, eventos } }
+  const consultadosNoEntregasRef = useRef(new Set());
 
-  const guardarMotivo = (numPedido, motivo) => {
-    setMotivosNoEntrega(prev => {
-      const updated = { ...prev, [numPedido]: motivo };
-      try { localStorage.setItem(MOTIVOS_KEY, JSON.stringify(updated)); } catch (e) {}
-      return updated;
+  // Consultar no entregas de los clientes de los pedidos del día en una sola tanda sin bucles
+  useEffect(() => {
+    if (!pedidosDelDia || pedidosDelDia.length === 0) return;
+
+    const pedidosAConsultar = pedidosDelDia.filter(
+      p => p.numero_pedido && !consultadosNoEntregasRef.current.has(p.numero_pedido)
+    );
+
+    if (pedidosAConsultar.length === 0) return;
+
+    pedidosAConsultar.forEach(p => consultadosNoEntregasRef.current.add(p.numero_pedido));
+
+    Promise.allSettled(
+      pedidosAConsultar.map(async (p) => {
+        const res = await apiGetNoEntregasCliente({ numero_pedido: p.numero_pedido });
+        if (res && res.ok && res.total != null) {
+          return { numero_pedido: p.numero_pedido, total: Number(res.total), nivel: res.nivel, eventos: res.eventos };
+        }
+        return null;
+      })
+    ).then(results => {
+      const actualizados = {};
+      results.forEach(r => {
+        if (r.status === 'fulfilled' && r.value) {
+          actualizados[r.value.numero_pedido] = r.value;
+        }
+      });
+      if (Object.keys(actualizados).length > 0) {
+        setNoEntregasMap(prev => ({ ...prev, ...actualizados }));
+      }
+    }).catch(err => {
+      console.warn('[AGENDA] Error consultando no entregas:', err.message);
     });
-  };
+  }, [pedidosDelDia]);
 
   // Modales
-  const [modalNoEntrega, setModalNoEntrega] = useState(null); // { pedido, motivoTexto }
+  const [modalNoEntrega, setModalNoEntrega] = useState(null); // { pedido, motivoSeleccionado, motivoOtro, accion, nuevoDia, nuevoHorario, guardando, resultado, error }
+  const [modalCobrar, setModalCobrar] = useState(null);       // { pedido, totalCobrar, items, medio, nota, guardando, resultado, error }
   const [modalEliminar, setModalEliminar] = useState(null);   // { pedido }
   const [modalReiniciar, setModalReiniciar] = useState(null); // { pedido, numPedido, nombre }
 
   const abrirModalNoEntrega = (p) => {
-    const motivoExistente = motivosNoEntrega[p.numero_pedido] || p.motivo_no_entrega || '';
+    const motivoExistente = p.motivo_no_entrega || '';
+    const motivosValidos = ['No estaba', 'No atendió', 'Dirección incorrecta'];
+    const esPredefinido = motivosValidos.includes(motivoExistente);
     setModalNoEntrega({
       pedido: p,
-      motivoTexto: motivoExistente,
+      motivoSeleccionado: esPredefinido ? motivoExistente : (motivoExistente ? 'Otro' : 'No estaba'),
+      motivoOtro: esPredefinido ? '' : motivoExistente,
+      accion: null,
+      nuevoDia: p.dia_entrega === 'Martes' ? 'Jueves' : 'Martes',
+      nuevoHorario: p.horario_entrega || '09:00 - 13:00',
+      guardando: false,
+      resultado: null,
+      error: null,
     });
   };
 
@@ -331,6 +399,213 @@ export default function AgendaEntregas({ rol, usuario }) {
     }
     return 0;
   }, [preciosSugeridosList, productosCostos]);
+
+  // ── Helper: calcular total exacto a cobrar (redondeado a $1) ───────────────
+  const calcularTotalDetalle = useCallback((p, prep) => {
+    let detalleItems = null;
+    const raw = p.detalle_json || prep?.detalle_json;
+    if (raw) {
+      try {
+        detalleItems = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : null);
+      } catch (e) {}
+    }
+    if (Array.isArray(detalleItems) && detalleItems.length > 0) {
+      const sum = detalleItems.reduce((acc, it) => acc + (Number(it.subtotal) || 0), 0);
+      return Math.round(sum);
+    }
+    if (prep && Array.isArray(prep.items)) {
+      let sum = 0;
+      prep.items.forEach(it => {
+        const bolsas = it.bolsasAsignadas || [];
+        const esUnidad = it.esUnidad || it.slot === 'unidades';
+        const cantReal = esUnidad ? bolsas.length : Number(bolsas.reduce((s, b) => s + (Number(b.peso) || 0), 0).toFixed(3));
+        const precioUnit = obtenerPrecioCongelado(it.nombre);
+        sum += Math.round(cantReal * precioUnit);
+      });
+      return Math.round(sum);
+    }
+    return Math.round(Number(p.total) || 0);
+  }, [obtenerPrecioCongelado]);
+
+  // ── Helper: obtener items para enviar a cobrarPedido con pesadas reales ───
+  const obtenerItemsParaCobro = useCallback((p, prep) => {
+    let detalleItems = null;
+    const raw = p.detalle_json || prep?.detalle_json;
+    if (raw) {
+      try {
+        detalleItems = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : null);
+      } catch (e) {}
+    }
+    if (Array.isArray(detalleItems) && detalleItems.length > 0) {
+      return detalleItems.map(it => ({
+        producto: it.producto || it.nombre,
+        cantidad_real: Number(it.cantidad_real != null ? it.cantidad_real : (it.cantidad || 0))
+      }));
+    }
+    if (prep && Array.isArray(prep.items)) {
+      return prep.items.map(it => {
+        const bolsas = it.bolsasAsignadas || [];
+        const esUnidad = it.esUnidad || it.slot === 'unidades';
+        const cantReal = esUnidad ? bolsas.length : Number(bolsas.reduce((s, b) => s + (Number(b.peso) || 0), 0).toFixed(3));
+        return {
+          producto: it.nombre,
+          cantidad_real: cantReal
+        };
+      });
+    }
+    return [];
+  }, []);
+
+  const abrirModalCobrar = useCallback((p) => {
+    const prep = preparaciones[p.numero_pedido];
+    const totalExacto = calcularTotalDetalle(p, prep);
+    const itemsCobro = obtenerItemsParaCobro(p, prep);
+    setModalCobrar({
+      pedido: p,
+      totalCobrar: totalExacto,
+      items: itemsCobro,
+      medio: 'debito',
+      nota: '',
+      guardando: false,
+      resultado: null,
+      error: null,
+    });
+  }, [preparaciones, calcularTotalDetalle, obtenerItemsParaCobro]);
+
+  const handleConfirmarCobro = useCallback(async () => {
+    if (!modalCobrar || modalCobrar.guardando) return;
+    setModalCobrar(prev => ({ ...prev, guardando: true, error: null }));
+
+    try {
+      const pedido = modalCobrar.pedido;
+      const res = await apiCobrarPedido({
+        numero_pedido: pedido.numero_pedido,
+        medio: modalCobrar.medio,
+        monto: modalCobrar.totalCobrar,
+        items: modalCobrar.items,
+        nota: modalCobrar.nota,
+      });
+
+      if (!res || res.ok === false) {
+        setModalCobrar(prev => ({
+          ...prev,
+          guardando: false,
+          error: res?.error || 'Error al comunicarse con el servidor de cobros.'
+        }));
+        return;
+      }
+
+      if (res.ya_cobrado) {
+        setModalCobrar(prev => ({
+          ...prev,
+          guardando: false,
+          resultado: { ya_cobrado: true, avisos: res.avisos }
+        }));
+        if (fetchSheetPedidos) fetchSheetPedidos();
+        return;
+      }
+
+      // Éxito: actualizar pedido en memoria
+      pedido.cobrado = true;
+      pedido.estado_pago = 'approved';
+      pedido.medio_pago = modalCobrar.medio;
+      pedido.monto_cobrado = modalCobrar.totalCobrar;
+      pedido.estado = 'Entregado';
+      setEstados(prev => ({ ...prev, [pedido.numero_pedido]: 'Entregado' }));
+
+      setModalCobrar(prev => ({
+        ...prev,
+        guardando: false,
+        resultado: {
+          cobrado: res.cobrado != null ? res.cobrado : modalCobrar.totalCobrar,
+          comision: res.comision != null ? res.comision : 0,
+          neto: res.neto != null ? res.neto : (modalCobrar.totalCobrar - (res.comision || 0)),
+          avisos: res.avisos || null,
+        }
+      }));
+
+      if (fetchSheetPedidos) fetchSheetPedidos();
+    } catch (err) {
+      setModalCobrar(prev => ({
+        ...prev,
+        guardando: false,
+        error: err.message || 'Error inesperado al registrar el cobro'
+      }));
+    }
+  }, [modalCobrar, fetchSheetPedidos]);
+
+  const handleConfirmarReagendar = useCallback(async () => {
+    if (!modalNoEntrega || modalNoEntrega.guardando) return;
+    const p = modalNoEntrega.pedido;
+    const motivoFinal = modalNoEntrega.motivoSeleccionado === 'Otro'
+      ? (modalNoEntrega.motivoOtro.trim() || 'Otro')
+      : modalNoEntrega.motivoSeleccionado;
+    const fechaActual = new Date().toISOString().split('T')[0];
+
+    setModalNoEntrega(prev => ({ ...prev, guardando: true, error: null }));
+    try {
+      // 1. Registrar no entrega en el backend primero
+      const resNoEntrega = await apiRegistrarNoEntrega({
+        numero_pedido: p.numero_pedido,
+        motivo: motivoFinal,
+        accion_tomada: 'reagendar',
+      });
+
+      if (!resNoEntrega || resNoEntrega.ok === false) {
+        setModalNoEntrega(prev => ({
+          ...prev,
+          guardando: false,
+          error: resNoEntrega?.error || 'Error al registrar la no entrega en el servidor.'
+        }));
+        return; // NO continuar con reagendar si falla
+      }
+
+      // 2. Ejecutar reagendado
+      if (actualizarDatosCliente && p.sheetRowIndex) {
+        await actualizarDatosCliente(p.sheetRowIndex, {
+          dia_entrega: modalNoEntrega.nuevoDia,
+          horario_entrega: modalNoEntrega.nuevoHorario,
+          motivo_no_entrega: motivoFinal,
+          fecha_no_entrega: fechaActual,
+        });
+      }
+
+      p.dia_entrega = modalNoEntrega.nuevoDia;
+      p.horario_entrega = modalNoEntrega.nuevoHorario;
+      p.motivo_no_entrega = motivoFinal;
+      p.fecha_no_entrega = fechaActual;
+
+      // 3. Actualizar mapa de no entregas en memoria
+      const nroFinal = resNoEntrega.nro || (Number(noEntregasMap[p.numero_pedido]?.total || 0) + 1);
+      const nivelFinal = resNoEntrega.nivel || 'primera';
+      setNoEntregasMap(prev => ({
+        ...prev,
+        [p.numero_pedido]: {
+          total: nroFinal,
+          nivel: nivelFinal,
+        }
+      }));
+
+      // 4. Mostrar alerta / aviso según nivel
+      setModalNoEntrega(prev => ({
+        ...prev,
+        guardando: false,
+        resultado: {
+          nro: nroFinal,
+          nivel: nivelFinal,
+          cliente: resNoEntrega.cliente || p.nombre || 'Cliente',
+          telefono: p.telefono || '',
+          accion: 'reagendar',
+          nuevoDia: modalNoEntrega.nuevoDia,
+          nuevoHorario: modalNoEntrega.nuevoHorario,
+        }
+      }));
+
+      if (fetchSheetPedidos) fetchSheetPedidos();
+    } catch (err) {
+      setModalNoEntrega(prev => ({ ...prev, guardando: false, error: err.message || 'Error al reagendar pedido' }));
+    }
+  }, [modalNoEntrega, actualizarDatosCliente, noEntregasMap, fetchSheetPedidos]);
 
   const toggleCheckItem = useCallback((numPedido, itemIdx) => {
     setChecksPorPedido(prev => {
@@ -989,6 +1264,85 @@ export default function AgendaEntregas({ rol, usuario }) {
     }
   }, [preparaciones, revertirStockBolsa, actualizarEstado]);
 
+  const handleConfirmarCancelarNoEntrega = useCallback(async () => {
+    if (!modalNoEntrega || modalNoEntrega.guardando) return;
+    const p = modalNoEntrega.pedido;
+    const motivoFinal = modalNoEntrega.motivoSeleccionado === 'Otro'
+      ? (modalNoEntrega.motivoOtro.trim() || 'Otro')
+      : modalNoEntrega.motivoSeleccionado;
+    const motivoCompleto = `No entregado: ${motivoFinal}`;
+    const fechaActual = new Date().toISOString().split('T')[0];
+
+    setModalNoEntrega(prev => ({ ...prev, guardando: true, error: null }));
+    try {
+      // 1. Registrar no entrega en el backend primero
+      const resNoEntrega = await apiRegistrarNoEntrega({
+        numero_pedido: p.numero_pedido,
+        motivo: motivoFinal,
+        accion_tomada: 'cancelar',
+      });
+
+      if (!resNoEntrega || resNoEntrega.ok === false) {
+        setModalNoEntrega(prev => ({
+          ...prev,
+          guardando: false,
+          error: resNoEntrega?.error || 'Error al registrar la no entrega en el servidor.'
+        }));
+        return; // NO continuar con cancelar si falla
+      }
+
+      // 2. Llamar a liberarPedido con motivo "No entregado: <motivo>"
+      const res = await apiLiberarPedido({ numero_pedido: p.numero_pedido, motivo: motivoCompleto });
+      if (res && res.ok === false) {
+        setModalNoEntrega(prev => ({ ...prev, guardando: false, error: res.error || 'Error al liberar el stock en el Sheet.' }));
+        return;
+      }
+
+      // 3. Revertir bolsas de preparación si existían en memoria
+      const prep = preparaciones[p.numero_pedido];
+      if (prep?.items) {
+        prep.items.forEach(item => {
+          (item.bolsasAsignadas || []).forEach(bolsa => revertirStockBolsa(bolsa));
+        });
+      }
+
+      setPreparaciones(prev => { const { [p.numero_pedido]: _, ...rest } = prev; return rest; });
+
+      // 4. Marcar pedido como cancelado
+      actualizarEstado(p.numero_pedido, 'Cancelado', motivoFinal);
+      p.motivo_no_entrega = motivoFinal;
+      p.fecha_no_entrega = fechaActual;
+
+      // 5. Actualizar mapa de no entregas en memoria
+      const nroFinal = resNoEntrega.nro || (Number(noEntregasMap[p.numero_pedido]?.total || 0) + 1);
+      const nivelFinal = resNoEntrega.nivel || 'primera';
+      setNoEntregasMap(prev => ({
+        ...prev,
+        [p.numero_pedido]: {
+          total: nroFinal,
+          nivel: nivelFinal,
+        }
+      }));
+
+      // 6. Mostrar alerta / aviso según nivel
+      setModalNoEntrega(prev => ({
+        ...prev,
+        guardando: false,
+        resultado: {
+          nro: nroFinal,
+          nivel: nivelFinal,
+          cliente: resNoEntrega.cliente || p.nombre || 'Cliente',
+          telefono: p.telefono || '',
+          accion: 'cancelar',
+        }
+      }));
+
+      if (fetchSheetPedidos) fetchSheetPedidos();
+    } catch (err) {
+      setModalNoEntrega(prev => ({ ...prev, guardando: false, error: err.message || 'Error al cancelar pedido' }));
+    }
+  }, [modalNoEntrega, preparaciones, revertirStockBolsa, actualizarEstado, noEntregasMap, fetchSheetPedidos]);
+
   const quitarBolsaAsignada = useCallback((numPedido, itemIdx, bolsaIdx) => {
     setPreparaciones(prev => {
       const prep = { ...prev[numPedido] };
@@ -1249,7 +1603,16 @@ export default function AgendaEntregas({ rol, usuario }) {
             const estaPreparando = preparandoPedido === p.numero_pedido;
             const todosCompletos = prep?.completado || false;
             const tieneBolsas = prep?.items?.some(it => it.bolsasAsignadas?.length > 0);
-            const esArmado = estadoActual === 'preparado' || estadoActual === 'listo';
+            const esArmado = todosCompletos || estadoActual === 'preparado' || estadoActual === 'listo';
+
+            // Estados de cobro (Requisitos 1, 2, 3)
+            const estadoPago = (p.estado_pago || '').toLowerCase().trim();
+            const estaCobrado = Boolean(p.cobrado || estadoPago === 'approved' || estadoPago === 'pagado');
+            const esPorCobrar = !estaCobrado;
+            const rawMedioCobrado = p.medio_pago || p.medio || p.metodo_pago || '';
+            const medioCobradoLabel = MEDIOS_LABELS[rawMedioCobrado] || (rawMedioCobrado ? rawMedioCobrado.toUpperCase() : '');
+            const montoCobradoVal = p.monto_cobrado != null && !isNaN(Number(p.monto_cobrado)) ? Number(p.monto_cobrado) : null;
+            const totalExactoPedido = calcularTotalDetalle(p, prep);
 
             const configEstado = {
               'pendiente':    { icon: '⏳', label: 'PENDIENTE',    color: 'text-amber-400', bg: 'bg-amber-500/5',  border: 'border-amber-500/10' },
@@ -1287,6 +1650,25 @@ export default function AgendaEntregas({ rol, usuario }) {
                         {prep && tieneBolsas && !todosCompletos && (
                           <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse">EN PREPARACIÓN</span>
                         )}
+                        {/* Etiqueta POR COBRAR o COBRADO (Requisito 1 y 3) */}
+                        {esPorCobrar ? (
+                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm animate-pulse flex items-center gap-1">
+                            💰 POR COBRAR
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm flex items-center gap-1">
+                            ✅ COBRADO {medioCobradoLabel ? `· ${medioCobradoLabel}` : ''} {montoCobradoVal ? `$${Number(montoCobradoVal).toLocaleString('es-AR')}` : ''}
+                          </span>
+                        )}
+                        {/* Insignia chica de No Entregas si el cliente tiene 1 o más (Requisito 4) */}
+                        {noEntregasMap[p.numero_pedido]?.total > 0 && (
+                          <span
+                            className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg bg-red-500/15 text-red-300 border border-red-500/30 shadow-sm flex items-center gap-1"
+                            title={`${noEntregasMap[p.numero_pedido].total} no entrega(s) registrada(s)`}
+                          >
+                            ⚠️ {noEntregasMap[p.numero_pedido].total} {noEntregasMap[p.numero_pedido].total === 1 ? 'no entrega' : 'no entregas'}
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         <span className="text-[11px] text-gray-500 flex items-center gap-0.5"><MapPin size={10} /> {p.localidad}</span>
@@ -1296,14 +1678,35 @@ export default function AgendaEntregas({ rol, usuario }) {
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
+                    {/* Botón Cobrar en cabecera de pedido por cobrar (Requisito 2 y 3) */}
+                    {esPorCobrar && (
+                      <button
+                        type="button"
+                        disabled={!esArmado}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (esArmado) abrirModalCobrar(p);
+                        }}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-md active:scale-95 ${
+                          esArmado
+                            ? 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white cursor-pointer shadow-emerald-950/40 border border-emerald-400/30'
+                            : 'bg-white/5 border border-white/10 text-gray-500 cursor-not-allowed opacity-50'
+                        }`}
+                        title={esArmado ? `Cobrar ${$$ (totalExactoPedido)}` : 'El pedido debe estar armado para cobrar'}
+                      >
+                        <CreditCard size={13} />
+                        <span>Cobrar</span>
+                      </button>
+                    )}
+
                     <button
                       type="button"
-                      onClick={(e) => { e.stopPropagation(); handleCancelarPedido(p); }}
-                      className="hidden sm:flex items-center gap-1 text-gray-500 hover:text-red-400 hover:bg-red-500/10 px-2.5 py-1.5 rounded-xl border border-transparent hover:border-red-500/20 transition-all text-xs font-bold cursor-pointer"
-                      title="Cancelar pedido y devolver stock reservado al Sheet"
+                      onClick={(e) => { e.stopPropagation(); abrirModalNoEntrega(p); }}
+                      className="hidden sm:flex items-center gap-1 text-gray-400 hover:text-red-400 hover:bg-red-500/10 px-2.5 py-1.5 rounded-xl border border-transparent hover:border-red-500/20 transition-all text-xs font-bold cursor-pointer"
+                      title="Registrar pedido no entregado"
                     >
                       <X size={14} />
-                      <span>Cancelar</span>
+                      <span>No entregado</span>
                     </button>
                     {esRen && (
                       <button
@@ -1348,8 +1751,13 @@ export default function AgendaEntregas({ rol, usuario }) {
                                 <AlertCircle size={14} /> Motivo de No Entrega
                               </p>
                               <p className="text-sm text-red-200 mt-1 font-medium italic">
-                                "{motivosNoEntrega[p.numero_pedido] || p.motivo_no_entrega || 'Sin motivo especificado'}"
+                                "{p.motivo_no_entrega || 'Sin motivo especificado'}"
                               </p>
+                              {p.fecha_no_entrega && (
+                                <p className="text-[10px] text-gray-500 mt-0.5 font-mono">
+                                  Fecha registrada: {p.fecha_no_entrega}
+                                </p>
+                              )}
                             </div>
                             <button 
                               type="button"
@@ -1390,12 +1798,34 @@ export default function AgendaEntregas({ rol, usuario }) {
                               </div>
                               <div className="flex justify-between items-center border-t border-white/5 pt-2 mt-1 text-sm">
                                 <span className="text-gray-500">Estado de pago</span>
-                                {(() => {
-                                  const pagoKey = (p.estado_pago || '').toLowerCase().trim();
-                                  const config = PAGO_CONFIG[pagoKey] || { label: p.estado_pago || 'Pendiente', color: 'text-amber-400' };
-                                  return <span className={`font-bold ${config.color}`}>{config.label.toUpperCase()}</span>;
-                                })()}
+                                {esPorCobrar ? (
+                                  <span className="font-black text-amber-400 bg-amber-500/20 px-2 py-0.5 rounded-md border border-amber-500/30 text-xs">
+                                    💰 POR COBRAR
+                                  </span>
+                                ) : (
+                                  <span className="font-bold text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-md border border-emerald-500/30 text-xs">
+                                    ✅ COBRADO {medioCobradoLabel ? `(${medioCobradoLabel})` : ''}
+                                  </span>
+                                )}
                               </div>
+                              {esPorCobrar && (
+                                <button
+                                  type="button"
+                                  disabled={!esArmado}
+                                  onClick={() => {
+                                    if (esArmado) abrirModalCobrar(p);
+                                  }}
+                                  className={`w-full mt-3 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-md active:scale-95 ${
+                                    esArmado
+                                      ? 'bg-gradient-to-r from-emerald-600 via-green-600 to-emerald-500 hover:from-emerald-500 hover:to-green-400 text-white cursor-pointer shadow-emerald-950/40 border border-emerald-400/30'
+                                      : 'bg-white/5 border border-white/10 text-gray-500 cursor-not-allowed opacity-60'
+                                  }`}
+                                  title={esArmado ? 'Abrir pantalla de cobro con pesadas reales' : 'Completá la preparación para habilitar el cobro'}
+                                >
+                                  <CreditCard size={15} />
+                                  <span>{esArmado ? `Cobrar Pedido · ${$$ (totalExactoPedido)}` : 'Cobrar (Requiere pedido armado)'}</span>
+                                </button>
+                              )}
                             </>
                           ) : (
                             <div className="flex items-center justify-center h-full text-gray-500 italic text-xs">Datos de facturación ocultos</div>
@@ -1621,7 +2051,7 @@ export default function AgendaEntregas({ rol, usuario }) {
         </div>
       )}
 
-      {/* ═══════ MODAL CUADRO DE DIÁLOGO: PEDIDO NO ENTREGADO ═══════ */}
+      {/* ═══════ MODAL CUADRO DE DIÁLOGO: PEDIDO NO ENTREGADO (REQUISITOS 4 Y 5) ═══════ */}
       {modalNoEntrega && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-[#181d24] border border-red-500/30 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5">
@@ -1638,70 +2068,493 @@ export default function AgendaEntregas({ rol, usuario }) {
                 </div>
               </div>
               <button 
-                onClick={() => setModalNoEntrega(null)} 
-                className="text-gray-500 hover:text-white p-1 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+                onClick={() => !modalNoEntrega.guardando && setModalNoEntrega(null)} 
+                disabled={modalNoEntrega.guardando}
+                className="text-gray-500 hover:text-white p-1 rounded-lg hover:bg-white/5 transition-colors cursor-pointer disabled:opacity-30"
               >
                 <X size={18} />
               </button>
             </div>
 
-            <div>
-              <label className="block text-[11px] font-black uppercase tracking-wider text-gray-400 mb-2">
-                Seleccioná un motivo rápido:
-              </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {MOTIVOS_PREDEFINIDOS.map((item, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => setModalNoEntrega(prev => ({ ...prev, motivoTexto: item.label }))}
-                    className={`text-left text-xs p-2.5 rounded-xl border transition-all flex items-center gap-2 cursor-pointer ${
-                      modalNoEntrega.motivoTexto === item.label
-                        ? 'bg-red-500/20 border-red-500/40 text-red-200 font-bold shadow-sm'
-                        : 'bg-black/30 border-white/5 text-gray-400 hover:text-white hover:border-white/20'
-                    }`}
-                  >
-                    <span className="text-base">{item.icon}</span>
-                    <span className="truncate">{item.label}</span>
-                  </button>
-                ))}
+            {modalNoEntrega.resultado ? (
+              <div className="space-y-4 animate-in fade-in">
+                {/* Nivel: primera */}
+                {modalNoEntrega.resultado.nivel === 'primera' && (
+                  <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-4 text-blue-200 space-y-2">
+                    <div className="flex items-center gap-2 font-bold text-sm text-blue-300">
+                      <CheckCircle size={18} className="text-blue-400 shrink-0" />
+                      <span>Primera no entrega registrada para {modalNoEntrega.resultado.cliente}</span>
+                    </div>
+                    <p className="text-xs text-blue-200/80">
+                      {modalNoEntrega.resultado.accion === 'reagendar'
+                        ? `El pedido quedó reagendado para el ${modalNoEntrega.resultado.nuevoDia} (${modalNoEntrega.resultado.nuevoHorario}). El stock permanece reservado.`
+                        : 'El pedido fue cancelado y el stock reservado ha sido liberado en el depósito.'}
+                    </p>
+                  </div>
+                )}
+
+                {/* Nivel: alerta (2ª vez) */}
+                {modalNoEntrega.resultado.nivel === 'alerta' && (
+                  <div className="bg-amber-500/15 border border-amber-500/40 rounded-xl p-4 text-amber-200 space-y-3">
+                    <div className="flex items-center gap-2 font-black text-sm text-amber-300">
+                      <AlertTriangle size={18} className="text-amber-400 shrink-0" />
+                      <span>2ª no entrega de {modalNoEntrega.resultado.cliente}. Avisale por WhatsApp que a la próxima queda dado de baja</span>
+                    </div>
+                    <p className="text-xs text-amber-200/90 leading-relaxed">
+                      {modalNoEntrega.resultado.accion === 'reagendar'
+                        ? `El pedido quedó reagendado para el ${modalNoEntrega.resultado.nuevoDia} (${modalNoEntrega.resultado.nuevoHorario}).`
+                        : 'El pedido fue cancelado y el stock liberado.'}
+                    </p>
+                    {(() => {
+                      const telClean = String(modalNoEntrega.resultado.telefono || '').replace(/\D/g, '');
+                      if (!telClean) return null;
+                      const nombreCliente = (modalNoEntrega.resultado.cliente || modalNoEntrega.pedido.nombre || 'Cliente').trim();
+                      const primerNombre = nombreCliente.split(' ')[0] || 'Cliente';
+                      const msgWa = `Hola ${primerNombre}, soy de Huerta Urbana. No pudimos entregarte tu pedido. Es la segunda vez. Si vuelve a pasar, no vamos a poder seguir entregándote. ¿Reagendamos?`;
+                      const waUrl = `https://wa.me/${telClean}?text=${encodeURIComponent(msgWa)}`;
+                      return (
+                        <div className="pt-1">
+                          <a
+                            href={waUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs shadow-lg shadow-green-900/30 transition-all cursor-pointer"
+                          >
+                            <MessageCircle size={16} />
+                            <span>Abrir WhatsApp</span>
+                          </a>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+
+                {/* Nivel: baja (3ª vez o más) */}
+                {modalNoEntrega.resultado.nivel === 'baja' && (
+                  <div className="bg-red-500/15 border border-red-500/40 rounded-xl p-4 text-red-200 space-y-3">
+                    <div className="flex items-center gap-2 font-black text-sm text-red-300">
+                      <AlertCircle size={18} className="text-red-400 shrink-0" />
+                      <span>{modalNoEntrega.resultado.cliente} llegó a 3 no entregas. Corresponde darlo de baja</span>
+                    </div>
+                    <p className="text-xs text-red-200/90 leading-relaxed">
+                      {modalNoEntrega.resultado.accion === 'reagendar'
+                        ? `El pedido quedó reagendado para el ${modalNoEntrega.resultado.nuevoDia} (${modalNoEntrega.resultado.nuevoHorario}).`
+                        : 'El pedido fue cancelado y el stock liberado.'}
+                    </p>
+                    {(() => {
+                      const telClean = String(modalNoEntrega.resultado.telefono || '').replace(/\D/g, '');
+                      if (!telClean) return null;
+                      const nombreCliente = (modalNoEntrega.resultado.cliente || modalNoEntrega.pedido.nombre || 'Cliente').trim();
+                      const primerNombre = nombreCliente.split(' ')[0] || 'Cliente';
+                      const msgWa = `Hola ${primerNombre}, soy de Huerta Urbana. Es la tercera vez que no podemos entregarte, así que damos de baja tu cuenta de pedidos. Si querés retomar, escribinos.`;
+                      const waUrl = `https://wa.me/${telClean}?text=${encodeURIComponent(msgWa)}`;
+                      return (
+                        <div className="pt-1">
+                          <a
+                            href={waUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs shadow-lg shadow-green-900/30 transition-all cursor-pointer"
+                          >
+                            <MessageCircle size={16} />
+                            <span>Abrir WhatsApp</span>
+                          </a>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setModalNoEntrega(null)}
+                  className="w-full py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-white font-bold text-xs transition-all cursor-pointer"
+                >
+                  Entendido / Cerrar
+                </button>
               </div>
+            ) : (
+              <>
+                {/* Motivos requeridos: No estaba, No atendió, Dirección incorrecta, Otro */}
+                <div>
+                  <label className="block text-[11px] font-black uppercase tracking-wider text-gray-400 mb-2">
+                    Motivo de la no entrega:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { id: 'No estaba', label: 'No estaba', icon: '🚪' },
+                      { id: 'No atendió', label: 'No atendió', icon: '📵' },
+                      { id: 'Dirección incorrecta', label: 'Dirección incorrecta', icon: '📍' },
+                      { id: 'Otro', label: 'Otro', icon: '✏️' },
+                    ].map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        disabled={modalNoEntrega.guardando}
+                        onClick={() => setModalNoEntrega(prev => ({ ...prev, motivoSeleccionado: item.id }))}
+                        className={`text-left text-xs p-2.5 rounded-xl border transition-all flex items-center gap-2 cursor-pointer ${
+                          modalNoEntrega.motivoSeleccionado === item.id
+                            ? 'bg-red-500/20 border-red-500/40 text-red-200 font-bold shadow-sm'
+                            : 'bg-black/30 border-white/5 text-gray-400 hover:text-white hover:border-white/20'
+                        }`}
+                      >
+                        <span className="text-base">{item.icon}</span>
+                        <span className="truncate">{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {modalNoEntrega.motivoSeleccionado === 'Otro' && (
+                  <div>
+                    <label className="block text-[11px] font-black uppercase tracking-wider text-gray-400 mb-1.5">
+                      Detalle del motivo:
+                    </label>
+                    <input
+                      type="text"
+                      disabled={modalNoEntrega.guardando}
+                      value={modalNoEntrega.motivoOtro}
+                      onChange={(e) => setModalNoEntrega(prev => ({ ...prev, motivoOtro: e.target.value }))}
+                      placeholder="Escribí aquí el motivo..."
+                      className="w-full bg-black/50 border border-white/10 focus:border-red-500/50 rounded-xl p-3 text-white text-xs placeholder:text-gray-600 outline-none transition-colors font-medium"
+                    />
+                  </div>
+                )}
+
+                {/* Dos opciones: Reagendar y Cancelar pedido */}
+                {!modalNoEntrega.accion ? (
+                  <div className="space-y-2 pt-1">
+                    <label className="block text-[11px] font-black uppercase tracking-wider text-gray-400">
+                      Seleccioná la acción:
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setModalNoEntrega(prev => ({ ...prev, accion: 'reagendar' }))}
+                        className="p-4 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 hover:border-blue-500/50 text-blue-200 font-bold text-left transition-all cursor-pointer space-y-1 group"
+                      >
+                        <div className="flex items-center gap-2 text-sm font-black text-blue-400 group-hover:text-blue-300">
+                          <span>🗓️</span> Reagendar
+                        </div>
+                        <p className="text-[11px] text-gray-400 font-normal">
+                          Elegí día y horario nuevo. El stock sigue reservado.
+                        </p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setModalNoEntrega(prev => ({ ...prev, accion: 'cancelar', confirmandoCancelar: true }))}
+                        className="p-4 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 hover:border-red-500/50 text-red-200 font-bold text-left transition-all cursor-pointer space-y-1 group"
+                      >
+                        <div className="flex items-center gap-2 text-sm font-black text-red-400 group-hover:text-red-300">
+                          <span>🛑</span> Cancelar pedido
+                        </div>
+                        <p className="text-[11px] text-gray-400 font-normal">
+                          Libera el stock con liberarPedido y cancela el pedido.
+                        </p>
+                      </button>
+                    </div>
+                  </div>
+                ) : modalNoEntrega.accion === 'reagendar' ? (
+                  <div className="space-y-3 bg-black/30 border border-blue-500/20 rounded-xl p-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-black uppercase tracking-wider text-blue-400 flex items-center gap-1.5">
+                        <span>🗓️</span> Reagendar Entrega
+                      </h4>
+                      <button
+                        type="button"
+                        disabled={modalNoEntrega.guardando}
+                        onClick={() => setModalNoEntrega(prev => ({ ...prev, accion: null }))}
+                        className="text-[11px] text-gray-400 hover:text-white underline cursor-pointer"
+                      >
+                        Cambiar opción
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] text-gray-400 font-bold uppercase mb-1">Nuevo Día:</label>
+                        <select
+                          disabled={modalNoEntrega.guardando}
+                          value={modalNoEntrega.nuevoDia}
+                          onChange={(e) => setModalNoEntrega(prev => ({ ...prev, nuevoDia: e.target.value }))}
+                          className="w-full bg-[#12161c] border border-white/10 rounded-xl p-2.5 text-xs text-white outline-none focus:border-blue-500"
+                        >
+                          <option value="Martes">Martes</option>
+                          <option value="Jueves">Jueves</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-gray-400 font-bold uppercase mb-1">Nuevo Horario:</label>
+                        <input
+                          type="text"
+                          disabled={modalNoEntrega.guardando}
+                          value={modalNoEntrega.nuevoHorario}
+                          onChange={(e) => setModalNoEntrega(prev => ({ ...prev, nuevoHorario: e.target.value }))}
+                          placeholder="09:00 - 13:00"
+                          className="w-full bg-[#12161c] border border-white/10 rounded-xl p-2.5 text-xs text-white outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-gray-400 italic">
+                      ℹ️ El stock permanece reservado para este pedido en la nueva fecha.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 bg-red-500/10 border border-red-500/30 rounded-xl p-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-black uppercase tracking-wider text-red-400 flex items-center gap-1.5">
+                        <span>⚠️</span> Confirmar Cancelación
+                      </h4>
+                      <button
+                        type="button"
+                        disabled={modalNoEntrega.guardando}
+                        onClick={() => setModalNoEntrega(prev => ({ ...prev, accion: null }))}
+                        className="text-[11px] text-gray-400 hover:text-white underline cursor-pointer"
+                      >
+                        Volver
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-300">
+                      ¿Estás seguro de cancelar el pedido <strong>{modalNoEntrega.pedido.numero_pedido}</strong>?
+                    </p>
+                    <div className="bg-black/40 p-2.5 rounded-lg text-[11px] text-red-200 border border-red-500/20">
+                      Se llamará a <code>liberarPedido</code> con motivo: <strong className="text-white">"No entregado: {modalNoEntrega.motivoSeleccionado === 'Otro' ? (modalNoEntrega.motivoOtro || 'Otro') : modalNoEntrega.motivoSeleccionado}"</strong> y el stock reservado volverá a estar disponible en el depósito.
+                    </div>
+                  </div>
+                )}
+
+                {modalNoEntrega.error && (
+                  <div className="bg-red-500/15 border border-red-500/30 rounded-xl p-3 text-red-300 text-xs font-medium flex items-center gap-2">
+                    <AlertCircle size={16} className="text-red-400 shrink-0" />
+                    <span>{modalNoEntrega.error}</span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between gap-3 pt-2">
+                  <button
+                    type="button"
+                    disabled={modalNoEntrega.guardando}
+                    onClick={() => setModalNoEntrega(null)}
+                    className="flex-1 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold transition-all cursor-pointer disabled:opacity-40"
+                  >
+                    Cerrar
+                  </button>
+
+                  {modalNoEntrega.accion === 'reagendar' && (
+                    <button
+                      type="button"
+                      disabled={modalNoEntrega.guardando}
+                      onClick={handleConfirmarReagendar}
+                      className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold transition-all cursor-pointer shadow-lg shadow-blue-900/30 flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {modalNoEntrega.guardando ? 'Guardando...' : 'Confirmar Reagendado'}
+                    </button>
+                  )}
+
+                  {modalNoEntrega.accion === 'cancelar' && (
+                    <button
+                      type="button"
+                      disabled={modalNoEntrega.guardando}
+                      onClick={handleConfirmarCancelarNoEntrega}
+                      className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 active:scale-95 text-white text-xs font-bold transition-all cursor-pointer shadow-lg shadow-red-900/30 flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {modalNoEntrega.guardando ? 'Cancelando...' : 'Confirmar Cancelación'}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ═══════ MODAL CUADRO DE DIÁLOGO: COBRAR PEDIDO (REQUISITOS 2 Y 3) ═══════ */}
+      {modalCobrar && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#181d24] border border-emerald-500/30 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
+            {/* Cabecera */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 text-lg font-bold">
+                  💳
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Cobrar Pedido</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {modalCobrar.pedido.nombre} · Pedido {modalCobrar.pedido.numero_pedido}
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => !modalCobrar.guardando && setModalCobrar(null)} 
+                disabled={modalCobrar.guardando}
+                className="text-gray-500 hover:text-white p-1 rounded-lg hover:bg-white/5 transition-colors cursor-pointer disabled:opacity-30"
+              >
+                <X size={18} />
+              </button>
             </div>
 
-            <div>
-              <label className="block text-[11px] font-black uppercase tracking-wider text-gray-400 mb-1.5">
-                Detalle / Aclaración del motivo:
-              </label>
-              <textarea
-                rows={3}
-                value={modalNoEntrega.motivoTexto}
-                onChange={(e) => setModalNoEntrega(prev => ({ ...prev, motivoTexto: e.target.value }))}
-                placeholder="Escribí aquí por qué no se entregó el pedido..."
-                className="w-full bg-black/50 border border-white/10 focus:border-red-500/50 rounded-xl p-3 text-white text-xs placeholder:text-gray-600 outline-none resize-none transition-colors font-medium"
-              />
-            </div>
+            {/* Resultado o formulario */}
+            {modalCobrar.resultado ? (
+              <div className="space-y-4 animate-in fade-in">
+                {modalCobrar.resultado.ya_cobrado ? (
+                  <div className="bg-amber-500/15 border border-amber-500/30 rounded-xl p-4 text-amber-300 space-y-2">
+                    <div className="flex items-center gap-2 font-bold text-sm">
+                      <AlertCircle size={18} className="text-amber-400" />
+                      <span>Este pedido ya estaba cobrado</span>
+                    </div>
+                    <p className="text-xs text-amber-200/80">
+                      El servidor reportó que el cobro ya fue registrado previamente. Los datos han sido actualizados.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 text-emerald-200 space-y-3">
+                    <div className="flex items-center gap-2 font-bold text-sm text-emerald-300">
+                      <CheckCircle size={18} className="text-emerald-400" />
+                      <span>¡Cobro registrado exitosamente!</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 pt-2 border-t border-emerald-500/20 text-center">
+                      <div className="bg-black/30 p-2 rounded-lg">
+                        <p className="text-[10px] text-gray-400 font-bold uppercase">Cobrado</p>
+                        <p className="text-sm font-black text-white">${Number(modalCobrar.resultado.cobrado || modalCobrar.totalCobrar).toLocaleString('es-AR')}</p>
+                      </div>
+                      <div className="bg-black/30 p-2 rounded-lg">
+                        <p className="text-[10px] text-gray-400 font-bold uppercase">Comisión</p>
+                        <p className="text-sm font-black text-rose-400">${Number(modalCobrar.resultado.comision || 0).toLocaleString('es-AR')}</p>
+                      </div>
+                      <div className="bg-black/30 p-2 rounded-lg">
+                        <p className="text-[10px] text-gray-400 font-bold uppercase">Neto</p>
+                        <p className="text-sm font-black text-emerald-400">${Number(modalCobrar.resultado.neto || 0).toLocaleString('es-AR')}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
-            <div className="flex items-center justify-between gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setModalNoEntrega(null)}
-                className="flex-1 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold transition-all cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const motivoFinal = (modalNoEntrega.motivoTexto || '').trim() || 'Sin motivo especificado';
-                  guardarMotivo(modalNoEntrega.pedido.numero_pedido, motivoFinal);
-                  actualizarEstado(modalNoEntrega.pedido.numero_pedido, 'No entregado', motivoFinal);
-                  setModalNoEntrega(null);
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 active:scale-95 text-white text-xs font-bold transition-all cursor-pointer shadow-lg shadow-red-900/30 flex items-center justify-center gap-1.5"
-              >
-                <span>Guardar y Marcar No Entregado</span>
-              </button>
-            </div>
+                {/* Avisos del servidor (e.g. Stock negativo de ...) */}
+                {modalCobrar.resultado.avisos && (
+                  <div className="bg-amber-500/15 border border-amber-500/30 rounded-xl p-3.5 text-amber-300 text-xs space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <AlertTriangle size={15} className="text-amber-400 shrink-0" />
+                      <span>Avisos del servidor:</span>
+                    </div>
+                    <p className="text-amber-200 whitespace-pre-wrap pl-5 font-mono text-[11px]">
+                      {Array.isArray(modalCobrar.resultado.avisos)
+                        ? modalCobrar.resultado.avisos.join('\n')
+                        : String(modalCobrar.resultado.avisos)}
+                    </p>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setModalCobrar(null)}
+                  className="w-full py-3 rounded-xl bg-gray-800 hover:bg-gray-700 text-white font-bold text-xs transition-all cursor-pointer"
+                >
+                  Cerrar
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Total exacto a cobrar */}
+                <div className="bg-black/40 border border-white/5 rounded-xl p-4 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-gray-400 font-medium">Total Exacto a Cobrar</p>
+                    <p className="text-[10px] text-gray-500 mt-0.5">Suma de subtotales reales (redondeado a $1)</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-black text-emerald-400">
+                      ${modalCobrar.totalCobrar.toLocaleString('es-AR')}
+                    </p>
+                    <p className="text-[10px] text-gray-500">{modalCobrar.items.length} productos con pesadas reales</p>
+                  </div>
+                </div>
+
+                {/* Selector de medio de pago (sin efectivo) */}
+                <div>
+                  <label className="block text-[11px] font-black uppercase tracking-wider text-gray-400 mb-2">
+                    Medio de Pago:
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {[
+                      { id: 'debito', label: 'Débito', icon: '💳' },
+                      { id: 'credito', label: 'Crédito', icon: '💳' },
+                      { id: 'prepaga', label: 'Prepaga', icon: '💳' },
+                      { id: 'qr', label: 'QR', icon: '📱' },
+                      { id: 'transferencia', label: 'Transferencia', icon: '🏦' },
+                      { id: 'link_pago', label: 'Link de Pago', icon: '🔗' },
+                    ].map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        disabled={modalCobrar.guardando}
+                        onClick={() => setModalCobrar(prev => ({ ...prev, medio: m.id }))}
+                        className={`p-2.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                          modalCobrar.medio === m.id
+                            ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 shadow-sm'
+                            : 'bg-black/30 border-white/5 text-gray-400 hover:text-white hover:border-white/20'
+                        }`}
+                      >
+                        <span>{m.icon}</span>
+                        <span className="truncate">{m.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Campo opcional de nota */}
+                <div>
+                  <label className="block text-[11px] font-black uppercase tracking-wider text-gray-400 mb-1.5">
+                    Nota / Observación (opcional):
+                  </label>
+                  <input
+                    type="text"
+                    disabled={modalCobrar.guardando}
+                    value={modalCobrar.nota}
+                    onChange={(e) => setModalCobrar(prev => ({ ...prev, nota: e.target.value }))}
+                    placeholder="Ej: Pago con tarjeta VISA terminado en 1234"
+                    className="w-full bg-black/50 border border-white/10 focus:border-emerald-500/50 rounded-xl p-3 text-white text-xs placeholder:text-gray-600 outline-none transition-colors font-medium"
+                  />
+                </div>
+
+                {/* Error si falló */}
+                {modalCobrar.error && (
+                  <div className="bg-red-500/15 border border-red-500/30 rounded-xl p-3 text-red-300 text-xs font-medium flex items-center gap-2">
+                    <AlertCircle size={16} className="text-red-400 shrink-0" />
+                    <span>{modalCobrar.error}</span>
+                  </div>
+                )}
+
+                {/* Botones de acción (evitar doble clic con disabled) */}
+                <div className="flex items-center justify-between gap-3 pt-2">
+                  <button
+                    type="button"
+                    disabled={modalCobrar.guardando}
+                    onClick={() => setModalCobrar(null)}
+                    className="flex-1 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold transition-all cursor-pointer disabled:opacity-40"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={modalCobrar.guardando}
+                    onClick={handleConfirmarCobro}
+                    className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 active:scale-95 text-white text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-lg shadow-emerald-950/40 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {modalCobrar.guardando ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Registrando cobro...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Confirmar Cobro</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -845,6 +845,24 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
     ? `$${calculo.totalACobrar.toLocaleString('es-AR')}`
     : `$${Number(pedido?.total || 0).toLocaleString('es-AR')}${avisoTotalSinPrecios}`;
 
+  const estadoPago = (pedido?.estado_pago || '').toLowerCase().trim();
+  const estaCobrado = Boolean(pedido?.cobrado || estadoPago === 'approved' || estadoPago === 'pagado' || pedido?.monto_cobrado);
+  const MEDIOS_NOMBRES = {
+    debito: 'Débito',
+    credito: 'Crédito',
+    prepaga: 'Prepaga',
+    qr: 'QR',
+    transferencia: 'Transferencia',
+    link_pago: 'Link de Pago',
+    mercadopago: 'Mercado Pago'
+  };
+  const rawMedio = String(pedido?.medio_pago || pedido?.medio || pedido?.metodo_pago || '').toLowerCase().trim();
+  const medioNombre = MEDIOS_NOMBRES[rawMedio] || (rawMedio ? rawMedio.toUpperCase() : '');
+  const montoCobradoNum = pedido?.monto_cobrado != null && !isNaN(Number(pedido.monto_cobrado))
+    ? Number(pedido.monto_cobrado)
+    : (calculo.tieneDetalleJson ? calculo.totalACobrar : Number(pedido?.total || 0));
+  const montoCobradoStr = `$${Math.round(montoCobradoNum).toLocaleString('es-AR')}`;
+
   // Generación local 100% offline del código QR
   const qrUrlDestino = `https://www.huertaurbana.com.ar/pedido/${encodeURIComponent(pedido?.numero_pedido || '')}`;
   const qrSvgHtml = generarQRSvg(qrUrlDestino, 70);
@@ -921,15 +939,21 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
               <span class="val">Contado - pago en el lugar</span>
             </div>
 
-            <!-- Medio de pago con casillas (QR, Transf., Débito, Crédito) -->
+            <!-- Medio de pago con casillas o confirmación de cobro -->
             <div class="pago-linea">
               <span style="font-weight:700;">Medio de Pago:</span>
-              <div class="casillas-pago">
-                <span class="casilla-item"><span class="casilla-box"></span> QR</span>
-                <span class="casilla-item"><span class="casilla-box"></span> Transf.</span>
-                <span class="casilla-item"><span class="casilla-box"></span> Débito</span>
-                <span class="casilla-item"><span class="casilla-box"></span> Crédito</span>
-              </div>
+              ${estaCobrado ? `
+                <span style="font-weight:800; color:#15803d; text-transform:uppercase;">${medioNombre || 'COBRADO'}</span>
+                <span style="margin-left: 14px; font-weight:700;">Monto Cobrado:</span>
+                <span style="font-weight:800; color:#15803d;">${montoCobradoStr}</span>
+              ` : `
+                <div class="casillas-pago">
+                  <span class="casilla-item"><span class="casilla-box"></span> QR</span>
+                  <span class="casilla-item"><span class="casilla-box"></span> Transf.</span>
+                  <span class="casilla-item"><span class="casilla-box"></span> Débito</span>
+                  <span class="casilla-item"><span class="casilla-box"></span> Crédito</span>
+                </div>
+              `}
             </div>
 
             ${pedido?.observaciones ? `
@@ -980,8 +1004,8 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
               <td style="text-align:right; font-family:monospace;">${creditoStr}</td>
             </tr>
             <tr class="row-total-final">
-              <td>TOTAL A COBRAR:</td>
-              <td style="text-align:right; font-family:monospace;">${totalFinalStr}</td>
+              <td>${estaCobrado ? 'TOTAL COBRADO:' : 'TOTAL A COBRAR:'}</td>
+              <td style="text-align:right; font-family:monospace;">${estaCobrado ? montoCobradoStr : totalFinalStr}</td>
             </tr>
           </table>
         </div>

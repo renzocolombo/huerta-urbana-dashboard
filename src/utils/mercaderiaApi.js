@@ -309,3 +309,34 @@ export async function apiLiberarPedido({ numero_pedido, motivo = 'Cancelado' }) 
   });
 }
 
+export async function apiCobrarPedido({ numero_pedido, medio, monto, items, nota }) {
+  return llamarAppsScript('cobrarPedido', {
+    numero_pedido: String(numero_pedido).trim(),
+    medio: String(medio).trim().toLowerCase(),
+    monto: Math.round(Number(monto) || 0),
+    items: (items || []).map(it => ({
+      producto: String(it.producto || it.nombre || '').trim(),
+      cantidad_real: Number(it.cantidad_real != null ? it.cantidad_real : (it.cantidad || 0)),
+    })),
+    ...(nota ? { nota: String(nota).trim() } : {}),
+  });
+}
+
+// ── 7. NO ENTREGAS & ALERTAS DE CLIENTE ─────────────────────────────────────
+
+export async function apiRegistrarNoEntrega({ numero_pedido, motivo, accion_tomada }) {
+  return llamarAppsScript('registrarNoEntrega', {
+    numero_pedido: String(numero_pedido).trim(),
+    motivo: String(motivo || '').trim(),
+    accion_tomada: String(accion_tomada || '').trim().toLowerCase(), // "reagendar" | "cancelar"
+  });
+}
+
+export async function apiGetNoEntregasCliente({ numero_pedido }) {
+  return llamarAppsScript('getNoEntregasCliente', {
+    numero_pedido: String(numero_pedido).trim(),
+  });
+}
+
+
+
