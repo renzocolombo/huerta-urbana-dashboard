@@ -24,9 +24,12 @@ import {
   apiRegistrarNoEntrega,
   apiGetNoEntregasCliente,
   apiRegistrarReembolso,
-  apiGetReembolsosPendientes
+  apiGetReembolsosPendientes,
+  apiGetReembolsos
 } from '../utils/mercaderiaApi';
 import { imprimirEtiquetaBolsa } from '../utils/etiquetaPrinter';
+import ReembolsosTab from './ReembolsosTab';
+import ModalReembolsoDevuelto from './ModalReembolsoDevuelto';
 
 const DIAS_SEMANA = ['Martes', 'Jueves'];
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
@@ -51,6 +54,12 @@ const MEDIOS_LABELS = {
   qr: 'QR',
   transferencia: 'Transferencia',
   link_pago: 'Link de Pago',
+};
+
+const MEDIOS_REEMBOLSO_LABELS = {
+  mercado_pago: 'Mercado Pago',
+  transferencia: 'Transferencia',
+  otro: 'Otro',
 };
 
 const PREPARACIONES_KEY = 'huerta_preparaciones_v1';
@@ -581,6 +590,40 @@ export default function AgendaEntregas({ rol, usuario }) {
   const [syncNotice, setSyncNotice] = useState(null); // { tipo: 'retrying' | 'error' | 'success', mensaje: string }
   const syncTimerRef = useRef(null);
   const [reembolsosPendientesList, setReembolsosPendientesList] = useState([]);
+  const [reembolsosData, setReembolsosData] = useState([]);
+  const [cargandoReembolsos, setCargandoReembolsos] = useState(false);
+  const [errorReembolsos, setErrorReembolsos] = useState(null);
+  const [modalReembolso, setModalReembolso] = useState({
+    abierto: false,
+    pedido: null,
+    guardando: false,
+    error: null,
+  });
+
+  const cargarReembolsos = useCallback(async () => {
+    setCargandoReembolsos(true);
+    setErrorReembolsos(null);
+    try {
+      const res = await apiGetReembolsos();
+      if (res && res.ok && Array.isArray(res.reembolsos)) {
+        setReembolsosData(res.reembolsos);
+        const pendientes = res.reembolsos.filter(r => (r.estado || '').toLowerCase().trim() === 'pendiente');
+        setReembolsosPendientesList(pendientes);
+      } else {
+        setErrorReembolsos(res?.error || 'No se pudieron obtener los reembolsos.');
+      }
+    } catch (e) {
+      setErrorReembolsos(e.message || 'Error de conexión al cargar reembolsos.');
+    } finally {
+      setCargandoReembolsos(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (vistaActual === 'reembolsos') {
+      cargarReembolsos();
+    }
+  }, [vistaActual, cargarReembolsos]);
 
   // 1. Cargar preparaciones del Sheet al montar y combinar (gana lo del Sheet)
   useEffect(() => {
@@ -1791,33 +1834,111 @@ export default function AgendaEntregas({ rol, usuario }) {
     }
   }, [modalNoEntrega, preparaciones, revertirStockBolsa, actualizarEstado, noEntregasMap, fetchSheetPedidos]);
 
-  const handleMarcarReembolsoDevuelto = useCallback(async (p) => {
-    const monto = p.reembolso_monto != null ? Number(p.reembolso_monto) : Math.round(Number(p.total) || 0);
-    const confirmar = window.confirm(`¿Ya devolviste $${monto.toLocaleString('es-AR')} desde Mercado Pago?`);
-    if (!confirmar) return;
+  const abrirModalReembolsoDevuelto = useCallback((p) => {
+    const num = String(p.numero_pedido || p.pedido || '').trim();
+    const nombre = p.nombre || p.cliente || 'Cliente';
+    const tel = p.telefono || '';
+    const monto = p.reembolso_monto != null && p.reembolso_monto !== ''
+      ? Number(p.reembolso_monto)
+      : (p.monto != null && p.monto !== ''
+          ? Number(p.monto)
+          : Math.round(Number(p.total) || 0));
 
+    setModalReembolso({
+      abierto: true,
+      pedido: {
+        ...p,
+        numero_pedido: num,
+        nombre,
+        telefono: tel,
+        _montoReembolso: monto,
+      },
+      guardando: false,
+      error: null,
+    });
+  }, []);
+
+  const handleConfirmarReembolsoDevuelto = useCallback(async ({ medio, referencia, nota }) => {
+    if (!modalReembolso.pedido || !medio) return;
+    const p = modalReembolso.pedido;
+    const num = String(p.numero_pedido).trim();
+    const monto = p._montoReembolso != null
+      ? p._montoReembolso
+      : (p.reembolso_monto != null ? Number(p.reembolso_monto) : Math.round(Number(p.total) || 0));
+
+    setModalReembolso(prev => ({ ...prev, guardando: true, error: null }));
     try {
       const res = await apiRegistrarReembolso({
-        numero_pedido: p.numero_pedido,
+        numero_pedido: num,
         estado: 'devuelto',
+        monto,
+        medio,
+        referencia,
+        nota,
       });
 
       if (!res || res.ok === false) {
-        alert(`Error al registrar reembolso devuelto: ${res?.error || 'Error en el servidor'}`);
+        setModalReembolso(prev => ({
+          ...prev,
+          guardando: false,
+          error: res?.error || 'Error al registrar reembolso devuelto en el servidor.',
+        }));
         return;
       }
 
+      // Éxito: actualizar estado en memoria de PEDIDOS
       p.reembolso_estado = 'devuelto';
+      p.reembolso_medio = medio;
+      p.reembolso_ref = referencia;
       p.fecha_reembolso = new Date().toISOString();
 
-      // Quitar de la lista de pendientes arriba de la Agenda
-      setReembolsosPendientesList(prev => prev.filter(r => String(r.pedido).trim() !== String(p.numero_pedido).trim()));
+      const pedidoEnLista = (PEDIDOS || []).find(item => String(item.numero_pedido).trim() === num);
+      if (pedidoEnLista) {
+        pedidoEnLista.reembolso_estado = 'devuelto';
+        pedidoEnLista.reembolso_medio = medio;
+        pedidoEnLista.reembolso_ref = referencia;
+        pedidoEnLista.fecha_reembolso = new Date().toISOString();
+      }
 
+      // Quitar de la lista de pendientes arriba de la Agenda
+      setReembolsosPendientesList(prev => prev.filter(r => String(r.pedido || r.numero_pedido).trim() !== num));
+
+      // Actualizar en lista de reembolsos
+      setReembolsosData(prev => prev.map(item => {
+        if (String(item.numero_pedido || item.pedido).trim() === num) {
+          return {
+            ...item,
+            estado: 'devuelto',
+            reembolso_medio: medio,
+            reembolso_ref: referencia,
+            fecha_reembolso: new Date().toISOString(),
+          };
+        }
+        return item;
+      }));
+
+      // Refrescar en segundo plano desde el backend
+      cargarReembolsos();
       if (fetchSheetPedidos) fetchSheetPedidos();
+
+      setModalReembolso({
+        abierto: false,
+        pedido: null,
+        guardando: false,
+        error: null,
+      });
     } catch (err) {
-      alert(`Error: ${err.message || 'Error inesperado'}`);
+      setModalReembolso(prev => ({
+        ...prev,
+        guardando: false,
+        error: err.message || 'Error inesperado al conectar con el servidor',
+      }));
     }
-  }, [fetchSheetPedidos]);
+  }, [modalReembolso, PEDIDOS, cargarReembolsos, fetchSheetPedidos]);
+
+  const handleMarcarReembolsoDevuelto = useCallback((p) => {
+    abrirModalReembolsoDevuelto(p);
+  }, [abrirModalReembolsoDevuelto]);
 
   const quitarBolsaAsignada = useCallback((numPedido, itemIdx, bolsaIdx) => {
     setPreparaciones(prev => {
@@ -1963,9 +2084,14 @@ export default function AgendaEntregas({ rol, usuario }) {
               </p>
             </div>
           </div>
-          <span className="text-[10px] font-black uppercase tracking-wider bg-red-500/20 border border-red-500/40 text-red-300 px-3 py-1.5 rounded-xl w-fit">
-            A Resolver en MP
-          </span>
+          <button
+            type="button"
+            onClick={() => setVistaActual('reembolsos')}
+            className="text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 border border-red-400/40 text-white px-3.5 py-1.5 rounded-xl transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-1.5 w-fit"
+          >
+            <span>Ver Reembolsos</span>
+            <ArrowRight size={13} />
+          </button>
         </div>
       )}
 
@@ -1973,7 +2099,7 @@ export default function AgendaEntregas({ rol, usuario }) {
         <div>
           <div className="flex items-center gap-3 flex-wrap">
             <h2 className="text-xl font-bold text-white">Agenda de Entregas</h2>
-            {/* Selector de Vista: Activos (Lista fresca) vs Historial (Requisito 4) */}
+            {/* Selector de Vista: Activos vs Historial vs Reembolsos */}
             <div className="flex items-center bg-[#1f2937] p-1 rounded-xl border border-gray-700">
               <button
                 type="button"
@@ -1998,12 +2124,31 @@ export default function AgendaEntregas({ rol, usuario }) {
                 <Clock size={13} />
                 <span>Historial</span>
               </button>
+              <button
+                type="button"
+                onClick={() => setVistaActual('reembolsos')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  vistaActual === 'reembolsos'
+                    ? 'bg-rose-600 text-white shadow-sm'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                <RotateCcw size={13} />
+                <span>Reembolsos</span>
+                {reembolsosPendientesList.length > 0 && (
+                  <span className="bg-red-500/40 text-red-100 text-[10px] px-1.5 py-0.2 rounded-full font-black border border-red-400/40">
+                    {reembolsosPendientesList.length}
+                  </span>
+                )}
+              </button>
             </div>
           </div>
           <p className="text-gray-500 text-sm mt-1">
             {vistaActual === 'agenda'
               ? 'Preparación con escaneo, remitos con peso real y pedidos activos.'
-              : 'Pedidos cerrados (entregados y cancelados) con búsqueda y reimpresión de remitos.'}
+              : vistaActual === 'historial'
+              ? 'Pedidos cerrados (entregados y cancelados) con búsqueda y reimpresión de remitos.'
+              : 'Registro y seguimiento de devoluciones y reembolsos con medio y comprobantes.'}
           </p>
         </div>
         {rol !== 'repartidor' && vistaActual === 'agenda' && (
@@ -2192,6 +2337,15 @@ export default function AgendaEntregas({ rol, usuario }) {
             </div>
           )}
         </div>
+      ) : vistaActual === 'reembolsos' ? (
+        /* ═══════ VISTA REEMBOLSOS: DEVOLUCIONES Y REEMBOLSOS ═══════ */
+        <ReembolsosTab
+          reembolsos={reembolsosData}
+          cargando={cargandoReembolsos}
+          error={errorReembolsos}
+          onRecargar={cargarReembolsos}
+          onMarcarDevuelto={abrirModalReembolsoDevuelto}
+        />
       ) : (
         <>
           {/* Tabs Días */}
@@ -2340,9 +2494,11 @@ export default function AgendaEntregas({ rol, usuario }) {
                 className: 'bg-red-500/20 text-red-300 border-red-500/40 shadow-sm animate-pulse'
               };
             } else if (tieneReembolsoDevuelto) {
+              const rawMedio = p.reembolso_medio || '';
+              const medioLabel = MEDIOS_REEMBOLSO_LABELS[rawMedio.toLowerCase().trim()] || rawMedio;
               cartelPago = {
                 tipo: 'gris',
-                texto: `REEMBOLSADO $${montoReembolso.toLocaleString('es-AR')}`,
+                texto: `REEMBOLSADO $${montoReembolso.toLocaleString('es-AR')}${medioLabel ? ` · ${medioLabel}` : ''}`,
                 className: 'bg-gray-500/20 text-gray-300 border-gray-500/40 shadow-sm'
               };
             } else if (fueCobradoPorBoton) {
@@ -4246,6 +4402,16 @@ export default function AgendaEntregas({ rol, usuario }) {
           </div>
         </div>
       )}
+
+      {/* ═══════ MODAL REGISTRAR REEMBOLSO DEVUELTO ═══════ */}
+      <ModalReembolsoDevuelto
+        abierto={modalReembolso.abierto}
+        pedido={modalReembolso.pedido}
+        onCerrar={() => setModalReembolso(prev => ({ ...prev, abierto: false, pedido: null, error: null }))}
+        onConfirmar={handleConfirmarReembolsoDevuelto}
+        guardando={modalReembolso.guardando}
+        error={modalReembolso.error}
+      />
     </div>
   );
 }
