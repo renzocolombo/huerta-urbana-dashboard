@@ -3,8 +3,10 @@ import {
   Package, ShoppingCart, Plus, Minus, Search, RefreshCw, 
   Settings, Check, X, AlertCircle, AlertTriangle, Scale,
   ChevronDown, ChevronUp, History, CheckCircle2, Lock,
-  ArrowRight, FileText, Trash2, Sliders, ExternalLink
+  ArrowRight, FileText, Trash2, Sliders, ExternalLink,
+  Barcode
 } from 'lucide-react';
+import CargaEanTab from './CargaEanTab';
 import { 
   apiGetStockKg, apiGetPreciosSugeridos, apiCrearProducto,
   apiSetMargen, apiPublicarPrecios, apiGetConfig, apiSetConfig,
@@ -272,6 +274,15 @@ export default function Productos() {
               Productos
             </button>
             <button
+              onClick={() => setSubTab('ean')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                subTab === 'ean' ? 'bg-cyan-500 text-black shadow' : 'text-cyan-400 hover:text-cyan-300'
+              }`}
+            >
+              <Barcode size={14} />
+              <span>Carga EAN</span>
+            </button>
+            <button
               onClick={() => setSubTab('ingresos')}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                 subTab === 'ingresos' ? 'bg-green-500 text-black shadow' : 'text-gray-400 hover:text-white'
@@ -335,6 +346,14 @@ export default function Productos() {
 
             {/* Botones de Acción */}
             <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+              <button
+                onClick={() => setSubTab('ean')}
+                className="px-3 py-1.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-sm shadow-cyan-500/10"
+              >
+                <Barcode size={14} />
+                <span>Escanear EAN</span>
+              </button>
+
               <button
                 onClick={() => setModalCompra({ open: true })}
                 className="px-3 py-1.5 rounded-xl bg-green-500 hover:bg-green-400 text-black text-xs font-black uppercase tracking-wider flex items-center gap-1 shadow-md shadow-green-500/10 cursor-pointer"
@@ -548,6 +567,11 @@ export default function Productos() {
       {/* ── SUB-VISTA 3: HISTORIAL DE SALIDAS ──────────────────────────── */}
       {subTab === 'salidas' && (
         <HistorialSalidasTab onVolver={() => setSubTab('tabla')} />
+      )}
+
+      {/* ── SUB-VISTA 4: CARGA POR EAN (ALMACÉN) ───────────────────────── */}
+      {subTab === 'ean' && (
+        <CargaEanTab onVolver={() => setSubTab('tabla')} onProductoActualizado={cargarDatos} />
       )}
 
       {/* ── MODAL 1: NUEVA COMPRA (PARTE 2) ────────────────────────────── */}
