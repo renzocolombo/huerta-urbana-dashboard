@@ -1,5 +1,5 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback, Fragment } from 'react';
 import { 
   MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, 
   CheckCircle, Sun, Sunset, Printer, FileText, User, Clock, ScanBarcode, 
@@ -25,14 +25,25 @@ import {
   apiGetNoEntregasCliente,
   apiRegistrarReembolso,
   apiGetReembolsosPendientes,
-  apiGetReembolsos
+  apiGetReembolsos,
+  apiGetFeriados
 } from '../utils/mercaderiaApi';
 import { imprimirEtiquetaBolsa } from '../utils/etiquetaPrinter';
 import ReembolsosTab from './ReembolsosTab';
 import ModalReembolsoDevuelto from './ModalReembolsoDevuelto';
+import CalendarioEntregas from './CalendarioEntregas';
+import { parsearFecha, fechaA_YMD, calcularFechaEntregaProgramada } from '../utils/fechasEntrega';
+import {
+  BLOQUES, bloquesDisponibles, formatoDiaEntrega, etiquetaBloque,
+} from '../utils/entregaCalendario';
+import {
+  enriquecerPedido, agruparPorFecha, etiquetaFecha, claveTabInicial, alertasEntrega, conteoPorFecha,
+  CLAVE_ATRASADOS,
+} from '../utils/agendaCalendario';
 
-const DIAS_SEMANA = ['Martes', 'Jueves'];
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
+// Horario textual de un bloque (columna horario_entrega al reagendar): "08:00 - 12:00" / "14:00 - 17:00"
+const horarioDeBloque = (b) => `${String(BLOQUES[b].desde).padStart(2, '0')}:00 - ${String(BLOQUES[b].hasta).padStart(2, '0')}:00`;
 
 const PAGO_CONFIG = {
   pagado:    { label: 'Pagado',    color: 'text-green-400' },
@@ -149,28 +160,8 @@ export function esPedidoPendienteDeEntrega(p, estadoActualOverride) {
 }
 
 // ── Helpers de fechas y cierre de pedidos ────────────────────────────────────
-export function parsearFecha(raw) {
-  if (!raw) return null;
-  if (raw instanceof Date && !isNaN(raw.getTime())) return raw;
-  const s = String(raw).trim();
-  const mDate = s.match(/Date\((\d+),(\d+),(\d+)/);
-  if (mDate) return new Date(parseInt(mDate[1], 10), parseInt(mDate[2], 10), parseInt(mDate[3], 10));
-  const mDMY = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (mDMY) return new Date(parseInt(mDMY[3], 10), parseInt(mDMY[2], 10) - 1, parseInt(mDMY[1], 10));
-  const mYMD = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (mYMD) return new Date(parseInt(mYMD[1], 10), parseInt(mYMD[2], 10) - 1, parseInt(mYMD[3], 10));
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d;
-}
-
-export function fechaA_YMD(d) {
-  if (!d || isNaN(d.getTime())) return '';
-  const y = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${mm}-${dd}`;
-}
-
+// parsearFecha, fechaA_YMD y calcularFechaEntregaProgramada viven en utils/fechasEntrega.js (se reexportan aca por compatibilidad).
+export { parsearFecha, fechaA_YMD, calcularFechaEntregaProgramada };
 export function extraerFechaYMD(fechaStr) {
   if (!fechaStr) return '';
   const d = parsearFecha(fechaStr);
@@ -183,36 +174,6 @@ export function getHoyYMD() {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${y}-${mm}-${dd}`;
-}
-
-export function calcularFechaEntregaProgramada(fechaPedidoRaw, diaEntregaNombre) {
-  const dPedido = parsearFecha(fechaPedidoRaw);
-  if (!dPedido) return null;
-
-  const diaNorm = (diaEntregaNombre || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  const DIAS_MAP = {
-    'domingo': 0,
-    'lunes': 1,
-    'martes': 2,
-    'miercoles': 3,
-    'jueves': 4,
-    'viernes': 5,
-    'sabado': 6
-  };
-
-  const targetDay = DIAS_MAP[diaNorm];
-  if (targetDay === undefined) {
-    return new Date(dPedido.getFullYear(), dPedido.getMonth(), dPedido.getDate());
-  }
-
-  const orderDay = dPedido.getDay();
-  let diff = targetDay - orderDay;
-  if (diff < 0) {
-    diff += 7;
-  }
-  const dEntrega = new Date(dPedido.getFullYear(), dPedido.getMonth(), dPedido.getDate());
-  dEntrega.setDate(dEntrega.getDate() + diff);
-  return dEntrega;
 }
 
 export function obtenerFechaCierreEfectiva(p, estadoActual) {
@@ -321,8 +282,24 @@ export default function AgendaEntregas({ rol, usuario }) {
 
   const esRen = (usuario || localStorage.getItem('huerta_auth_usuario') || '').trim().toLowerCase() === 'ren';
 
-  const [diaSeleccionado, setDiaSeleccionado] = useState(DIAS_SEMANA[0]);
-  const [turnoSeleccionado, setTurnoSeleccionado] = useState('Manana');
+  // ── Calendario de entregas: feriados/días cerrados (se cargan una vez al abrir la Agenda) ──
+  const [feriados, setFeriados] = useState([]);
+  const [avisoFeriados, setAvisoFeriados] = useState(null);
+  const [tabSeleccionada, setTabSeleccionada] = useState(null); // null = pestaña por defecto (hoy / próxima)
+  const hoyYMD = getHoyYMD();
+
+  const cargarFeriados = useCallback(async () => {
+    const r = await apiGetFeriados();
+    if (r.ok && Array.isArray(r.feriados)) {
+      setFeriados(r.feriados);
+      setAvisoFeriados(null);
+    } else {
+      setFeriados([]);
+      setAvisoFeriados('No se pudo cargar el calendario de feriados; se muestran las fechas sin avisos de días cerrados.');
+    }
+  }, []);
+
+  useEffect(() => { cargarFeriados(); }, [cargarFeriados]);
 
   // ── Precios sugeridos / publicados del Sheet para congelar detalle ────────
   const [preciosSugeridosList, setPreciosSugeridosList] = useState([]);
@@ -351,12 +328,13 @@ export default function AgendaEntregas({ rol, usuario }) {
   const [busquedaHistorial, setBusquedaHistorial] = useState('');
   const [entregadosHoyAbierto, setEntregadosHoyAbierto] = useState(false);
 
-  // ── Lista principal "Activos" (Requisitos 1, 3, 5) ─────────────────────────
-  // Solo pedidos pendientes (no Entregado y no Cancelado) de hoy y de días anteriores sin cerrar.
-  // A los pedidos de un día anterior que siguen pendientes se les pone etiqueta roja "ATRASADO" y se muestran primero.
+  // ── Lista principal "Activos" por fecha y bloque ───────────────────────────
+  // Todos los pedidos pendientes (no Entregado y no Cancelado). Fecha/bloque salen de dia_entrega
+  // ("Lunes 09/11/2026 Tarde"); los pedidos viejos ("Martes"/"Jueves") usan el cálculo anterior y quedan sin bloque.
+  // Los de una fecha ya pasada sin entregar van a la pestaña "Atrasados".
   // Siempre se muestran los pedidos con reembolso pendiente (reembolso_estado = pendiente), aunque estén cancelados.
-  const pedidosDelDia = useMemo(() => {
-    const hoyYMD = getHoyYMD();
+  const pedidosActivosTodos = useMemo(() => {
+    const hoy = getHoyYMD();
 
     const activos = (PEDIDOS || []).filter(p => {
       const estadoActual = (estados[p.numero_pedido] || p.estado || 'pendiente').toLowerCase().trim();
@@ -378,48 +356,55 @@ export default function AgendaEntregas({ rol, usuario }) {
       if (!esAprobado && !esFormaEntregaOLink && !tieneReembolsoPendiente) {
         return false;
       }
-
-      // Calcular fecha real programada de entrega a partir de la fecha del pedido y el día de entrega
-      const dEntrega = calcularFechaEntregaProgramada(p.fecha, p.dia_entrega);
-      const fechaEntregaYMD = fechaA_YMD(dEntrega);
-
-      // Un pedido solo es ATRASADO si su día de entrega ya pasó (fechaEntregaYMD < hoyYMD)
-      const esAtrasado = Boolean(fechaEntregaYMD && fechaEntregaYMD < hoyYMD);
-
-      // Pertenece a la lista activa del día seleccionado si coincide el día de entrega, o si está atrasado de un día anterior sin cerrar
-      const coincideDia = p.dia_entrega === diaSeleccionado;
-      return coincideDia || esAtrasado;
+      return true;
     }).map(p => {
-      const hoyYMD = getHoyYMD();
-      const dEntrega = calcularFechaEntregaProgramada(p.fecha, p.dia_entrega);
-      const fechaEntregaYMD = fechaA_YMD(dEntrega);
-      const esAtrasado = Boolean(fechaEntregaYMD && fechaEntregaYMD < hoyYMD);
       const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
-      return {
-        ...p,
-        fechaEntregaProgramadaYMD: fechaEntregaYMD,
-        esAtrasado,
-        esReembolsoPendiente: tieneReembolsoPendiente
-      };
+      return { ...enriquecerPedido(p, hoy), esReembolsoPendiente: tieneReembolsoPendiente };
     });
 
-    // Ordenar: primero los ATRASADOS (etiqueta roja), luego reembolsos pendientes, luego el resto
+    // Reembolsos pendientes primero (el orden por fecha/bloque lo da el agrupamiento)
     return activos.sort((a, b) => {
-      if (a.esAtrasado && !b.esAtrasado) return -1;
-      if (!a.esAtrasado && b.esAtrasado) return 1;
       if (a.esReembolsoPendiente && !b.esReembolsoPendiente) return -1;
       if (!a.esReembolsoPendiente && b.esReembolsoPendiente) return 1;
       return 0;
     });
-  }, [PEDIDOS, diaSeleccionado, estados]);
+  }, [PEDIDOS, estados]);
 
-  const pedidosDelTurno = useMemo(() => {
-    return pedidosDelDia.filter(p => {
-      const horaInicio = parseInt((p.horario_entrega || '09:00').split(':')[0], 10);
-      const isManana = isNaN(horaInicio) || horaInicio < 13;
-      return (turnoSeleccionado === 'Manana' && isManana) || (turnoSeleccionado === 'Tarde' && !isManana);
+  const gruposEntrega = useMemo(() => agruparPorFecha(pedidosActivosTodos), [pedidosActivosTodos]);
+
+  // Pestañas dinámicas: "Atrasados" (rojo) + una por fecha con pedidos activos, ordenadas, con contador
+  const tabsEntrega = useMemo(() => {
+    const arr = [];
+    if (gruposEntrega.atrasados.length > 0) {
+      arr.push({ clave: CLAVE_ATRASADOS, label: 'Atrasados', count: gruposEntrega.atrasados.length, atrasado: true });
+    }
+    gruposEntrega.dias.forEach(d => {
+      arr.push({ clave: d.clave, label: d.ymd ? etiquetaFecha(d.ymd, hoyYMD) : 'Sin fecha', count: d.pedidos.length, ymd: d.ymd });
     });
-  }, [pedidosDelDia, turnoSeleccionado]);
+    return arr;
+  }, [gruposEntrega, hoyYMD]);
+
+  const tabActiva = (tabSeleccionada && tabsEntrega.some(t => t.clave === tabSeleccionada))
+    ? tabSeleccionada
+    : claveTabInicial(tabsEntrega.map(t => t.clave), hoyYMD);
+
+  // Pedidos de la pestaña elegida
+  const pedidosDelDia = useMemo(() => {
+    if (tabActiva === CLAVE_ATRASADOS) return gruposEntrega.atrasados;
+    return gruposEntrega.dias.find(d => d.clave === tabActiva)?.pedidos || [];
+  }, [gruposEntrega, tabActiva]);
+
+  // Texto de la pestaña activa (títulos de impresión)
+  const tituloTabActiva = useMemo(() => {
+    const t = tabsEntrega.find(x => x.clave === tabActiva);
+    return t ? t.label : '';
+  }, [tabsEntrega, tabActiva]);
+
+  // Cantidad de pedidos programados por fecha (para el Calendario)
+  const conteoCalendario = useMemo(() => conteoPorFecha(pedidosActivosTodos), [pedidosActivosTodos]);
+
+  // Ya no hay toggle de turno: la pestaña elegida muestra Mañana / Tarde / Sin horario en secciones.
+  const pedidosDelTurno = pedidosDelDia;
 
   // ── Bloque "Entregados hoy" (Requisito 2) ──────────────────────────────────
   // Pedidos Entregados o Cancelados cuya fecha de cierre (fecha_entrega, o fecha_cierre si es cancelado) sea de hoy.
@@ -438,13 +423,9 @@ export default function AgendaEntregas({ rol, usuario }) {
       const fechaCierre = obtenerFechaCierreEfectiva(p, estadoActual);
       const fechaCierreYMD = extraerFechaYMD(fechaCierre);
       if (fechaCierreYMD !== hoyYMD) return false;
-
-      // Filtrar por turno para mantener consistencia con la vista de turno
-      const horaInicio = parseInt((p.horario_entrega || '09:00').split(':')[0], 10);
-      const isManana = isNaN(horaInicio) || horaInicio < 13;
-      return (turnoSeleccionado === 'Manana' && isManana) || (turnoSeleccionado === 'Tarde' && !isManana);
+      return true;
     });
-  }, [PEDIDOS, estados, turnoSeleccionado]);
+  }, [PEDIDOS, estados]);
 
   // ── Vista Historial (Requisito 4) ─────────────────────────────────────────
   // Pedidos cerrados de los últimos 7 días (selector: 7 días, 30 días, todos), ordenados del más reciente al más viejo,
@@ -561,13 +542,16 @@ export default function AgendaEntregas({ rol, usuario }) {
     const motivoExistente = p.motivo_no_entrega || '';
     const motivosValidos = ['No estaba', 'No atendió', 'Dirección incorrecta'];
     const esPredefinido = motivosValidos.includes(motivoExistente);
+    // Reagendar: primera fecha/bloque disponible (distinta de la actual) según el calendario
+    const opcionesReagendar = bloquesDisponibles(new Date(), feriados);
+    const primeraOpcion = opcionesReagendar.find(o => formatoDiaEntrega(o.ymd, o.bloque) !== p.dia_entrega) || opcionesReagendar[0];
     setModalNoEntrega({
       pedido: p,
       motivoSeleccionado: esPredefinido ? motivoExistente : (motivoExistente ? 'Otro' : 'No estaba'),
       motivoOtro: esPredefinido ? '' : motivoExistente,
       accion: null,
-      nuevoDia: p.dia_entrega === 'Martes' ? 'Jueves' : 'Martes',
-      nuevoHorario: p.horario_entrega || '09:00 - 13:00',
+      nuevoDia: primeraOpcion ? formatoDiaEntrega(primeraOpcion.ymd, primeraOpcion.bloque) : '',
+      nuevoHorario: primeraOpcion ? horarioDeBloque(primeraOpcion.bloque) : (p.horario_entrega || '09:00 - 13:00'),
       guardando: false,
       resultado: null,
       error: null,
@@ -1992,9 +1976,7 @@ export default function AgendaEntregas({ rol, usuario }) {
       alert(`No hay pedidos cargados para imprimir en este ${alcance === 'turno' ? 'turno' : 'día'}.`);
       return;
     }
-    const titulo = alcance === 'turno'
-      ? `Remitos Turno ${turnoSeleccionado === 'Manana' ? 'Mañana' : 'Tarde'} · ${diaSeleccionado}`
-      : `Remitos Día Completo · ${diaSeleccionado}`;
+    const titulo = `Remitos · ${tituloTabActiva}`;
 
     imprimirRemitosEnLote(aImprimir, preparaciones, titulo, opciones);
 
@@ -2002,7 +1984,7 @@ export default function AgendaEntregas({ rol, usuario }) {
     aImprimir.forEach(p => {
       if (p.sheetRowIndex) actualizarRemitoEnSheet(p.sheetRowIndex, true);
     });
-  }, [rol, pedidosDelTurno, pedidosDelDia, turnoSeleccionado, diaSeleccionado, preparaciones, actualizarRemitoEnSheet]);
+  }, [rol, pedidosDelTurno, pedidosDelDia, tituloTabActiva, preparaciones, actualizarRemitoEnSheet]);
 
   const toggleSeleccionRemito = useCallback((numPedido) => {
     setSeleccionadosRemito(prev => 
@@ -2018,9 +2000,12 @@ export default function AgendaEntregas({ rol, usuario }) {
   }, [pedidosDelTurno, estados]);
 
   const pedidosParaMostrar = useMemo(() => {
-    if (!filtroSoloArmados) return pedidosDelTurno;
-    return pedidosArmadosDelTurno;
-  }, [pedidosDelTurno, pedidosArmadosDelTurno, filtroSoloArmados]);
+    const base = filtroSoloArmados ? pedidosArmadosDelTurno : pedidosDelTurno;
+    if (tabActiva === CLAVE_ATRASADOS) return base;
+    // Orden estable por sección: Mañana, Tarde, Sin horario
+    const rank = (p) => (p.entregaBloque === 'M' ? 0 : p.entregaBloque === 'T' ? 1 : 2);
+    return [...base].sort((a, b) => rank(a) - rank(b));
+  }, [pedidosDelTurno, pedidosArmadosDelTurno, filtroSoloArmados, tabActiva]);
 
   const seleccionarTodosArmados = useCallback(() => {
     const todosIds = pedidosArmadosDelTurno.map(p => p.numero_pedido);
@@ -2110,7 +2095,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                     : 'text-gray-400 hover:text-white'
                 }`}
               >
-                Activos ({pedidosDelDia.length})
+                Activos ({pedidosActivosTodos.length})
               </button>
               <button
                 type="button"
@@ -2141,37 +2126,50 @@ export default function AgendaEntregas({ rol, usuario }) {
                   </span>
                 )}
               </button>
+              <button
+                id="btn-vista-calendario"
+                type="button"
+                onClick={() => setVistaActual('calendario')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  vistaActual === 'calendario'
+                    ? 'bg-teal-600 text-white shadow-sm'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                <Calendar size={13} />
+                <span>Calendario</span>
+              </button>
             </div>
           </div>
           <p className="text-gray-500 text-sm mt-1">
             {vistaActual === 'agenda'
-              ? 'Preparación con escaneo, remitos con peso real y pedidos activos.'
+              ? 'Pedidos activos por fecha y bloque de entrega, preparación con escaneo y remitos con peso real.'
               : vistaActual === 'historial'
               ? 'Pedidos cerrados (entregados y cancelados) con búsqueda y reimpresión de remitos.'
+              : vistaActual === 'calendario'
+              ? 'Días de entrega: feriados, días cerrados y pedidos programados por día.'
               : 'Registro y seguimiento de devoluciones y reembolsos con medio y comprobantes.'}
           </p>
         </div>
         {rol !== 'repartidor' && vistaActual === 'agenda' && (
           <div className="flex flex-col sm:flex-row gap-2">
             <button 
-              onClick={() => imprimir('turno')} 
-              className="flex items-center justify-center gap-2 bg-[#1f2937] hover:bg-gray-800 border border-gray-700 hover:border-gray-500 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all shadow-sm cursor-pointer"
-              title="Imprime todos los remitos del turno en una sola ventana consolidada"
-            >
-              <Printer size={15} className="text-amber-400" />
-              <span>Imprimir este turno ({pedidosDelTurno.length})</span>
-            </button>
-            <button 
               onClick={() => imprimir('dia')} 
               className="flex items-center justify-center gap-2 bg-green-500/10 hover:bg-green-500/20 border border-green-500/30 text-green-400 font-medium px-4 py-2 rounded-xl text-sm transition-all shadow-sm cursor-pointer"
-              title="Imprime todos los remitos del día completo en una sola ventana consolidada"
+              title="Imprime todos los remitos de esta pestaña en una sola ventana consolidada"
             >
               <FileText size={15} className="text-green-400" />
-              <span>Imprimir todo el día ({pedidosDelDia.length})</span>
+              <span>Imprimir {tituloTabActiva || 'pestaña'} ({pedidosDelDia.length})</span>
             </button>
           </div>
         )}
       </div>
+      {avisoFeriados && vistaActual === 'agenda' && (
+        <div className="mb-3 text-[11px] text-gray-400 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 flex items-center justify-between gap-2">
+          <span>⚠️ {avisoFeriados}</span>
+          <button type="button" onClick={cargarFeriados} className="underline hover:text-white cursor-pointer shrink-0">Reintentar</button>
+        </div>
+      )}
 
       {vistaActual === 'historial' ? (
         /* ═══════ VISTA HISTORIAL: PEDIDOS CERRADOS (REQUISITOS 4 Y 6) ═══════ */
@@ -2337,6 +2335,13 @@ export default function AgendaEntregas({ rol, usuario }) {
             </div>
           )}
         </div>
+      ) : vistaActual === 'calendario' ? (
+        /* ═══════ VISTA CALENDARIO: DÍAS DE ENTREGA ═══════ */
+        <CalendarioEntregas
+          conteo={conteoCalendario}
+          hoyYMD={hoyYMD}
+          onCambio={cargarFeriados}
+        />
       ) : vistaActual === 'reembolsos' ? (
         /* ═══════ VISTA REEMBOLSOS: DEVOLUCIONES Y REEMBOLSOS ═══════ */
         <ReembolsosTab
@@ -2348,25 +2353,53 @@ export default function AgendaEntregas({ rol, usuario }) {
         />
       ) : (
         <>
-          {/* Tabs Días */}
-          <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
-            {DIAS_SEMANA.map(dia => (
-              <button key={dia} onClick={() => { setDiaSeleccionado(dia); setPedidosAbiertos({}); setPreparandoPedido(null); }}
-                className={`whitespace-nowrap px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${diaSeleccionado === dia ? 'bg-green-500 text-white shadow-[0_4px_15px_rgba(34,197,94,0.3)]' : 'bg-[#1f2937] border border-gray-800 text-gray-400 hover:text-white hover:border-gray-600'}`}>
-                {dia}
-              </button>
-            ))}
+          {/* Pestañas dinámicas por fecha de entrega */}
+          <div id="tabs-fechas-entrega" className="flex gap-2 mb-4 overflow-x-auto pb-2">
+            {tabsEntrega.length === 0 && (
+              <span className="text-xs text-gray-500 px-1 py-2">No hay pedidos activos para entregar.</span>
+            )}
+            {tabsEntrega.map(tab => {
+              const activa = tabActiva === tab.clave;
+              const estilo = tab.atrasado
+                ? (activa ? 'bg-red-600 text-white shadow-[0_4px_15px_rgba(239,68,68,0.35)]' : 'bg-red-500/10 border border-red-500/40 text-red-300 hover:bg-red-500/20')
+                : (activa ? 'bg-green-500 text-white shadow-[0_4px_15px_rgba(34,197,94,0.3)]' : 'bg-[#1f2937] border border-gray-800 text-gray-400 hover:text-white hover:border-gray-600');
+              return (
+                <button
+                  key={tab.clave}
+                  id={`tab-entrega-${tab.clave}`}
+                  type="button"
+                  onClick={() => { setTabSeleccionada(tab.clave); setPedidosAbiertos({}); setPreparandoPedido(null); }}
+                  className={`whitespace-nowrap flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all cursor-pointer ${estilo}`}
+                >
+                  {tab.atrasado && <span>🚨</span>}
+                  <span>{tab.label}</span>
+                  <span className={`text-[11px] font-black px-1.5 py-0.5 rounded-full ${activa ? 'bg-black/25' : 'bg-black/30 text-gray-300'}`}>{tab.count}</span>
+                </button>
+              );
+            })}
           </div>
 
-          {/* Tabs Turnos */}
-          <div className="flex gap-2 mb-6 bg-[#1f2937]/50 p-1.5 rounded-2xl w-fit">
-            <button onClick={() => setTurnoSeleccionado('Manana')} className={`flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-medium transition-all ${turnoSeleccionado === 'Manana' ? 'bg-[#111827] text-amber-400 border border-gray-700 shadow-md' : 'text-gray-500 hover:text-gray-300'}`}>
-              <Sun size={16} /> Turno Mañana (8-12 hs)
-            </button>
-            <button onClick={() => setTurnoSeleccionado('Tarde')} className={`flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-medium transition-all ${turnoSeleccionado === 'Tarde' ? 'bg-[#111827] text-indigo-400 border border-gray-700 shadow-md' : 'text-gray-500 hover:text-gray-300'}`}>
-              <Sunset size={16} /> Turno Tarde (14-18 hs)
-            </button>
-          </div>
+          {/* Resumen por bloque de la fecha elegida */}
+          {tabActiva && tabActiva !== CLAVE_ATRASADOS && (() => {
+            const dia = gruposEntrega.dias.find(d => d.clave === tabActiva);
+            if (!dia) return null;
+            const pb = dia.porBloque;
+            return (
+              <div className="flex gap-2 mb-5 flex-wrap">
+                <span className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-amber-500/10 border border-amber-500/30 text-amber-300">
+                  <Sun size={14} /> {etiquetaBloque('M')}: {pb.M.length}
+                </span>
+                <span className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-500/10 border border-indigo-500/30 text-indigo-300">
+                  <Sunset size={14} /> {etiquetaBloque('T')}: {pb.T.length}
+                </span>
+                {pb.sin.length > 0 && (
+                  <span className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-gray-500/10 border border-gray-500/30 text-gray-300">
+                    <Clock size={14} /> Sin horario: {pb.sin.length}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Barra de control: Contador, filtros y botones de remitos armados en lote */}
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-4 bg-[#111827]/60 border border-white/5 p-3 rounded-2xl">
@@ -2449,12 +2482,12 @@ export default function AgendaEntregas({ rol, usuario }) {
         <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-12 text-center">
           <MapPin size={32} className="text-gray-600 mx-auto mb-3" />
           <p className="text-gray-500">
-            {filtroSoloArmados ? 'No hay pedidos armados en este turno.' : 'No hay entregas asignadas a este turno.'}
+            {filtroSoloArmados ? 'No hay pedidos armados en esta pestaña.' : 'No hay entregas asignadas a esta fecha.'}
           </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {pedidosParaMostrar.map(p => {
+          {pedidosParaMostrar.map((p, idxP) => {
             const isOpen = !!pedidosAbiertos[p.numero_pedido];
             const estadoActual = (estados[p.numero_pedido] || p.estado || 'pendiente').toLowerCase();
             const prep = preparaciones[p.numero_pedido];
@@ -2544,8 +2577,26 @@ export default function AgendaEntregas({ rol, usuario }) {
               : estadoActual;
             const conf = configEstado[estadoClave] || configEstado.pendiente;
 
+            // Sección de la fecha: Mañana / Tarde / Sin horario (en "Atrasados" la lista va plana)
+            const seccionDe = (x) => (x.entregaBloque === 'M' ? 'M' : x.entregaBloque === 'T' ? 'T' : 'sin');
+            const seccionP = seccionDe(p);
+            const mostrarSeccion = tabActiva !== CLAVE_ATRASADOS && (idxP === 0 || seccionDe(pedidosParaMostrar[idxP - 1]) !== seccionP);
+            const cantSeccion = mostrarSeccion ? pedidosParaMostrar.filter(x => seccionDe(x) === seccionP).length : 0;
+            const tituloSeccion = seccionP === 'M' ? etiquetaBloque('M') : seccionP === 'T' ? etiquetaBloque('T') : 'Sin horario';
+
+            // Carteles de calendario (no bloquean nada)
+            const alertasEnt = alertasEntrega(p, feriados, hoyYMD, esPendiente);
+
             return (
-              <div key={p.numero_pedido} className={`transition-all duration-300 rounded-2xl overflow-hidden border ${conf.bg} ${estaPreparando ? 'ring-2 ring-green-500/60 shadow-[0_0_30px_rgba(34,197,94,0.15)]' : isOpen ? 'ring-1 ring-white/10' : conf.border}`}>
+              <Fragment key={p.numero_pedido}>
+              {mostrarSeccion && (
+                <div className={`flex items-center gap-2 pt-2 text-xs font-black uppercase tracking-wider ${seccionP === 'M' ? 'text-amber-300' : seccionP === 'T' ? 'text-indigo-300' : 'text-gray-400'}`}>
+                  {seccionP === 'M' ? <Sun size={14} /> : seccionP === 'T' ? <Sunset size={14} /> : <Clock size={14} />}
+                  <span>{tituloSeccion}</span>
+                  <span className="bg-black/30 border border-white/10 rounded-full px-2 py-0.5 text-[10px]">{cantSeccion}</span>
+                </div>
+              )}
+              <div className={`transition-all duration-300 rounded-2xl overflow-hidden border ${conf.bg} ${estaPreparando ? 'ring-2 ring-green-500/60 shadow-[0_0_30px_rgba(34,197,94,0.15)]' : isOpen ? 'ring-1 ring-white/10' : conf.border}`}>
                 
                 {/* Cabecera */}
                 <div className="px-4 pr-5 py-4 flex items-center justify-between cursor-pointer hover:bg-white/5" onClick={() => toggleAcordeon(p.numero_pedido)}>
@@ -2569,6 +2620,16 @@ export default function AgendaEntregas({ rol, usuario }) {
                         {p.esAtrasado && (
                           <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border bg-red-500/20 text-red-300 border-red-500/40 shadow-sm flex items-center gap-1 animate-pulse">
                             🚨 ATRASADO
+                          </span>
+                        )}
+                        {alertasEnt.diaCerrado && (
+                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border bg-orange-500/20 text-orange-300 border-orange-500/40 shadow-sm flex items-center gap-1" title="El día o bloque programado figura cerrado o no existe. Reprogramar la entrega.">
+                            🚫 DIA CERRADO - REPROGRAMAR
+                          </span>
+                        )}
+                        {alertasEnt.revisarFecha && (
+                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border bg-yellow-500/20 text-yellow-300 border-yellow-500/40 shadow-sm flex items-center gap-1" title="La entrega elegida es anterior a la primera entrega posible según la fecha del pedido.">
+                            ⚠️ REVISAR FECHA
                           </span>
                         )}
                         <span className={`text-[10px] font-black uppercase px-1.5 py-0.5 rounded border ${conf.color} ${conf.border} bg-black/20`}>{conf.label}</span>
@@ -2599,7 +2660,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         <span className="text-[11px] text-gray-500 flex items-center gap-0.5"><MapPin size={10} /> {p.localidad}</span>
-                        <span className="text-[11px] text-gray-500 flex items-center gap-0.5"><Clock size={10} /> {p.horario_entrega}</span>
+                        <span className="text-[11px] text-gray-500 flex items-center gap-0.5"><Clock size={10} /> {p.entregaConFecha ? p.dia_entrega : p.horario_entrega}</span>
                         <span className="text-[11px] text-gray-500 font-mono truncate max-w-[200px]">{p.producto}</span>
                       </div>
                     </div>
@@ -3107,6 +3168,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                   </div>
                 )}
               </div>
+              </Fragment>
             );
           })}
         </div>
@@ -3439,15 +3501,22 @@ export default function AgendaEntregas({ rol, usuario }) {
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-[10px] text-gray-400 font-bold uppercase mb-1">Nuevo Día:</label>
+                        <label className="block text-[10px] text-gray-400 font-bold uppercase mb-1">Nueva fecha y bloque:</label>
                         <select
                           disabled={modalNoEntrega.guardando}
                           value={modalNoEntrega.nuevoDia}
-                          onChange={(e) => setModalNoEntrega(prev => ({ ...prev, nuevoDia: e.target.value }))}
+                          onChange={(e) => {
+                            const txt = e.target.value;
+                            const m = txt.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(Mañana|Tarde)/);
+                            const cod = m ? (m[4] === 'Tarde' ? 'T' : 'M') : null;
+                            setModalNoEntrega(prev => ({ ...prev, nuevoDia: txt, ...(cod ? { nuevoHorario: horarioDeBloque(cod) } : {}) }));
+                          }}
                           className="w-full bg-[#12161c] border border-white/10 rounded-xl p-2.5 text-xs text-white outline-none focus:border-blue-500"
                         >
-                          <option value="Martes">Martes</option>
-                          <option value="Jueves">Jueves</option>
+                          {bloquesDisponibles(new Date(), feriados).map(o => {
+                            const txt = formatoDiaEntrega(o.ymd, o.bloque);
+                            return <option key={txt} value={txt}>{txt}</option>;
+                          })}
                         </select>
                       </div>
                       <div>

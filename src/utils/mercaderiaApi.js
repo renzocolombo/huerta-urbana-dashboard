@@ -372,3 +372,21 @@ export async function apiGetReembolsosPendientes() {
 
 
 
+
+// -- CALENDARIO DE ENTREGAS --
+export async function apiGetFeriados() {
+  return llamarAppsScript('getFeriados');
+}
+
+export async function apiGetCalendario() {
+  return llamarAppsScript('getCalendario');
+}
+
+// estado: 'cerrado' | 'abierto' | 'normal' (normal borra la marca)
+export async function apiSetDiaCalendario(fecha, estado, motivo = '') {
+  return llamarAppsScript('setDiaCalendario', { fecha, estado, ...(motivo ? { motivo: String(motivo).trim() } : {}) });
+}
+
+export async function apiSembrarFeriados() {
+  return llamarAppsScript('sembrarFeriados');
+}
