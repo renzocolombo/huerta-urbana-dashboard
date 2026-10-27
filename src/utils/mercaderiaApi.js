@@ -64,12 +64,15 @@ export async function apiGetPreciosSugeridos() {
   return llamarAppsScript('getPreciosSugeridos');
 }
 
-export async function apiCrearProducto({ producto, categoria, unidad = 'kg', margen_pct }) {
+export async function apiCrearProducto({ producto, categoria, unidad = 'kg', margen_pct, marca, subcategoria, ean }) {
   return llamarAppsScript('crearProducto', {
     producto: String(producto).trim(),
     categoria: categoria ? String(categoria).trim() : 'Verduras',
     unidad: (unidad === 'un' || unidad === 'atado') ? unidad : 'kg',
     ...(margen_pct !== undefined && margen_pct !== null ? { margen_pct: Number(margen_pct) } : {}),
+    ...(marca ? { marca: String(marca).trim() } : {}),
+    ...(subcategoria ? { subcategoria: String(subcategoria).trim() } : {}),
+    ...(ean ? { ean: String(ean).trim() } : {}),
   });
 }
 
@@ -367,6 +370,29 @@ export async function apiGetReembolsos() {
 
 export async function apiGetReembolsosPendientes() {
   return llamarAppsScript('getReembolsosPendientes', {});
+}
+
+// ── 9. EAN & ALMACÉN ─────────────────────────────────────────────────────────
+
+export async function apiBuscarPorEan({ ean }) {
+  return llamarAppsScript('buscarPorEan', {
+    ean: String(ean || '').trim().toUpperCase(),
+  });
+}
+
+export async function apiGetMapaEan() {
+  return llamarAppsScript('getMapaEan', {});
+}
+
+export async function apiSetEanProducto({ ean, productoId = null, nombre, subcategoria = 'Almacén', unidad = 'un', marca = '' }) {
+  return llamarAppsScript('setEanProducto', {
+    ean: String(ean || '').trim().toUpperCase(),
+    ...(productoId ? { productoId } : {}),
+    nombre: String(nombre || '').trim(),
+    subcategoria: String(subcategoria || 'Almacén').trim(),
+    unidad: String(unidad || 'un').trim(),
+    marca: String(marca || '').trim(),
+  });
 }
 
 
