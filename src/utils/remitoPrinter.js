@@ -784,7 +784,7 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
   const clienteNombre = pedido?.nombre || 'Consumidor Final';
   const clienteDireccion = pedido?.direccion ? `${pedido.direccion}${pedido.localidad ? ', ' + pedido.localidad : ''}` : '—';
   const clienteTelefono = pedido?.telefono || '—';
-  const fechaEntregaStr = pedido?.dia_entrega || pedido?.fecha || '—';
+  const fechaEntregaStr = pedido?.dia_entrega || pedido?.fecha || 'Sin fecha';
   // Si dia_entrega trae fecha y bloque ("Lunes 09/11/2026 Tarde") el turno sale del bloque ("14 a 17 h")
   const _entregaParseada = parseDiaEntrega(pedido?.dia_entrega);
   const turnoEntregaStr = (_entregaParseada && _entregaParseada.bloque)

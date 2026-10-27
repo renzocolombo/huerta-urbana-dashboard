@@ -23,6 +23,7 @@ import {
   apiEntregarPedido,
   apiRegistrarNoEntrega,
   apiGetNoEntregasCliente,
+  apiGetNoEntregasBatch,
   apiRegistrarReembolso,
   apiGetReembolsosPendientes,
   apiGetReembolsos,
@@ -489,44 +490,57 @@ export default function AgendaEntregas({ rol, usuario }) {
 
   const [pedidosAbiertos, setPedidosAbiertos] = useState({});
 
-  // ── No Entregas y Alertas por Cliente ──────────────────────────────────────
-  const [noEntregasMap, setNoEntregasMap] = useState({}); // { [numPedido]: { total, nivel, eventos } }
+  // ── No Entregas y Alertas por Cliente (Consulta por Lote / Batch) ───────────
+  const [noEntregasMap, setNoEntregasMap] = useState({}); // { [numPedido]: { total, nivel, cliente_clave } }
+  const [noEntregasError, setNoEntregasError] = useState(false);
+  const [cargandoNoEntregas, setCargandoNoEntregas] = useState(false);
   const consultadosNoEntregasRef = useRef(new Set());
 
-  // Consultar no entregas de los clientes de los pedidos del día en una sola tanda sin bucles
-  useEffect(() => {
+  // Consultar no entregas de todos los pedidos visibles en una ÚNICA llamada por lote
+  const cargarNoEntregasBatch = useCallback(async () => {
     if (!pedidosDelDia || pedidosDelDia.length === 0) return;
 
-    const pedidosAConsultar = pedidosDelDia.filter(
-      p => p.numero_pedido && !consultadosNoEntregasRef.current.has(p.numero_pedido)
-    );
+    const pedidosAConsultar = pedidosDelDia
+      .filter(p => p.numero_pedido && !consultadosNoEntregasRef.current.has(p.numero_pedido))
+      .map(p => p.numero_pedido);
 
     if (pedidosAConsultar.length === 0) return;
 
-    pedidosAConsultar.forEach(p => consultadosNoEntregasRef.current.add(p.numero_pedido));
+    pedidosAConsultar.forEach(num => consultadosNoEntregasRef.current.add(num));
 
-    Promise.allSettled(
-      pedidosAConsultar.map(async (p) => {
-        const res = await apiGetNoEntregasCliente({ numero_pedido: p.numero_pedido });
-        if (res && res.ok && res.total != null) {
-          return { numero_pedido: p.numero_pedido, total: Number(res.total), nivel: res.nivel, eventos: res.eventos };
+    setCargandoNoEntregas(true);
+    setNoEntregasError(false);
+
+    try {
+      const res = await apiGetNoEntregasBatch({ pedidos: pedidosAConsultar });
+      if (res && res.ok && res.resultados) {
+        const actualizados = {};
+        for (const [numPedido, info] of Object.entries(res.resultados)) {
+          if (info && info.total != null) {
+            actualizados[numPedido] = {
+              total: Number(info.total),
+              nivel: info.nivel || 'ok',
+              cliente_clave: info.cliente_clave
+            };
+          }
         }
-        return null;
-      })
-    ).then(results => {
-      const actualizados = {};
-      results.forEach(r => {
-        if (r.status === 'fulfilled' && r.value) {
-          actualizados[r.value.numero_pedido] = r.value;
+        if (Object.keys(actualizados).length > 0) {
+          setNoEntregasMap(prev => ({ ...prev, ...actualizados }));
         }
-      });
-      if (Object.keys(actualizados).length > 0) {
-        setNoEntregasMap(prev => ({ ...prev, ...actualizados }));
+      } else {
+        setNoEntregasError(true);
       }
-    }).catch(err => {
-      console.warn('[AGENDA] Error consultando no entregas:', err.message);
-    });
+    } catch (err) {
+      console.warn('[AGENDA] Error consultando no entregas en lote:', err.message);
+      setNoEntregasError(true);
+    } finally {
+      setCargandoNoEntregas(false);
+    }
   }, [pedidosDelDia]);
+
+  useEffect(() => {
+    cargarNoEntregasBatch();
+  }, [cargarNoEntregasBatch]);
 
   // Modales
   const [modalNoEntrega, setModalNoEntrega] = useState(null); // { pedido, motivoSeleccionado, motivoOtro, accion, nuevoDia, nuevoHorario, guardando, resultado, error }
@@ -2396,6 +2410,27 @@ export default function AgendaEntregas({ rol, usuario }) {
               </div>
             );
           })()}
+
+          {/* Aviso discreto si falla la carga en lote de no-entregas */}
+          {noEntregasError && (
+            <div className="flex items-center justify-between px-3.5 py-2 mb-3 text-xs bg-amber-500/10 border border-amber-500/25 rounded-xl text-amber-300 shadow-sm">
+              <span className="flex items-center gap-1.5">
+                <AlertCircle size={14} className="text-amber-400 shrink-0" />
+                <span>No se pudieron consultar los historiales de no-entrega. La agenda sigue funcionando normalmente.</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  consultadosNoEntregasRef.current.clear();
+                  cargarNoEntregasBatch();
+                }}
+                disabled={cargandoNoEntregas}
+                className="ml-3 underline hover:text-white font-medium cursor-pointer shrink-0"
+              >
+                {cargandoNoEntregas ? 'Reintentando...' : 'Reintentar'}
+              </button>
+            </div>
+          )}
 
           {/* Barra de control: Contador, filtros y botones de remitos armados en lote */}
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-4 bg-[#111827]/60 border border-white/5 p-3 rounded-2xl">

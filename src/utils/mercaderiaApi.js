@@ -1,4 +1,4 @@
-import { APPS_SCRIPT_URL } from './appsScriptUrl';
+import { APPS_SCRIPT_URL } from './appsScriptUrl.js';
 
 /**
  * Cliente de llamadas al Apps Script para Productos, Compras, Salidas y Hogar.
@@ -345,6 +345,13 @@ export async function apiRegistrarNoEntrega({ numero_pedido, motivo, accion_toma
 export async function apiGetNoEntregasCliente({ numero_pedido }) {
   return llamarAppsScript('getNoEntregasCliente', {
     numero_pedido: String(numero_pedido).trim(),
+  });
+}
+
+export async function apiGetNoEntregasBatch({ pedidos = [] }) {
+  const lista = Array.isArray(pedidos) ? pedidos.map(p => String(p).trim()).filter(Boolean) : [];
+  return llamarAppsScript('getNoEntregasBatch', {
+    pedidos: lista,
   });
 }
 

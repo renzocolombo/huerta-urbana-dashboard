@@ -126,7 +126,7 @@ export function GoogleSheetsProvider({ children }) {
           medio_pago:      obj.medio_cobro || obj.medio_pago || obj.metodo_pago || '',
           monto_cobrado:   obj.monto_cobrado != null && obj.monto_cobrado !== '' ? Number(obj.monto_cobrado) : null,
           detalle_json:    obj.detalle_json || null,
-          dia_entrega:     obj.dia_entrega || obj.dia || 'Martes',
+          dia_entrega:     obj.dia_entrega || obj.dia || '',
           horario_entrega: obj.horario_entrega || obj.turno_entrega || obj.turno || '09:00 - 13:00',
           turno_entrega:   obj.turno_entrega || obj.turno || 'mañana',
           estado:          obj.estado || 'pendiente',
