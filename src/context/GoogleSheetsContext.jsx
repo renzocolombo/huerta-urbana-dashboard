@@ -16,6 +16,7 @@ const GoogleSheetsContext = createContext();
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
 const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_KEY || import.meta.env.VITE_GOOGLE_API_KEY;
 import { APPS_SCRIPT_URL } from '../utils/appsScriptUrl';
+import { parsearFecha } from '../utils/fechasEntrega';
 
 export function GoogleSheetsProvider({ children }) {
   const [pedidos, setPedidos]         = useState(PEDIDOS_MOCK);
@@ -125,7 +126,7 @@ export function GoogleSheetsProvider({ children }) {
           medio_pago:      obj.medio_cobro || obj.medio_pago || obj.metodo_pago || '',
           monto_cobrado:   obj.monto_cobrado != null && obj.monto_cobrado !== '' ? Number(obj.monto_cobrado) : null,
           detalle_json:    obj.detalle_json || null,
-          dia_entrega:     obj.dia_entrega || obj.dia || 'Martes',
+          dia_entrega:     obj.dia_entrega || obj.dia || '',
           horario_entrega: obj.horario_entrega || obj.turno_entrega || obj.turno || '09:00 - 13:00',
           turno_entrega:   obj.turno_entrega || obj.turno || 'mañana',
           estado:          obj.estado || 'pendiente',
@@ -445,9 +446,11 @@ export function GoogleSheetsProvider({ children }) {
             ...(motivo !== null ? { motivo_no_entrega: motivo } : {})
           };
           const norm = (nuevoEstado || '').toLowerCase().trim();
-          if (norm === 'entregado' && !p.fecha_entrega) {
+          const tieneFechaEntregaValida = Boolean(p.fecha_entrega && parsearFecha(p.fecha_entrega));
+          const tieneFechaCierreValida = Boolean(p.fecha_cierre && parsearFecha(p.fecha_cierre));
+          if (norm === 'entregado' && !tieneFechaEntregaValida) {
             updates.fecha_entrega = ahoraStr;
-          } else if (norm === 'cancelado' && !p.fecha_cierre) {
+          } else if (norm === 'cancelado' && !tieneFechaCierreValida) {
             updates.fecha_cierre = ahoraStr;
           }
           return {

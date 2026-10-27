@@ -1,0 +1,61 @@
+import * as C from "../src/utils/entregaCalendario.js";
+let ok = 0, fail = 0;
+function t(n, real, esp) { const a = JSON.stringify(real), b = JSON.stringify(esp); if (a === b) ok++; else { fail++; console.log("FALLA", n, a, "esperado", b); } }
+const AR = (s) => new Date(s + "-03:00");
+const P = (s, fer) => C.primeraEntrega(AR(s), fer || []);
+const E = (ymd, bloque) => ({ ymd, bloque });
+// Semana: lun 2026-11-02, mar 03, mie 04, jue 05, vie 06, sab 07, dom 08, lun 09, mar 10
+t("lun 09:00", P("2026-11-02T09:00:00"), E("2026-11-03", "M"));
+t("lun 11:59", P("2026-11-02T11:59:59"), E("2026-11-03", "M"));
+t("lun 12:00", P("2026-11-02T12:00:00"), E("2026-11-03", "T"));
+t("lun 23:59", P("2026-11-02T23:59:59"), E("2026-11-03", "T"));
+t("mar 00:00", P("2026-11-03T00:00:00"), E("2026-11-04", "M"));
+t("mar 14:00", P("2026-11-03T14:00:00"), E("2026-11-04", "T"));
+t("mie 10:00", P("2026-11-04T10:00:00"), E("2026-11-05", "M"));
+t("jue 10:00", P("2026-11-05T10:00:00"), E("2026-11-06", "M"));
+t("jue 16:00", P("2026-11-05T16:00:00"), E("2026-11-06", "T"));
+t("vie 00:00", P("2026-11-06T00:00:00"), E("2026-11-06", "T"));
+t("vie 11:59", P("2026-11-06T11:59:59"), E("2026-11-06", "T"));
+t("vie 12:00", P("2026-11-06T12:00:00"), E("2026-11-07", "M"));
+t("vie 14:59", P("2026-11-06T14:59:59"), E("2026-11-07", "M"));
+t("vie 15:00", P("2026-11-06T15:00:00"), E("2026-11-09", "T"));
+t("vie 23:59", P("2026-11-06T23:59:59"), E("2026-11-09", "T"));
+t("sab 08:00", P("2026-11-07T08:00:00"), E("2026-11-09", "T"));
+t("sab 20:00", P("2026-11-07T20:00:00"), E("2026-11-09", "T"));
+t("dom 10:00", P("2026-11-08T10:00:00"), E("2026-11-09", "T"));
+t("dom 23:59", P("2026-11-08T23:59:59"), E("2026-11-09", "T"));
+t("tz: dom 23:30 AR sigue domingo", C.partesAR(AR("2026-11-08T23:30:00")).dow, 0);
+// cerrados / feriados
+t("lun 09h con mar cerrado -> mie M", P("2026-11-02T09:00:00", ["2026-11-03"]), E("2026-11-04", "M"));
+t("lun 15h con mar cerrado -> mie M", P("2026-11-02T15:00:00", ["2026-11-03"]), E("2026-11-04", "M"));
+t("pedido en feriado mar -> mie T", P("2026-11-03T10:00:00", ["2026-11-03"]), E("2026-11-04", "T"));
+t("jue 16h con vie cerrado -> sab M", P("2026-11-05T16:00:00", ["2026-11-06"]), E("2026-11-07", "M"));
+t("vie 15h con lun cerrado -> mar M", P("2026-11-06T15:00:00", ["2026-11-09"]), E("2026-11-10", "M"));
+t("vie 13h con sab cerrado -> lun T", P("2026-11-06T13:00:00", ["2026-11-07"]), E("2026-11-09", "T"));
+t("pedido en vie cerrado -> lun T", P("2026-11-06T09:00:00", ["2026-11-06"]), E("2026-11-09", "T"));
+t("dom con lun cerrado -> mar T", P("2026-11-08T10:00:00", ["2026-11-09"]), E("2026-11-10", "T"));
+// disponibles
+const d = C.bloquesDisponibles(AR("2026-11-06T13:00:00"), [], 14);
+t("disp[0..3]", d.slice(0, 4), [E("2026-11-07", "M"), E("2026-11-09", "T"), E("2026-11-10", "M"), E("2026-11-10", "T")]);
+t("sin sab T ni dom ni lun M", d.some((x) => (x.ymd === "2026-11-07" && x.bloque === "T") || x.ymd === "2026-11-08" || (x.ymd === "2026-11-09" && x.bloque === "M")), false);
+t("horizonte", d[d.length - 1].ymd <= "2026-11-20", true);
+t("validar ok", C.validarEntrega("2026-11-10", "T", AR("2026-11-06T13:00:00"), []), true);
+t("validar sab T no", C.validarEntrega("2026-11-07", "T", AR("2026-11-06T09:00:00"), []), false);
+t("validar vie T desde 12 no", C.validarEntrega("2026-11-06", "T", AR("2026-11-06T13:00:00"), []), false);
+t("validar vie T antes de 12 si", C.validarEntrega("2026-11-06", "T", AR("2026-11-06T11:00:00"), []), true);
+t("validar lun M no", C.validarEntrega("2026-11-09", "M", AR("2026-11-02T09:00:00"), []), false);
+t("validar lejos no", C.validarEntrega("2026-12-30", "M", AR("2026-11-06T09:00:00"), []), false);
+t("validar en feriado no", C.validarEntrega("2026-11-04", "M", AR("2026-11-02T09:00:00"), ["2026-11-04"]), false);
+// formato
+t("formato", C.formatoDiaEntrega("2026-11-09", "T"), "Lunes 09/11/2026 Tarde");
+t("formato M", C.formatoDiaEntrega("2026-11-03", "M"), "Martes 03/11/2026 Mañana");
+t("parse", C.parseDiaEntrega("Lunes 09/11/2026 Tarde"), { ymd: "2026-11-09", bloque: "T" });
+t("parse M", C.parseDiaEntrega("Martes 03/11/2026 Mañana"), { ymd: "2026-11-03", bloque: "M" });
+t("parse sin bloque", C.parseDiaEntrega("Lunes 09/11/2026"), { ymd: "2026-11-09", bloque: null });
+t("parse viejo", C.parseDiaEntrega("Martes"), null);
+t("etiqueta", C.etiquetaBloque("T"), "Tarde (14 a 17 h)");
+t("orden", C.claveOrden("2026-11-03", "M") < C.claveOrden("2026-11-03", "T"), true);
+t("mes", C.sumarDias("2026-11-30", 1), "2026-12-01");
+t("anio", C.sumarDias("2026-12-31", 1), "2027-01-01");
+console.log(ok + " ok, " + fail + " fallas");
+process.exit(fail ? 1 : 0);

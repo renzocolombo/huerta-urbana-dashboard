@@ -12,7 +12,7 @@ import {
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { HOY, PRODUCTOS_COSTOS } from '../data/mockData';
 import { parsearProductosPedido } from '../utils/remitoPrinter';
-import { COMBOS_INICIALES } from './PanelCostos';
+import { COMBOS_INICIALES } from '../utils/combosIniciales';
 
 const $$ = (n) => `$${Number(Math.round(n || 0)).toLocaleString('es-AR')}`;
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
