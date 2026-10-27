@@ -100,10 +100,17 @@ export function formatoDiaEntrega(ymd, bloque) {
 // Inverso: { ymd, bloque } ; bloque null si el texto no lo trae. null si no hay fecha (pedidos viejos "Martes").
 export function parseDiaEntrega(texto) {
   const s = String(texto || "");
-  const m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (!m) return null;
-  const ymd = m[3] + "-" + m[2].padStart(2, "0") + "-" + m[1].padStart(2, "0");
-  const n = s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const mYMD = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  const mDMY = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  let ymd = null;
+  if (mYMD) {
+    ymd = mYMD[1] + "-" + mYMD[2].padStart(2, "0") + "-" + mYMD[3].padStart(2, "0");
+  } else if (mDMY) {
+    ymd = mDMY[3] + "-" + mDMY[2].padStart(2, "0") + "-" + mDMY[1].padStart(2, "0");
+  } else {
+    return null;
+  }
+  const n = s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const bloque = n.includes("manana") ? "M" : n.includes("tarde") ? "T" : null;
   return { ymd, bloque };
 }
@@ -113,3 +120,36 @@ export function etiquetaBloque(bloque) {
 }
 // Para ordenar: "2026-11-03M" < "2026-11-03T"
 export function claveOrden(ymd, bloque) { return ymd + (bloque || "M"); }
+
+// Unico helper para determinar el turno de un pedido en todas las vistas (tarjeta, calendario, agenda).
+// Devuelve: 'Mañana' | 'Tarde' | 'Sin turno'
+export function turnoDePedido(pedido) {
+  if (!pedido) return 'Sin turno';
+
+  // (a) bloque dentro de dia_entrega (Mañana/Tarde) si existe
+  const diaEntregaStr = String(pedido.dia_entrega || '').trim();
+  if (diaEntregaStr) {
+    const diaNorm = diaEntregaStr.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (diaNorm.includes('manana')) return 'Mañana';
+    if (diaNorm.includes('tarde')) return 'Tarde';
+  }
+
+  // (b) si no, interpretar horario_entrega (o turno_entrega):
+  const horarioStr = String(pedido.horario_entrega || pedido.turno_entrega || '').trim();
+  if (horarioStr) {
+    const horNorm = horarioStr.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (horNorm.includes('manana')) return 'Mañana';
+    if (horNorm.includes('tarde')) return 'Tarde';
+
+    const match = horNorm.match(/(\d{1,2})(?::(\d{2}))?/);
+    if (match) {
+      const hora = parseInt(match[1], 10);
+      if (!isNaN(hora) && hora >= 0 && hora <= 24) {
+        return hora < 12 ? 'Mañana' : 'Tarde';
+      }
+    }
+  }
+
+  // (c) si no se puede interpretar → "Sin turno"
+  return 'Sin turno';
+}

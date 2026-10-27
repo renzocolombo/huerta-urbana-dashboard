@@ -43,7 +43,7 @@ import {
   obtenerFechaCierreEfectiva 
 } from '../utils/fechasEntrega';
 import {
-  BLOQUES, bloquesDisponibles, formatoDiaEntrega, etiquetaBloque,
+  BLOQUES, bloquesDisponibles, formatoDiaEntrega, etiquetaBloque, turnoDePedido,
 } from '../utils/entregaCalendario';
 import {
   enriquecerPedido, agruparPorFecha, etiquetaFecha, claveTabInicial, alertasEntrega, conteoPorFecha,
@@ -2349,6 +2349,7 @@ export default function AgendaEntregas({ rol, usuario }) {
         /* ═══════ VISTA CALENDARIO: DÍAS DE ENTREGA ═══════ */
         <CalendarioEntregas
           conteo={conteoCalendario}
+          pedidos={PEDIDOS}
           hoyYMD={hoyYMD}
           onCambio={cargarFeriados}
         />
@@ -2691,7 +2692,11 @@ export default function AgendaEntregas({ rol, usuario }) {
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         <span className="text-[11px] text-gray-500 flex items-center gap-0.5"><MapPin size={10} /> {p.localidad}</span>
-                        <span className="text-[11px] text-gray-500 flex items-center gap-0.5"><Clock size={10} /> {p.entregaConFecha ? p.dia_entrega : p.horario_entrega}</span>
+                        <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                          <Clock size={10} />
+                          <span className="px-1.5 py-0.2 rounded text-[10px] font-black bg-gray-800 text-gray-300 border border-gray-700">{turnoDePedido(p)}</span>
+                          <span>{p.entregaConFecha ? p.dia_entrega : (p.horario_entrega || 'Sin horario')}</span>
+                        </span>
                         <span className="text-[11px] text-gray-500 font-mono truncate max-w-[200px]">{p.producto}</span>
                       </div>
                     </div>

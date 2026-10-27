@@ -1,6 +1,6 @@
 // Logica pura de la Agenda por fecha/bloque y del Calendario (sin React, testeable con node).
 import {
-  parseDiaEntrega, bloquesDelDia, primeraEntrega, claveOrden, dowDeYmd, BLOQUES,
+  parseDiaEntrega, bloquesDelDia, primeraEntrega, claveOrden, dowDeYmd, BLOQUES, turnoDePedido,
 } from './entregaCalendario.js';
 import { calcularFechaEntregaProgramada, fechaA_YMD, parsearFecha } from './fechasEntrega.js';
 
@@ -15,12 +15,14 @@ function sumarDiasYmd(ymd, n) {
 }
 
 // Fecha y bloque de entrega de un pedido. Pedido nuevo: columna dia_entrega con fecha.
-// Pedido viejo ("Martes"/"Jueves"): calculo actual, sin bloque.
+// Pedido viejo ("Martes"/"Jueves"): calculo actual, con bloque interpretado de horario_entrega.
 export function resolverEntrega(p) {
   const parsed = parseDiaEntrega(p?.dia_entrega);
-  if (parsed) return { ymd: parsed.ymd, bloque: parsed.bloque, conFecha: true };
+  const turno = turnoDePedido(p);
+  const bloque = turno === 'Mañana' ? 'M' : turno === 'Tarde' ? 'T' : null;
+  if (parsed) return { ymd: parsed.ymd, bloque, turno, conFecha: true };
   const d = calcularFechaEntregaProgramada(p?.fecha, p?.dia_entrega);
-  return { ymd: d ? fechaA_YMD(d) : '', bloque: null, conFecha: false };
+  return { ymd: d ? fechaA_YMD(d) : '', bloque, turno, conFecha: false };
 }
 
 export function enriquecerPedido(p, hoyYMD) {
@@ -29,6 +31,7 @@ export function enriquecerPedido(p, hoyYMD) {
     ...p,
     entregaYMD: e.ymd,
     entregaBloque: e.bloque,
+    turnoEntrega: e.turno,
     entregaConFecha: e.conFecha,
     fechaEntregaProgramadaYMD: e.ymd,
     esAtrasado: Boolean(e.ymd && e.ymd < hoyYMD),
@@ -189,4 +192,118 @@ export function semanasDelMes(anio, mes) { // mes 1..12
   return filas;
 }
 
-export { BLOQUES };
+export function esPedidoCancelado(p) {
+  if (!p) return false;
+  const est = String(p.estado || '').toLowerCase().trim();
+  if (est === 'cancelado' || est === 'cancelled') return true;
+  if (est === 'no_entregado') {
+    const motivo = String(p.motivo_no_entrega || p.motivo || '').toLowerCase();
+    if (motivo.includes('cancel')) return true;
+  }
+  return false;
+}
+
+export function esPedidoEntregado(p) {
+  if (!p) return false;
+  const est = String(p.estado || '').toLowerCase().trim();
+  return est === 'entregado' || est === 'delivered';
+}
+
+export function esPedidoCanceladoONoEntregado(p) {
+  if (!p) return false;
+  const est = String(p.estado || '').toLowerCase().trim();
+  return est === 'cancelado' || est === 'cancelled' || est === 'no_entregado';
+}
+
+// Metricas para la Tarjeta del Dia (al tocar un dia del calendario)
+export function metricasDia(pedidos, ymd) {
+  if (!ymd) {
+    return { ymd: '', total: 0, manana: 0, tarde: 0, sinTurno: 0, cancelados: 0, pedidosActivos: [], pedidosCancelados: [] };
+  }
+  const lista = (pedidos || []).filter((p) => {
+    const f = p.entregaYMD || resolverEntrega(p).ymd;
+    return f === ymd;
+  });
+
+  const cancelados = lista.filter(esPedidoCancelado);
+  const activos = lista.filter((p) => !esPedidoCancelado(p));
+
+  let manana = 0;
+  let tarde = 0;
+  let sinTurno = 0;
+
+  activos.forEach((p) => {
+    const t = turnoDePedido(p);
+    if (t === 'Mañana') manana++;
+    else if (t === 'Tarde') tarde++;
+    else sinTurno++;
+  });
+
+  return {
+    ymd,
+    total: activos.length,
+    manana,
+    tarde,
+    sinTurno,
+    cancelados: cancelados.length,
+    pedidosActivos: activos,
+    pedidosCancelados: cancelados,
+  };
+}
+
+// Metricas para la Tarjeta del Mes (resumen mensual segun anio y mes)
+export function metricasMes(pedidos, anio, mes) {
+  const anioNum = Number(anio);
+  const mesNum = Number(mes);
+  const mesPad = String(mesNum).padStart(2, '0');
+  const prefix = `${anioNum}-${mesPad}`;
+
+  const prevAnio = mesNum === 1 ? anioNum - 1 : anioNum;
+  const prevMes = mesNum === 1 ? 12 : mesNum - 1;
+  const prevPrefix = `${prevAnio}-${String(prevMes).padStart(2, '0')}`;
+
+  const delMes = (pedidos || []).filter((p) => {
+    const f = p.entregaYMD || resolverEntrega(p).ymd;
+    return f && f.startsWith(prefix);
+  });
+
+  const delMesAnt = (pedidos || []).filter((p) => {
+    const f = p.entregaYMD || resolverEntrega(p).ymd;
+    return f && f.startsWith(prevPrefix);
+  });
+
+  let entregados = 0;
+  let canceladosNoEntregados = 0;
+  let pendientes = 0;
+  let manana = 0;
+  let tarde = 0;
+  let sinTurno = 0;
+
+  delMes.forEach((p) => {
+    if (esPedidoEntregado(p)) entregados++;
+    else if (esPedidoCanceladoONoEntregado(p)) canceladosNoEntregados++;
+    else pendientes++;
+
+    const t = turnoDePedido(p);
+    if (t === 'Mañana') manana++;
+    else if (t === 'Tarde') tarde++;
+    else sinTurno++;
+  });
+
+  return {
+    anio: anioNum,
+    mes: mesNum,
+    total: delMes.length,
+    entregados,
+    pendientes,
+    canceladosNoEntregados,
+    manana,
+    tarde,
+    sinTurno,
+    sumaMananaTarde: manana + tarde,
+    totalMesAnterior: delMesAnt.length,
+    diferenciaMesAnterior: delMes.length - delMesAnt.length,
+  };
+}
+
+export { BLOQUES, turnoDePedido };
