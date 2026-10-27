@@ -5,7 +5,7 @@
 
 import { generarQRSvg } from './qrLocal.js';
 import { APPS_SCRIPT_URL } from './appsScriptUrl.js';
-import { parseDiaEntrega, BLOQUES } from './entregaCalendario.js';
+import { parseDiaEntrega, BLOQUES, turnoDePedido } from './entregaCalendario.js';
 
 /**
  * DATOS FISCALES Y COMERCIALES DEL EMISOR
@@ -787,9 +787,14 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
   const fechaEntregaStr = pedido?.dia_entrega || pedido?.fecha || 'Sin fecha';
   // Si dia_entrega trae fecha y bloque ("Lunes 09/11/2026 Tarde") el turno sale del bloque ("14 a 17 h")
   const _entregaParseada = parseDiaEntrega(pedido?.dia_entrega);
+  const _turno = turnoDePedido(pedido);
   const turnoEntregaStr = (_entregaParseada && _entregaParseada.bloque)
     ? `${BLOQUES[_entregaParseada.bloque].desde} a ${BLOQUES[_entregaParseada.bloque].hasta} h`
-    : (pedido?.horario_entrega || pedido?.turno_entrega || '—');
+    : (_turno === 'Mañana'
+      ? `${BLOQUES.M.desde} a ${BLOQUES.M.hasta} h`
+      : _turno === 'Tarde'
+      ? `${BLOQUES.T.desde} a ${BLOQUES.T.hasta} h`
+      : (pedido?.horario_entrega || pedido?.turno_entrega || '—'));
   const numPedidoStr = pedido?.numero_pedido || '—';
 
   // Renderizar filas de la tabla de ítems
