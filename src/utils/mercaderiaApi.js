@@ -82,17 +82,32 @@ export async function apiSetMargen(producto, margen_pct) {
 
 export async function apiPublicarPrecios(payload) {
   // Asegura: origen: 'mercaderia', solo nombre y precio por producto.
-  // Sin unidad, sin categoria, sin combos ni monto_minimo.
+  // Sin unidad, sin categoria, sin combos. monto_minimo y mensaje_minimo son opcionales.
   const rawProductos = Array.isArray(payload) ? payload : (payload?.productos || []);
   const productos = rawProductos.map(p => ({
     nombre: p.nombre,
     precio: Number(p.precio) || 0,
   }));
 
-  return llamarAppsScript('publicarPrecios', {
+  const params = {
     origen: 'mercaderia',
     productos,
-  });
+  };
+
+  if (!Array.isArray(payload) && payload) {
+    if (payload.monto_minimo !== undefined && payload.monto_minimo !== null) {
+      params.monto_minimo = Math.round(Number(payload.monto_minimo));
+    }
+    if (payload.mensaje_minimo !== undefined && payload.mensaje_minimo !== null) {
+      params.mensaje_minimo = String(payload.mensaje_minimo);
+    }
+  }
+
+  return llamarAppsScript('publicarPrecios', params);
+}
+
+export async function apiGetPreciosWeb() {
+  return llamarAppsScript('getPreciosWeb');
 }
 
 export async function apiGetConfig() {

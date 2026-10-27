@@ -14,6 +14,7 @@ import {
 } from '../utils/mercaderiaApi';
 import { BalanzaSystelSession, soportaWebSerial, useBalanzaSystel } from '../utils/balanzaSystel';
 import { getCategoriaPrincipal } from '../data/productUtils';
+import PedidoMinimoCard from './PedidoMinimoCard';
 
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
@@ -302,6 +303,9 @@ export default function Productos() {
       {/* ── SUB-VISTA 1: TABLA PRINCIPAL DE PRODUCTOS ───────────────────── */}
       {subTab === 'tabla' && (
         <div className="space-y-4">
+          {/* Tarjeta: Pedido Mínimo de Compra en PreciosWeb */}
+          <PedidoMinimoCard />
+
           {/* Barra de Filtros y Botones de Acción */}
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-[#121212] border border-gray-800 p-3.5 rounded-2xl">
             {/* Buscador */}
