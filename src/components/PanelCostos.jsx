@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
+import { getAuth } from 'firebase/auth';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { 
   Plus, Edit2, Check, Trash2, Package, ShoppingCart, 
@@ -1134,24 +1135,48 @@ export default function PanelCostos() {
         if (fallosAlmacen.length) setError('No se pudieron guardar en el Sheet: ' + fallosAlmacen.join(', '));
       }
 
-      // 2. PUBLICAR EN GITHUB PAGES (Vía Vercel Serverless Function si está disponible)
+      // 2. PUBLICAR EN GITHUB PAGES (Vía Vercel Serverless Function protegida)
       setPublicandoMsg('Actualizando catálogo web...');
+      let idToken = null;
+      try {
+        const auth = getAuth();
+        const currentUser = auth?.currentUser;
+        if (!currentUser) {
+          throw new Error('No hay sesión de usuario activa en Firebase. Iniciá sesión para publicar precios en la web.');
+        }
+        idToken = await currentUser.getIdToken();
+      } catch (authErr) {
+        console.warn('[PUBLICAR] Error obteniendo ID token de Firebase:', authErr.message);
+        setError(`No se puede publicar en la web: ${authErr.message}`);
+        setPublicando(false);
+        setPublicandoMsg('');
+        return;
+      }
+
       try {
         const ghController = new AbortController();
-        const ghTimeout = setTimeout(() => ghController.abort(), 6000);
+        const ghTimeout = setTimeout(() => ghController.abort(), 10000);
         const githubRes = await fetch('/api/publicar-precios', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${idToken}`
+          },
           body: JSON.stringify({ contenido: dataPayload }),
           signal: ghController.signal
         });
         clearTimeout(ghTimeout);
 
+        if (!githubRes.ok) {
+          const ghErrData = await githubRes.json().catch(() => ({}));
+          throw new Error(ghErrData.error || `Error HTTP ${githubRes.status}`);
+        }
+
         const ghData = await githubRes.json().catch(() => ({}));
         console.log('[PUBLICAR] Respuesta de la API GitHub:', ghData);
       } catch (ghErr) {
-        // En desarrollo local o sin Vercel API, Apps Script ya actualizó PreciosWeb correctamente
-        console.log('[PUBLICAR] Sincronización en línea vía Google Sheets completada.');
+        console.error('[PUBLICAR] Error al actualizar catálogo web:', ghErr.message);
+        setError(`Error al actualizar catálogo web: ${ghErr.message}`);
       }
 
       const ahora = new Date().toLocaleString('es-AR', { 
