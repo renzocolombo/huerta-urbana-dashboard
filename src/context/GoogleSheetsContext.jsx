@@ -16,6 +16,7 @@ const GoogleSheetsContext = createContext();
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
 const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_KEY || import.meta.env.VITE_GOOGLE_API_KEY;
 import { APPS_SCRIPT_URL } from '../utils/appsScriptUrl';
+import { parsearFecha } from '../utils/fechasEntrega';
 
 export function GoogleSheetsProvider({ children }) {
   const [pedidos, setPedidos]         = useState(PEDIDOS_MOCK);
@@ -445,9 +446,11 @@ export function GoogleSheetsProvider({ children }) {
             ...(motivo !== null ? { motivo_no_entrega: motivo } : {})
           };
           const norm = (nuevoEstado || '').toLowerCase().trim();
-          if (norm === 'entregado' && !p.fecha_entrega) {
+          const tieneFechaEntregaValida = Boolean(p.fecha_entrega && parsearFecha(p.fecha_entrega));
+          const tieneFechaCierreValida = Boolean(p.fecha_cierre && parsearFecha(p.fecha_cierre));
+          if (norm === 'entregado' && !tieneFechaEntregaValida) {
             updates.fecha_entrega = ahoraStr;
-          } else if (norm === 'cancelado' && !p.fecha_cierre) {
+          } else if (norm === 'cancelado' && !tieneFechaCierreValida) {
             updates.fecha_cierre = ahoraStr;
           }
           return {

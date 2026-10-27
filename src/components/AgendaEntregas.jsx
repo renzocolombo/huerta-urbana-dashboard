@@ -32,7 +32,15 @@ import { imprimirEtiquetaBolsa } from '../utils/etiquetaPrinter';
 import ReembolsosTab from './ReembolsosTab';
 import ModalReembolsoDevuelto from './ModalReembolsoDevuelto';
 import CalendarioEntregas from './CalendarioEntregas';
-import { parsearFecha, fechaA_YMD, calcularFechaEntregaProgramada } from '../utils/fechasEntrega';
+import { 
+  parsearFecha, 
+  fechaA_YMD, 
+  calcularFechaEntregaProgramada, 
+  extraerFechaYMD, 
+  getHoyYMD, 
+  esFechaInterpretable, 
+  obtenerFechaCierreEfectiva 
+} from '../utils/fechasEntrega';
 import {
   BLOQUES, bloquesDisponibles, formatoDiaEntrega, etiquetaBloque,
 } from '../utils/entregaCalendario';
@@ -160,29 +168,17 @@ export function esPedidoPendienteDeEntrega(p, estadoActualOverride) {
 }
 
 // ── Helpers de fechas y cierre de pedidos ────────────────────────────────────
-// parsearFecha, fechaA_YMD y calcularFechaEntregaProgramada viven en utils/fechasEntrega.js (se reexportan aca por compatibilidad).
-export { parsearFecha, fechaA_YMD, calcularFechaEntregaProgramada };
-export function extraerFechaYMD(fechaStr) {
-  if (!fechaStr) return '';
-  const d = parsearFecha(fechaStr);
-  return d ? fechaA_YMD(d) : '';
-}
-
-export function getHoyYMD() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${mm}-${dd}`;
-}
-
-export function obtenerFechaCierreEfectiva(p, estadoActual) {
-  const est = (estadoActual || p?.estado || '').toLowerCase().trim();
-  if (est === 'cancelado' || est === 'cancelled' || est.includes('cancel')) {
-    return p?.fecha_cierre || p?.fecha_entrega || p?.fecha_cobro || '';
-  }
-  return p?.fecha_entrega || p?.fecha_cierre || p?.fecha_cobro || '';
-}
+// parsearFecha, fechaA_YMD, calcularFechaEntregaProgramada, extraerFechaYMD, getHoyYMD,
+// esFechaInterpretable y obtenerFechaCierreEfectiva viven en utils/fechasEntrega.js (se reexportan aca por compatibilidad).
+export { 
+  parsearFecha, 
+  fechaA_YMD, 
+  calcularFechaEntregaProgramada, 
+  extraerFechaYMD, 
+  getHoyYMD, 
+  esFechaInterpretable, 
+  obtenerFechaCierreEfectiva 
+};
 
 // ── Normalizar texto para matcheo fuzzy ────────────────────────────────────
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');

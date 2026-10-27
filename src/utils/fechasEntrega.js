@@ -52,3 +52,36 @@ export function calcularFechaEntregaProgramada(fechaPedidoRaw, diaEntregaNombre)
   dEntrega.setDate(dEntrega.getDate() + diff);
   return dEntrega;
 }
+
+export function extraerFechaYMD(fechaStr) {
+  if (!fechaStr) return '';
+  const d = parsearFecha(fechaStr);
+  return d ? fechaA_YMD(d) : '';
+}
+
+export function getHoyYMD() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mm}-${dd}`;
+}
+
+export function esFechaInterpretable(raw) {
+  return parsearFecha(raw) !== null;
+}
+
+export function obtenerFechaCierreEfectiva(p, estadoActual) {
+  const est = (estadoActual || p?.estado || '').toLowerCase().trim();
+  const esCancelado = est === 'cancelado' || est === 'cancelled' || est.includes('cancel');
+  const candidatos = esCancelado
+    ? [p?.fecha_cierre, p?.fecha_entrega, p?.fecha_cobro]
+    : [p?.fecha_entrega, p?.fecha_cierre, p?.fecha_cobro];
+
+  for (const c of candidatos) {
+    if (c && parsearFecha(c) !== null) {
+      return c;
+    }
+  }
+  return '';
+}
