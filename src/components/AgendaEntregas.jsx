@@ -6,7 +6,6 @@ import {
   X, Trash2, Check, RotateCcw, Lock, AlertTriangle, Sparkles, Tag, CheckSquare, Square,
   CreditCard, DollarSign, Calendar, ArrowRight
 } from 'lucide-react';
-import { HOY } from '../data/mockData';
 import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido } from '../utils/remitoPrinter';
 import { getEanMapping, esCodigoEan } from '../data/productUtils';
 import { syncProductWithSheet } from '../utils/stockSync';
@@ -47,7 +46,7 @@ import {
 } from '../utils/entregaCalendario';
 import {
   enriquecerPedido, agruparPorFecha, etiquetaFecha, claveTabInicial, alertasEntrega, conteoPorFecha,
-  CLAVE_ATRASADOS,
+  CLAVE_ATRASADOS, esPedidoElegibleReparto, esFormaEntregaOLink, METODOS_PAGO_CONTRA_ENTREGA,
 } from '../utils/agendaCalendario';
 
 const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
@@ -74,6 +73,11 @@ const MEDIOS_LABELS = {
   qr: 'QR',
   transferencia: 'Transferencia',
   link_pago: 'Link de Pago',
+  link: 'Link de Pago',
+  efectivo: 'Pago contra entrega',
+  contra_entrega: 'Pago contra entrega',
+  al_recibir: 'Pago contra entrega',
+  entrega: 'Pago contra entrega',
 };
 
 const MEDIOS_REEMBOLSO_LABELS = {
@@ -334,26 +338,8 @@ export default function AgendaEntregas({ rol, usuario }) {
     const hoy = getHoyYMD();
 
     const activos = (PEDIDOS || []).filter(p => {
-      const estadoActual = (estados[p.numero_pedido] || p.estado || 'pendiente').toLowerCase().trim();
-      const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
-      const esEntregado = estadoActual === 'entregado' || estadoActual === 'delivered';
-      const esCancelado = estadoActual === 'cancelado' || estadoActual === 'cancelled' || (estadoActual === 'no_entregado' && (p.motivo_no_entrega || '').toLowerCase().includes('cancel'));
-
-      // Si está cerrado y NO tiene reembolso pendiente, NO va en la lista de trabajo ni en contadores
-      if ((esEntregado || esCancelado) && !tieneReembolsoPendiente) {
-        return false;
-      }
-
-      const estadoPago = (p.estado_pago || '').toLowerCase().trim();
-      const formaPago = (p.forma_pago || '').toLowerCase().trim();
-      const esAprobado = estadoPago === 'approved' || estadoPago === 'pagado';
-      const esFormaEntregaOLink = formaPago === 'entrega' || formaPago === 'link';
-
-      // Pedido válido para reparto
-      if (!esAprobado && !esFormaEntregaOLink && !tieneReembolsoPendiente) {
-        return false;
-      }
-      return true;
+      const estadoActual = estados[p.numero_pedido] || p.estado;
+      return esPedidoElegibleReparto(p, estadoActual);
     }).map(p => {
       const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
       return { ...enriquecerPedido(p, hoy), esReembolsoPendiente: tieneReembolsoPendiente };

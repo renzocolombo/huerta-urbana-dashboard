@@ -10,7 +10,8 @@ import {
   HelpCircle, ChevronDown, ChevronUp, Search, RefreshCw, CheckCircle, Info
 } from 'lucide-react';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
-import { HOY, PRODUCTOS_COSTOS } from '../data/mockData';
+import { PRODUCTOS_COSTOS } from '../data/mockData';
+import { getHoyYMD } from '../utils/fechasEntrega';
 import { parsearProductosPedido } from '../utils/remitoPrinter';
 import { COMBOS_INICIALES } from '../utils/combosIniciales';
 
@@ -219,7 +220,7 @@ export default function Finanzas() {
 
   const pedidosPeriodo = useMemo(() => {
     const ahora = new Date();
-    const hoyStr = HOY || ahora.toISOString().split('T')[0];
+    const hoyStr = getHoyYMD();
 
     // Rango de la semana actual (Lunes a Domingo)
     const diaSem = ahora.getDay(); // 0 = Domingo, 1 = Lunes
@@ -337,7 +338,7 @@ export default function Finanzas() {
   // ── 10. Conteo de pedidos para badges de los tabs ───────────────────────────
   const conteoTabs = useMemo(() => {
     const ahora = new Date();
-    const hoyStr = HOY || ahora.toISOString().split('T')[0];
+    const hoyStr = getHoyYMD();
 
     const diaSem = ahora.getDay();
     const diasAlLunes = (diaSem + 6) % 7;
@@ -495,7 +496,7 @@ export default function Finanzas() {
         <div className="text-xs text-gray-400 flex items-center gap-2 px-2">
           <Calendar size={13} className="text-emerald-400" />
           <span>
-            {periodo === 'hoy' && `Ventas registradas de hoy (${HOY || 'Fecha actual'})`}
+            {periodo === 'hoy' && `Ventas registradas de hoy (${getHoyYMD() || 'Fecha actual'})`}
             {periodo === 'semana' && 'Semana corriente (Monotributo prorrateado a 7 días)'}
             {periodo === 'mes' && 'Mes en curso (Monotributo mensual completo deducido)'}
           </span>

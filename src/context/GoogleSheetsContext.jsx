@@ -16,7 +16,8 @@ const GoogleSheetsContext = createContext();
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
 const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_KEY || import.meta.env.VITE_GOOGLE_API_KEY;
 import { APPS_SCRIPT_URL } from '../utils/appsScriptUrl';
-import { parsearFecha } from '../utils/fechasEntrega';
+import { parsearFecha, extraerFechaYMD, getHoyYMD } from '../utils/fechasEntrega';
+import { METODOS_PAGO_CONTRA_ENTREGA } from '../utils/agendaCalendario';
 
 export function GoogleSheetsProvider({ children }) {
   const [pedidos, setPedidos]         = useState(PEDIDOS_MOCK);
@@ -108,11 +109,15 @@ export function GoogleSheetsProvider({ children }) {
         const obj = { sheetRowIndex: index + 2 };
         headers.forEach((h, i) => { obj[h] = row[i] || ''; });
 
+        const formaPagoRaw = (obj.forma_pago || '').toLowerCase().trim();
+        const metodoPagoRaw = (obj.metodo_pago || obj.medio_pago || obj.medio_cobro || '').toLowerCase().trim();
+        const formaPago = formaPagoRaw || (METODOS_PAGO_CONTRA_ENTREGA.includes(metodoPagoRaw) ? 'entrega' : '');
+
         return {
           id:              obj.id || obj.numero_pedido || `REQ-${index}`,
           numero_pedido:   obj.numero_pedido || `#${index + 1000}`,
           sheetRowIndex:   obj.sheetRowIndex,
-          fecha:           obj.get_fecha || obj.fecha || new Date().toISOString().split('T')[0],
+          fecha:           extraerFechaYMD(obj.get_fecha || obj.fecha) || getHoyYMD(),
           nombre:          obj.nombre || obj.cliente || 'Sin Nombre',
           telefono:        obj.telefono || obj.celular || '',
           direccion:       obj.direccion || '',
@@ -122,7 +127,8 @@ export function GoogleSheetsProvider({ children }) {
           observaciones:   obj.observaciones || obj.notas || '',
           total:           Number((obj.total || '0').toString().replace(/[$.]/g, '').replace(',', '.')) || 0,
           estado_pago:     obj.estado_pago || obj.pago || 'pendiente',
-          forma_pago:      (obj.forma_pago || '').toLowerCase().trim(),
+          forma_pago:      formaPago,
+          metodo_pago:     (obj.metodo_pago || '').toLowerCase().trim(),
           medio_pago:      obj.medio_cobro || obj.medio_pago || obj.metodo_pago || '',
           monto_cobrado:   obj.monto_cobrado != null && obj.monto_cobrado !== '' ? Number(obj.monto_cobrado) : null,
           detalle_json:    obj.detalle_json || null,

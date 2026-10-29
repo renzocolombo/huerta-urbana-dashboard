@@ -1,13 +1,14 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { X, Send, Leaf } from 'lucide-react';
-import { HOY } from '../data/mockData';
+import { getHoyYMD, extraerFechaYMD } from '../utils/fechasEntrega';
 import { KEYS } from '../config/keys';
 
 // Contexto optimizado para la IA
 function generarContexto(pedidos) {
-  const hoy = pedidos.filter(p => p.fecha === HOY);
-  const facturacionHoy = hoy.reduce((s, p) => s + p.total, 0);
+  const hoyStr = getHoyYMD();
+  const hoy = (pedidos || []).filter(p => (extraerFechaYMD(p.fecha) || p.fecha) === hoyStr);
+  const facturacionHoy = hoy.reduce((s, p) => s + (Number(p.total) || 0), 0);
   
   const ventas = {};
   hoy.forEach(p => {
@@ -63,8 +64,9 @@ export default function IAFlotante() {
 
     try {
       // --- CÁLCULO DE CONTEXTO REAL ---
-      const pedidosHoyMap = PEDIDOS.filter(p => p.fecha === HOY);
-      const facturacionHoy = pedidosHoyMap.reduce((s, p) => s + p.total, 0);
+      const hoyStr = getHoyYMD();
+      const pedidosHoyMap = (PEDIDOS || []).filter(p => (extraerFechaYMD(p.fecha) || p.fecha) === hoyStr);
+      const facturacionHoy = pedidosHoyMap.reduce((s, p) => s + (Number(p.total) || 0), 0);
       const pedidosPendientes = pedidosHoyMap.filter(p => p.estado === 'pendiente');
       
       const stockArray = Array.isArray(stockData) 

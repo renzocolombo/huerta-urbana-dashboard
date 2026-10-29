@@ -2,7 +2,68 @@
 import {
   parseDiaEntrega, bloquesDelDia, primeraEntrega, claveOrden, dowDeYmd, BLOQUES, turnoDePedido,
 } from './entregaCalendario.js';
-import { calcularFechaEntregaProgramada, fechaA_YMD, parsearFecha } from './fechasEntrega.js';
+import { calcularFechaEntregaProgramada, fechaA_YMD, parsearFecha, extraerFechaYMD, getHoyYMD } from './fechasEntrega.js';
+
+export const METODOS_PAGO_CONTRA_ENTREGA = ['efectivo', 'contra_entrega', 'al_recibir'];
+
+export function esFormaPagoContraEntrega(formaPago, metodoPago) {
+  const f = (formaPago || '').toLowerCase().trim();
+  const m = (metodoPago || '').toLowerCase().trim();
+  return f === 'entrega' || METODOS_PAGO_CONTRA_ENTREGA.includes(m) || METODOS_PAGO_CONTRA_ENTREGA.includes(f);
+}
+
+export function esFormaEntregaOLink(formaPago, metodoPago) {
+  const f = (formaPago || '').toLowerCase().trim();
+  if (f === 'link') return true;
+  return esFormaPagoContraEntrega(f, metodoPago);
+}
+
+export function esPedidoElegibleReparto(p, estadoActualOverride) {
+  if (!p) return false;
+  const estadoActual = (estadoActualOverride || p.estado || 'pendiente').toLowerCase().trim();
+  const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
+  const esEntregado = estadoActual === 'entregado' || estadoActual === 'delivered';
+  const esCancelado = estadoActual === 'cancelado' || estadoActual === 'cancelled' ||
+    (estadoActual === 'no_entregado' && (p.motivo_no_entrega || p.motivo || '').toLowerCase().includes('cancel'));
+
+  // Si está entregado o cancelado y no tiene reembolso pendiente, no va a reparto
+  if ((esEntregado || esCancelado) && !tieneReembolsoPendiente) {
+    return false;
+  }
+
+  const estadoPago = (p.estado_pago || '').toLowerCase().trim();
+  const formaPago = (p.forma_pago || '').toLowerCase().trim();
+  const metodoPago = (p.metodo_pago || p.medio_pago || '').toLowerCase().trim();
+
+  const esAprobado = estadoPago === 'approved' || estadoPago === 'pagado';
+  const esEntregaOLink = esFormaEntregaOLink(formaPago, metodoPago);
+
+  if (!esAprobado && !esEntregaOLink && !tieneReembolsoPendiente) {
+    return false;
+  }
+
+  return true;
+}
+
+export function etiquetaMedioPagoDisplay(p) {
+  if (!p) return '-';
+  const forma = (p.forma_pago || '').toLowerCase().trim();
+  const medio = (p.metodo_pago || p.medio_pago || '').toLowerCase().trim();
+  if (forma === 'entrega' || METODOS_PAGO_CONTRA_ENTREGA.includes(medio) || METODOS_PAGO_CONTRA_ENTREGA.includes(forma)) {
+    return 'Pago contra entrega';
+  }
+  if (forma === 'link' || medio === 'link' || medio === 'link_pago') {
+    return 'Link de Pago';
+  }
+  if (medio === 'mercadopago') {
+    return 'Mercado Pago';
+  }
+  if (medio === 'transferencia') return 'Transferencia';
+  if (medio === 'qr') return 'QR';
+  if (medio === 'debito') return 'Débito';
+  if (medio === 'credito') return 'Crédito';
+  return p.medio_pago || p.metodo_pago || p.forma_pago || '-';
+}
 
 export const CLAVE_ATRASADOS = 'atrasados';
 export const CLAVE_SIN_FECHA = 'sin-fecha';
@@ -15,12 +76,14 @@ function sumarDiasYmd(ymd, n) {
 }
 
 // Fecha y bloque de entrega de un pedido. Pedido nuevo: columna dia_entrega con fecha.
-// Pedido viejo ("Martes"/"Jueves"): calculo actual, con bloque interpretado de horario_entrega.
+// Fallback a fecha_entrega si existe. Pedido viejo ("Martes"/"Jueves"): calculo actual, con bloque interpretado de horario_entrega.
 export function resolverEntrega(p) {
   const parsed = parseDiaEntrega(p?.dia_entrega);
   const turno = turnoDePedido(p);
   const bloque = turno === 'Mañana' ? 'M' : turno === 'Tarde' ? 'T' : null;
   if (parsed) return { ymd: parsed.ymd, bloque, turno, conFecha: true };
+  const fEntregaYMD = extraerFechaYMD(p?.fecha_entrega);
+  if (fEntregaYMD) return { ymd: fEntregaYMD, bloque, turno, conFecha: true };
   const d = calcularFechaEntregaProgramada(p?.fecha, p?.dia_entrega);
   return { ymd: d ? fechaA_YMD(d) : '', bloque, turno, conFecha: false };
 }
