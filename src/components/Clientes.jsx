@@ -468,16 +468,16 @@ El equipo de Huerta Urbana`;
         )}
       </div>
 
-      {/* ── CARRITOS ABANDONADOS ─────────────────────────── */}
+      {/* ── PAGOS ONLINE SIN COMPLETAR ─────────────────────────── */}
       <div>
         <div className="mb-6 flex items-start gap-3">
           <div className="w-9 h-9 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-center shrink-0">
             <ShoppingCart size={18} className="text-amber-400" />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-white">Carritos Abandonados</h2>
+            <h2 className="text-xl font-bold text-white">Pagos online sin completar</h2>
             <p className="text-gray-500 text-sm mt-0.5">
-              {carritosAbandonados.length} contactos que completaron el formulario pero no pagaron
+              {carritosAbandonados.length} {carritosAbandonados.length === 1 ? 'pago online pendiente o sin completar' : 'pagos online pendientes o sin completar'}
             </p>
           </div>
         </div>
@@ -485,7 +485,7 @@ El equipo de Huerta Urbana`;
         {carritosAbandonados.length === 0 ? (
           <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-10 text-center">
             <AlertTriangle size={32} className="text-gray-600 mx-auto mb-3" />
-            <p className="text-gray-500">No hay carritos abandonados registrados.</p>
+            <p className="text-gray-500">No hay pagos online sin completar registrados.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -505,11 +505,11 @@ El equipo de Huerta Urbana`;
                     </div>
                   </div>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded-lg shrink-0">
-                    No pagó
+                    Sin completar
                   </span>
                 </div>
 
-                {/* Info del carrito */}
+                {/* Info del pago online */}
                 <div className="bg-[#111827] border border-gray-800 rounded-xl p-3 mb-4 space-y-1.5">
                   <div className="flex justify-between items-start">
                     <span className="text-[11px] text-gray-500 mt-0.5">Producto</span>
