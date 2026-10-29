@@ -903,8 +903,10 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
   const fechaEmision = `${String(hoy.getDate()).padStart(2, '0')}/${String(hoy.getMonth() + 1).padStart(2, '0')}/${hoy.getFullYear()}`;
 
   // Datos del Cliente
-  const clienteNombre = pedido?.nombre || 'Consumidor Final';
-  const clienteDireccion = pedido?.direccion ? `${pedido.direccion}${pedido.localidad ? ', ' + pedido.localidad : ''}` : '—';
+  const clienteNombre = pedido?.nombre && String(pedido.nombre).trim()
+    ? String(pedido.nombre).trim()
+    : 'Cliente';
+  const clienteDireccion = pedido?.direccion ? `${pedido.direccion}${pedido.localidad ? ', ' + pedido.localidad : ''}` : (pedido?.localidad || '—');
   const clienteTelefono = pedido?.telefono || '—';
   const fechaEntregaStr = pedido?.dia_entrega || pedido?.fecha || 'Sin fecha';
   // Si dia_entrega trae fecha y bloque ("Lunes 09/11/2026 Tarde") el turno sale del bloque ("14 a 17 h")
@@ -1023,7 +1025,7 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
           <!-- Bloque Izquierdo: Emisor -->
           <div class="header-col-izq">
             <h2 class="nombre-comercial-emisor">${EMISOR.nombre_comercial || 'Huerta Urbana'}</h2>
-            <div class="razon-social-emisor">${EMISOR.razon || 'Renzo Alejandro Colombo'}</div>
+            <div class="razon-social-emisor">Razón social: ${EMISOR.razon || 'Renzo Alejandro Colombo'}</div>
             <div class="dato-emisor">
               <div><strong>Domicilio:</strong> ${EMISOR.domicilio || '—'}</div>
             </div>
@@ -1055,15 +1057,7 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
         <div class="cliente-box">
           <div class="cliente-grid">
             <div class="cliente-linea">
-              <span class="lbl">Razón Social:</span>
-              <span class="val">Consumidor Final sin identificar</span>
-            </div>
-            <div class="cliente-linea">
-              <span class="lbl">I.V.A.:</span>
-              <span class="val">Consumidor Final</span>
-            </div>
-            <div class="cliente-linea">
-              <span class="lbl">Nombre:</span>
+              <span class="lbl">Cliente:</span>
               <span class="val"><strong>${clienteNombre}</strong></span>
             </div>
             <div class="cliente-linea">

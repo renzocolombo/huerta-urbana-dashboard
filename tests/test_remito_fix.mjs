@@ -174,6 +174,37 @@ test('HU-836253: generarHojaRemitoHTML NO contiene "pedidos sin precios congelad
 
   // Requisito 3: Pie del remito con aviso estimado para contra entrega sin pesar
   assert.ok(html.includes('Total estimado: puede variar según el peso real'), 'Debe indicar que el total es estimado');
+
+  // Requisitos Nuevos: Encabezado Emisor, Cliente y eliminación de IVA / Consumidor Final
+  assert.ok(html.includes('Razón social: Renzo Alejandro Colombo'), 'Debe mostrar "Razón social: Renzo Alejandro Colombo"');
+  assert.ok(html.includes('20-30219202-3'), 'Debe mantener el CUIT e Ingresos Brutos');
+  assert.ok(html.includes('01/04/2026'), 'Debe mantener el Inicio de Actividades');
+  assert.ok(!html.toLowerCase().includes('iva'), 'NO debe contener la palabra IVA en ningún lugar');
+  assert.ok(!html.toLowerCase().includes('consumidor'), 'NO debe contener la palabra Consumidor en ningún lugar');
+});
+
+test('Cliente muestra el nombre del pedido o "Cliente" si está vacío, sin mostrar email', () => {
+  const pConNombre = {
+    ...pedidoRealHU836253,
+    nombre: 'Juan Perez',
+    email: 'juan@test.com',
+    direccion: 'Calle Falsa 123',
+    localidad: 'Pilar'
+  };
+  const htmlConNombre = generarHojaRemitoHTML(pConNombre, null, 'ORIGINAL - CLIENTE', { catalogoPrecios: catalogoTest });
+  assert.ok(htmlConNombre.includes('Juan Perez'), 'Debe mostrar el nombre del cliente');
+  assert.ok(htmlConNombre.includes('Calle Falsa 123, Pilar'), 'Debe mostrar dirección y localidad');
+  assert.ok(!htmlConNombre.includes('juan@test.com'), 'NO debe mostrar el email');
+
+  const pSinNombre = {
+    ...pedidoRealHU836253,
+    nombre: '',
+    email: 'sin_nombre@test.com'
+  };
+  const htmlSinNombre = generarHojaRemitoHTML(pSinNombre, null, 'ORIGINAL - CLIENTE', { catalogoPrecios: catalogoTest });
+  assert.ok(htmlSinNombre.includes('Cliente'), 'Debe mostrar "Cliente" si el nombre viene vacío');
+  assert.ok(!htmlSinNombre.toLowerCase().includes('consumidor'), 'NO debe decir Consumidor');
+  assert.ok(!htmlSinNombre.toLowerCase().includes('iva'), 'NO debe decir IVA');
 });
 
 console.log('\n==================================================================');
