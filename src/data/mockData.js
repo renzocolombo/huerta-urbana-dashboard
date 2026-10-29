@@ -82,4 +82,7 @@ export const PRODUCTOS_COSTOS = PRODUCTOS.map(nombre => ({
   activo: true,
 }));
 
-export const HOY = fmt(today);
+import { getHoyYMD } from '../utils/fechasEntrega.js';
+export { getHoyYMD };
+export const HOY = getHoyYMD();
+
