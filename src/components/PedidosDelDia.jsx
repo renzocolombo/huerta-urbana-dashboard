@@ -1,8 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { 
   AlertCircle, Clock, Package, Printer, Calendar, Sun, Sunset, 
-  ArrowRight, CheckCircle, RefreshCw 
+  ArrowRight, CheckCircle, RefreshCw, ChevronLeft 
 } from 'lucide-react';
 import { getHoyYMD, extraerFechaYMD } from '../utils/fechasEntrega';
 import { turnoDePedido, sumarDias, dowDeYmd } from '../utils/entregaCalendario';
@@ -10,31 +10,21 @@ import {
   resolverEntrega, 
   esPedidoElegibleReparto, 
   esPedidoCancelado, 
+  claveTabInicial,
   etiquetaMedioPagoDisplay,
   METODOS_PAGO_CONTRA_ENTREGA 
 } from '../utils/agendaCalendario';
 import { imprimirRemitoIndividual, imprimirRemitosEnLote, estaPedidoArmado } from '../utils/remitoPrinter';
+import { 
+  estadoEntregaPedido, 
+  estadoPagoPedido, 
+  calcularResumenDia,
+  esPedidoCobrado 
+} from '../utils/estadosPedido';
+import ResumenDiaBar from './ResumenDiaBar';
 
 const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
 const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-
-const ESTADO_CONFIG = {
-  pendiente:      { label: 'Pendiente',      color: 'bg-red-500/15 text-red-400 border-red-500/30',    dot: 'bg-red-500' },
-  en_preparacion: { label: 'En preparación', color: 'bg-amber-500/15 text-amber-400 border-amber-500/30', dot: 'bg-amber-500' },
-  preparado:      { label: 'Preparado',      color: 'bg-blue-500/15 text-blue-400 border-blue-500/30',  dot: 'bg-blue-500' },
-  listo:          { label: 'Listo',          color: 'bg-blue-500/15 text-blue-400 border-blue-500/30',  dot: 'bg-blue-500' },
-  entregado:      { label: 'Entregado',      color: 'bg-green-500/15 text-green-400 border-green-500/30', dot: 'bg-green-500' },
-};
-
-function Badge({ config }) {
-  if (!config) return null;
-  return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${config.color}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${config.dot}`} />
-      {config.label}
-    </span>
-  );
-}
 
 function formatearFechaLegible(ymd) {
   if (!ymd || !ymd.includes('-')) return ymd || '';
@@ -43,12 +33,10 @@ function formatearFechaLegible(ymd) {
   return `${diaNombre} ${d}/${m}`;
 }
 
-export default function PedidosDelDia() {
+export default function PedidosDelDia({ rol, usuario, onNav, fechaCompartida, setFechaCompartida }) {
   const { pedidos: PEDIDOS, actualizarRemitoEnSheet } = useGoogleSheets();
 
   const hoyArgentina = useMemo(() => getHoyYMD(), []);
-  const [fechaSeleccionada, setFechaSeleccionada] = useState(() => getHoyYMD());
-  const [filtroEstado, setFiltroEstado] = useState(null);
 
   const preparaciones = useMemo(() => {
     try {
@@ -63,6 +51,46 @@ export default function PedidosDelDia() {
   const pedidosElegibles = useMemo(() => {
     return (PEDIDOS || []).filter(p => esPedidoElegibleReparto(p) && !esPedidoCancelado(p));
   }, [PEDIDOS]);
+
+  // Lista de todas las fechas YMD únicas de pedidos elegibles
+  const fechasConPedidos = useMemo(() => {
+    const set = new Set();
+    pedidosElegibles.forEach(p => {
+      const f = resolverEntrega(p).ymd;
+      if (f) set.add(f);
+    });
+    return Array.from(set).sort();
+  }, [pedidosElegibles]);
+
+  // Si hoy no tiene pedidos, calcular próxima fecha elegida automáticamente (igual que Agenda con claveTabInicial)
+  const fechaPorDefecto = useMemo(() => {
+    if (fechaCompartida) return fechaCompartida;
+    return claveTabInicial(fechasConPedidos, hoyArgentina) || hoyArgentina;
+  }, [fechaCompartida, fechasConPedidos, hoyArgentina]);
+
+  const [fechaSeleccionada, setFechaSeleccionada] = useState(fechaPorDefecto);
+  const [avisoAutoFecha, setAvisoAutoFecha] = useState(() => {
+    return !fechaCompartida && !fechasConPedidos.includes(hoyArgentina) && fechaPorDefecto !== hoyArgentina;
+  });
+  const [filtroEstado, setFiltroEstado] = useState(null);
+
+  // Si cambia fechaCompartida desde afuera (ej: clic desde Agenda), sincronizar
+  useEffect(() => {
+    if (fechaCompartida) {
+      setFechaSeleccionada(fechaCompartida);
+      setAvisoAutoFecha(false);
+    }
+  }, [fechaCompartida]);
+
+  // Si cambian los pedidos y aún no hay fecha elegida explícitamente o hoy está vacío
+  useEffect(() => {
+    if (!fechaCompartida && !fechasConPedidos.includes(hoyArgentina) && fechasConPedidos.length > 0) {
+      if (fechaSeleccionada === hoyArgentina && fechaPorDefecto !== hoyArgentina) {
+        setFechaSeleccionada(fechaPorDefecto);
+        setAvisoAutoFecha(true);
+      }
+    }
+  }, [fechasConPedidos, hoyArgentina, fechaCompartida, fechaPorDefecto, fechaSeleccionada]);
 
   // 2. Pedidos del día seleccionado filtrados por FECHA DE ENTREGA
   const pedidosDelDia = useMemo(() => {
@@ -94,6 +122,11 @@ export default function PedidosDelDia() {
       sinTurno,
     };
   }, [pedidosDelDia]);
+
+  // Resumen del día para ResumenDiaBar (estados de entrega, pago y monto)
+  const resumenDia = useMemo(() => {
+    return calcularResumenDia(pedidosDelDia, preparaciones);
+  }, [pedidosDelDia, preparaciones]);
 
   // 4. Búsqueda de próxima fecha con entregas si el día actual está vacío
   const proximaEntregaConPedidos = useMemo(() => {
@@ -181,6 +214,43 @@ export default function PedidosDelDia() {
 
   return (
     <div className="space-y-6">
+      {/* ── Aviso visible si se abrió directo en el próximo día con entregas ── */}
+      {avisoAutoFecha && (
+        <div className="bg-indigo-950/60 border border-indigo-500/40 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 shrink-0">
+              <Calendar size={18} />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white">
+                Hoy no hay entregas pendientes. Mostrando el próximo día con entregas: <span className="text-indigo-300 font-extrabold">{formatearFechaLegible(fechaSeleccionada)}</span>
+              </p>
+              <p className="text-xs text-indigo-300/80">
+                Podés seleccionar otra fecha o volver a hoy cuando desees.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setFechaSeleccionada(hoyArgentina);
+              setAvisoAutoFecha(false);
+            }}
+            className="inline-flex items-center justify-center gap-2 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow cursor-pointer shrink-0 active:scale-95"
+          >
+            <span>Ir a hoy</span>
+          </button>
+        </div>
+      )}
+
+      {/* ── Resumen superior unificado para el día elegido ── */}
+      <ResumenDiaBar
+        resumen={resumenDia}
+        fechaLabel={formatearFechaLegible(fechaSeleccionada)}
+        onVolverAgenda={onNav ? () => onNav('agenda', fechaSeleccionada) : undefined}
+        origen="pedidos"
+      />
+
       {/* ── Encabezado y Navegación de Fecha ── */}
       <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-5 shadow-lg">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -190,8 +260,21 @@ export default function PedidosDelDia() {
                 <Package size={18} />
               </span>
               <div>
-                <h2 className="text-xl font-bold text-white">Pedidos del Día</h2>
-                <p className="text-gray-400 text-xs">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-xl font-bold text-white">Pedidos del Día</h2>
+                  {onNav && (
+                    <button
+                      type="button"
+                      onClick={() => onNav('agenda', fechaSeleccionada)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-semibold bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white border border-gray-700 transition-all cursor-pointer active:scale-95"
+                      title="Volver a la Agenda de entregas manteniendo esta fecha"
+                    >
+                      <ChevronLeft size={13} />
+                      <span>Volver a Agenda</span>
+                    </button>
+                  )}
+                </div>
+                <p className="text-gray-400 text-xs mt-0.5">
                   Entregas programadas para {formatearFechaLegible(fechaSeleccionada)}
                   {esHoy && <span className="ml-2 text-green-400 font-semibold">(Hoy)</span>}
                   {esManana && <span className="ml-2 text-sky-400 font-semibold">(Mañana)</span>}
@@ -206,7 +289,10 @@ export default function PedidosDelDia() {
             <div className="flex items-center bg-[#111827] border border-gray-700/80 rounded-xl p-1 shadow-inner">
               <button
                 type="button"
-                onClick={() => setFechaSeleccionada(sumarDias(hoyArgentina, -1))}
+                onClick={() => {
+                  setFechaSeleccionada(sumarDias(hoyArgentina, -1));
+                  setAvisoAutoFecha(false);
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   esAyer ? 'bg-indigo-600 text-white shadow-sm' : 'text-gray-400 hover:text-white'
                 }`}
@@ -215,7 +301,10 @@ export default function PedidosDelDia() {
               </button>
               <button
                 type="button"
-                onClick={() => setFechaSeleccionada(hoyArgentina)}
+                onClick={() => {
+                  setFechaSeleccionada(hoyArgentina);
+                  setAvisoAutoFecha(false);
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   esHoy ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-400 hover:text-white'
                 }`}
@@ -224,7 +313,10 @@ export default function PedidosDelDia() {
               </button>
               <button
                 type="button"
-                onClick={() => setFechaSeleccionada(sumarDias(hoyArgentina, 1))}
+                onClick={() => {
+                  setFechaSeleccionada(sumarDias(hoyArgentina, 1));
+                  setAvisoAutoFecha(false);
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   esManana ? 'bg-sky-600 text-white shadow-sm' : 'text-gray-400 hover:text-white'
                 }`}
@@ -238,7 +330,10 @@ export default function PedidosDelDia() {
               <input
                 type="date"
                 value={fechaSeleccionada}
-                onChange={(e) => setFechaSeleccionada(e.target.value)}
+                onChange={(e) => {
+                  setFechaSeleccionada(e.target.value);
+                  setAvisoAutoFecha(false);
+                }}
                 className="bg-transparent text-xs text-white font-medium focus:outline-none cursor-pointer"
                 title="Seleccionar fecha de entrega"
               />
@@ -313,7 +408,10 @@ export default function PedidosDelDia() {
             <div className="pt-2">
               <button
                 type="button"
-                onClick={() => setFechaSeleccionada(proximaEntregaConPedidos.ymd)}
+                onClick={() => {
+                  setFechaSeleccionada(proximaEntregaConPedidos.ymd);
+                  setAvisoAutoFecha(false);
+                }}
                 className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-950/40 active:scale-95 cursor-pointer"
               >
                 <span>Ir a la próxima entrega con pedidos: {proximaEntregaConPedidos.label} ({proximaEntregaConPedidos.cantidad} {proximaEntregaConPedidos.cantidad === 1 ? 'pedido' : 'pedidos'})</span>
@@ -437,19 +535,16 @@ function TablaTurno({ titulo, horario, icono, pedidos, imprimirRemitoPedido, pre
               <th className="text-left px-4 py-3 font-semibold">Localidad</th>
               <th className="text-left px-4 py-3 font-semibold">Productos</th>
               <th className="text-left px-4 py-3 font-semibold">Total</th>
-              <th className="text-left px-4 py-3 font-semibold">Estado</th>
+              <th className="text-left px-4 py-3 font-semibold">Entrega</th>
               <th className="text-left px-4 py-3 font-semibold">Pago</th>
               <th className="text-center px-4 py-3 font-semibold">Remito</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/60">
             {pedidos.map(p => {
-              const formaPago = (p.forma_pago || '').toLowerCase().trim();
-              const metodoPago = (p.metodo_pago || p.medio_pago || '').toLowerCase().trim();
-              const estadoPago = (p.estado_pago || '').toLowerCase().trim();
-
-              const esContraEntrega = formaPago === 'entrega' || METODOS_PAGO_CONTRA_ENTREGA.includes(metodoPago) || METODOS_PAGO_CONTRA_ENTREGA.includes(formaPago);
-              const esAprobado = estadoPago === 'approved' || estadoPago === 'pagado';
+              const prep = preparaciones[p.numero_pedido] || null;
+              const estEnt = estadoEntregaPedido(p, prep);
+              const estPag = estadoPagoPedido(p);
 
               return (
                 <tr key={p.numero_pedido} className="hover:bg-gray-800/40 transition-colors">
@@ -469,27 +564,24 @@ function TablaTurno({ titulo, horario, icono, pedidos, imprimirRemitoPedido, pre
                     {$$(p.total)}
                   </td>
                   <td className="px-4 py-3">
-                    <Badge config={ESTADO_CONFIG[p.estado] || ESTADO_CONFIG.pendiente} />
+                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${estEnt.color}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${estEnt.dot}`} />
+                      <span>{estEnt.label}</span>
+                    </span>
                   </td>
                   <td className="px-4 py-3">
-                    {esContraEntrega ? (
-                      <div>
-                        <span className="text-xs font-semibold text-amber-400 block">Pago contra entrega</span>
-                        <span className="text-[10px] text-gray-500 block leading-tight">(QR, transf, débito, crédito)</span>
-                      </div>
-                    ) : esAprobado ? (
-                      <span className="text-xs font-semibold text-emerald-400">Pagado online</span>
-                    ) : formaPago === 'link' || metodoPago === 'link' ? (
-                      <span className="text-xs font-semibold text-sky-400">Link de pago</span>
-                    ) : (
-                      <span className="text-xs font-semibold text-gray-400">
-                        {etiquetaMedioPagoDisplay(p)}
+                    <div>
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${estPag.color}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${estPag.dot}`} />
+                        <span>{estPag.label}</span>
                       </span>
-                    )}
+                      {estPag.sublabel && (
+                        <span className="text-[10px] text-gray-400 block mt-0.5 leading-tight">{estPag.sublabel}</span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-center">
                     {(() => {
-                      const prep = preparaciones[p.numero_pedido] || null;
                       const armado = estaPedidoArmado(p, prep);
                       return (
                         <button

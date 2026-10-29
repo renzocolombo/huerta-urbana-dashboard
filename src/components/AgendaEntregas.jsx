@@ -29,6 +29,8 @@ import {
   apiGetFeriados
 } from '../utils/mercaderiaApi';
 import { imprimirEtiquetaBolsa } from '../utils/etiquetaPrinter';
+import { esPedidoCobrado, estadoEntregaPedido, estadoPagoPedido, calcularResumenDia } from '../utils/estadosPedido';
+import ResumenDiaBar from './ResumenDiaBar';
 import ReembolsosTab from './ReembolsosTab';
 import ModalReembolsoDevuelto from './ModalReembolsoDevuelto';
 import CalendarioEntregas from './CalendarioEntregas';
@@ -153,22 +155,9 @@ export function abrirWhatsAppWeb(telefono, texto) {
 export function esPedidoPendienteDeEntrega(p, estadoActualOverride) {
   if (!p) return false;
   const est = (estadoActualOverride || p.estado || 'pendiente').toLowerCase().trim();
-  // Si está Entregado o Cancelado, NO es pendiente
-  if (est === 'entregado' || est === 'cancelado') return false;
-
-  // Si ya fue cobrado (botón Cobrar, monto cobrado o medio registrado), NO es pendiente
-  const formaPago = (p.forma_pago || '').toLowerCase().trim();
-  const estaCobrado = Boolean(
-    p.cobrado === true ||
-    p.cobrado === 'true' ||
-    p.cobrado === 'TRUE' ||
-    (p.monto_cobrado != null && p.monto_cobrado !== '' && Number(p.monto_cobrado) > 0) ||
-    (p.medio_pago && (formaPago === 'entrega' || formaPago === 'link')) ||
-    p.medio_cobro ||
-    p.fecha_cobro
-  );
-  if (estaCobrado) return false;
-
+  // Si está Entregado, Cancelado o No entregado, NO es pendiente de entrega
+  if (est === 'entregado' || est === 'delivered' || est === 'cancelado' || est === 'cancelled') return false;
+  if (est === 'no_entregado' || est === 'no entregado') return false;
   return true;
 }
 
@@ -268,7 +257,7 @@ function getTipoByNombre(nombre) {
 
 // ══════════════════════════════════════════════════════════════════════════════
 
-export default function AgendaEntregas({ rol, usuario }) {
+export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, setFechaCompartida }) {
   const { 
     pedidos: PEDIDOS, 
     actualizarEstadoEnSheet, 
@@ -286,8 +275,14 @@ export default function AgendaEntregas({ rol, usuario }) {
   // ── Calendario de entregas: feriados/días cerrados (se cargan una vez al abrir la Agenda) ──
   const [feriados, setFeriados] = useState([]);
   const [avisoFeriados, setAvisoFeriados] = useState(null);
-  const [tabSeleccionada, setTabSeleccionada] = useState(null); // null = pestaña por defecto (hoy / próxima)
+  const [tabSeleccionada, setTabSeleccionada] = useState(() => fechaCompartida || null);
   const hoyYMD = getHoyYMD();
+
+  useEffect(() => {
+    if (fechaCompartida) {
+      setTabSeleccionada(fechaCompartida);
+    }
+  }, [fechaCompartida]);
 
   const cargarFeriados = useCallback(async () => {
     const r = await apiGetFeriados();
@@ -383,6 +378,11 @@ export default function AgendaEntregas({ rol, usuario }) {
     const t = tabsEntrega.find(x => x.clave === tabActiva);
     return t ? t.label : '';
   }, [tabsEntrega, tabActiva]);
+
+  // Resumen de estados de entrega y cobro para la pestaña activa
+  const resumenDia = useMemo(() => {
+    return calcularResumenDia(pedidosDelDia, preparaciones);
+  }, [pedidosDelDia, preparaciones]);
 
   // Cantidad de pedidos programados por fecha (para el Calendario)
   const conteoCalendario = useMemo(() => conteoPorFecha(pedidosActivosTodos), [pedidosActivosTodos]);
@@ -755,7 +755,7 @@ export default function AgendaEntregas({ rol, usuario }) {
   const totalACobrarTurno = useMemo(() => {
     return pedidosDelTurno.reduce((sum, p) => {
       const formaPago = (p.forma_pago || '').toLowerCase().trim();
-      const fueCobrado = Boolean(p.cobrado || p.monto_cobrado != null || (p.medio_pago && (formaPago === 'entrega' || formaPago === 'link')));
+      const fueCobrado = esPedidoCobrado(p);
       const esPorCobrar = (formaPago === 'entrega' || formaPago === 'link') && !fueCobrado;
       if (!esPorCobrar) return sum;
       const prep = preparaciones[p.numero_pedido];
@@ -845,6 +845,7 @@ export default function AgendaEntregas({ rol, usuario }) {
       // Éxito: actualizar pedido en memoria
       pedido.cobrado = true;
       pedido.estado_pago = 'approved';
+      pedido.medio_cobro = modalCobrar.medio;
       pedido.medio_pago = modalCobrar.medio;
       pedido.monto_cobrado = modalCobrar.totalCobrar;
       pedido.estado = 'Entregado';
@@ -987,7 +988,7 @@ export default function AgendaEntregas({ rol, usuario }) {
     const estadoActual = (estados[p.numero_pedido] || p.estado || 'pendiente').toLowerCase();
     const formaPago = (p.forma_pago || '').toLowerCase().trim();
     const estadoPago = (p.estado_pago || '').toLowerCase().trim();
-    const estaCobrado = Boolean(p.cobrado || p.monto_cobrado != null || (p.medio_pago && (formaPago === 'entrega' || formaPago === 'link')));
+    const estaCobrado = esPedidoCobrado(p);
 
     // Un pedido que ya no está pendiente de entrega no puede volver a cobrarse ni a entregarse
     if (!esPedidoPendienteDeEntrega(p, estadoActual)) {
@@ -2425,6 +2426,16 @@ export default function AgendaEntregas({ rol, usuario }) {
             );
           })()}
 
+          {/* Resumen de estados de entrega, pago y monto pendiente */}
+          {tabActiva && (
+            <ResumenDiaBar
+              resumen={resumenDia}
+              fechaLabel={tituloTabActiva}
+              onVerPedidosDelDia={tabActiva !== CLAVE_ATRASADOS && onNav ? () => onNav('pedidos', tabActiva) : undefined}
+              origen="agenda"
+            />
+          )}
+
           {/* Aviso discreto si falla la carga en lote de no-entregas */}
           {noEntregasError && (
             <div className="flex items-center justify-between px-3.5 py-2 mb-3 text-xs bg-amber-500/10 border border-amber-500/25 rounded-xl text-amber-300 shadow-sm">
@@ -2554,10 +2565,13 @@ export default function AgendaEntregas({ rol, usuario }) {
 
             const totalExactoPedido = calcularTotalDetalle(p, prep);
 
-            // Identificar si el pedido fue cobrado por el botón Cobrar (o registrado con cobrarPedido)
-            const fueCobradoPorBoton = Boolean(p.cobrado || p.monto_cobrado != null || (p.medio_pago && (formaPago === 'entrega' || formaPago === 'link')));
-            const estaCobrado = fueCobradoPorBoton;
-            const esPorCobrar = (formaPago === 'entrega' || formaPago === 'link') && !fueCobradoPorBoton;
+            // Identificar si el pedido fue efectivamente cobrado (o registrado con cobrarPedido)
+            const estaCobrado = esPedidoCobrado(p);
+            const fueCobradoPorBoton = estaCobrado;
+            const esPorCobrar = (formaPago === 'entrega' || formaPago === 'link') && !estaCobrado;
+
+            const infoEntrega = estadoEntregaPedido(p, prep, estadoActual);
+            const infoPago = estadoPagoPedido(p);
 
             // 1. Cartel de pago visible (exactamente uno por tarjeta, reemplazan a los anteriores si se pisan)
             let cartelPago = null;
@@ -2579,13 +2593,13 @@ export default function AgendaEntregas({ rol, usuario }) {
                 texto: `REEMBOLSADO $${montoReembolso.toLocaleString('es-AR')}${medioLabel ? ` · ${medioLabel}` : ''}`,
                 className: 'bg-gray-500/20 text-gray-300 border-gray-500/40 shadow-sm'
               };
-            } else if (fueCobradoPorBoton) {
-              const rawMedio = p.medio_pago || p.medio_cobro || p.medio || 'Cobro';
-              const medioLabel = (MEDIOS_LABELS[rawMedio] || rawMedio).toUpperCase();
+            } else if (estaCobrado) {
+              const rawMedio = p.medio_cobro || p.medio_pago || p.medio || '';
+              const medioLabel = rawMedio ? ` · ${(MEDIOS_LABELS[rawMedio] || rawMedio).toUpperCase()}` : '';
               const montoVal = p.monto_cobrado != null ? Number(p.monto_cobrado) : totalExactoPedido;
               cartelPago = {
                 tipo: 'verde',
-                texto: `PAGADO Y ENTREGADO · ${medioLabel} · $${Math.round(montoVal).toLocaleString('es-AR')}`,
+                texto: esEntregado ? `COBRADO Y ENTREGADO${medioLabel} · $${Math.round(montoVal).toLocaleString('es-AR')}` : `COBRADO${medioLabel} · $${Math.round(montoVal).toLocaleString('es-AR')}`,
                 className: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-sm'
               };
             } else if (estadoPago === 'approved' || estadoPago === 'pagado') {
@@ -2602,6 +2616,12 @@ export default function AgendaEntregas({ rol, usuario }) {
                 tipo: 'naranja',
                 texto: `A COBRAR $${montoACobrar.toLocaleString('es-AR')}${sufijo}`,
                 className: 'bg-orange-500/20 text-orange-300 border-orange-500/40 shadow-sm'
+              };
+            } else {
+              cartelPago = {
+                tipo: 'amarillo',
+                texto: infoPago.label.toUpperCase(),
+                className: `${infoPago.color} shadow-sm`
               };
             }
 
@@ -2677,7 +2697,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                             ⚠️ REVISAR FECHA
                           </span>
                         )}
-                        <span className={`text-[10px] font-black uppercase px-1.5 py-0.5 rounded border ${conf.color} ${conf.border} bg-black/20`}>{conf.label}</span>
+                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border ${infoEntrega.color}`}>{infoEntrega.label}</span>
                         {prep && tieneBolsas && !todosCompletos && !tieneReembolsoPendiente && (
                           <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse">EN PREPARACIÓN</span>
                         )}

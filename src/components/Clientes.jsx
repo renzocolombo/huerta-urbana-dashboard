@@ -4,6 +4,8 @@ import { MessageCircle, ShoppingBag, DollarSign, Calendar, ShoppingCart, AlertTr
 import { db } from '../config/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { imprimirRemitoIndividual, estaPedidoArmado } from '../utils/remitoPrinter';
+import { estadoEntregaPedido, estadoPagoPedido, esVentaCerrada } from '../utils/estadosPedido';
+import { esFormaPagoContraEntrega } from '../utils/agendaCalendario';
 
 const $$ = (n) => {
   const num = Number(n);
@@ -15,21 +17,34 @@ export default function Clientes() {
 
   const [cuponActivo, setCuponActivo] = useState(true);
 
-  // Clientes reales: al menos un pedido con estado_pago === 'approved'
+  // Clientes reales: pedidos con pago aprobado online o pedidos contra entrega / link
   const clientes = useMemo(() => {
     if (!PEDIDOS || !Array.isArray(PEDIDOS)) return [];
     const mapa = {};
     PEDIDOS.forEach(p => {
-      if ((p.estado_pago || '').toLowerCase() !== 'approved') return;
-      if (!mapa[p.email]) {
-        mapa[p.email] = {
+      const formaPago = (p.forma_pago || '').toLowerCase().trim();
+      const metodoPago = (p.metodo_pago || p.metodo_pago_elegido || '').toLowerCase().trim();
+      const esContraEntrega = formaPago === 'entrega' || esFormaPagoContraEntrega(formaPago, metodoPago);
+      const estadoPago = (p.estado_pago || '').toLowerCase().trim();
+      const esAprobado = estadoPago === 'approved' || estadoPago === 'pagado';
+
+      // Pertenece a la base de clientes si compró online aprobado O si encargó contra entrega / link
+      if (!esAprobado && !esContraEntrega) return;
+
+      const cKey = String(p.email || p.telefono || p.nombre || '').trim();
+      if (!cKey) return;
+
+      if (!mapa[cKey]) {
+        mapa[cKey] = {
           nombre: p.nombre,
           telefono: p.telefono,
           email: p.email,
           localidad: p.localidad,
           pedidos: 0,
           totalGastado: 0,
+          pedidosPendientes: 0,
           ultimoPedido: '',
+          ultimoPedidoObj: null,
           sheetRowIndex: p.sheetRowIndex,
           cupon: (p.cupon || '').trim().toUpperCase(),
           cupon_bienvenida_estado: p.cupon_bienvenida_estado || '',
@@ -41,35 +56,51 @@ export default function Clientes() {
           acepto_publicidad: p.acepto_publicidad || ''
         };
       }
-      mapa[p.email].pedidos += 1;
-      mapa[p.email].totalGastado += p.total;
 
-      if (p.fecha >= mapa[p.email].ultimoPedido) {
-        mapa[p.email].ultimoPedido = p.fecha;
-        mapa[p.email].sheetRowIndex = p.sheetRowIndex;
-        if (p.acepto_tyc) mapa[p.email].acepto_tyc = p.acepto_tyc;
-        if (p.acepto_publicidad) mapa[p.email].acepto_publicidad = p.acepto_publicidad;
+      // Solo contar como venta cerrada si fue entregado y cobrado
+      if (esVentaCerrada(p)) {
+        mapa[cKey].pedidos += 1;
+        mapa[cKey].totalGastado += Number(p.total || 0);
+      } else {
+        mapa[cKey].pedidosPendientes += 1;
+      }
+
+      if (!mapa[cKey].ultimoPedido || p.fecha >= mapa[cKey].ultimoPedido) {
+        mapa[cKey].ultimoPedido = p.fecha;
+        mapa[cKey].ultimoPedidoObj = p;
+        mapa[cKey].sheetRowIndex = p.sheetRowIndex;
+        if (p.acepto_tyc) mapa[cKey].acepto_tyc = p.acepto_tyc;
+        if (p.acepto_publicidad) mapa[cKey].acepto_publicidad = p.acepto_publicidad;
       }
       
       // Merge states: si alguna vez compró con el cupón o tiene un progreso guardado, rescatarlo
-      if ((p.cupon || '').toUpperCase() === 'BIENVENIDO10') mapa[p.email].cupon = 'BIENVENIDO10';
-      if (p.cupon_bienvenida_estado) mapa[p.email].cupon_bienvenida_estado = p.cupon_bienvenida_estado;
-      if (p.codigo_referido) mapa[p.email].codigo_referido = p.codigo_referido;
-      if (p.referido_estado) mapa[p.email].referido_estado = p.referido_estado;
-      if (p.referidos_count) mapa[p.email].referidos_count = parseInt(p.referidos_count);
-      if (p.credito_acumulado) mapa[p.email].credito_acumulado = parseInt(p.credito_acumulado);
+      if ((p.cupon || '').toUpperCase() === 'BIENVENIDO10') mapa[cKey].cupon = 'BIENVENIDO10';
+      if (p.cupon_bienvenida_estado) mapa[cKey].cupon_bienvenida_estado = p.cupon_bienvenida_estado;
+      if (p.codigo_referido) mapa[cKey].codigo_referido = p.codigo_referido;
+      if (p.referido_estado) mapa[cKey].referido_estado = p.referido_estado;
+      if (p.referidos_count) mapa[cKey].referidos_count = parseInt(p.referidos_count);
+      if (p.credito_acumulado) mapa[cKey].credito_acumulado = parseInt(p.credito_acumulado);
     });
-    return Object.values(mapa).sort((a, b) => b.totalGastado - a.totalGastado);
+    return Object.values(mapa).sort((a, b) => {
+      if (b.totalGastado !== a.totalGastado) return b.totalGastado - a.totalGastado;
+      return (b.ultimoPedido || '').localeCompare(a.ultimoPedido || '');
+    });
   }, [PEDIDOS]);
 
-  // Carritos abandonados: pedidos con datos del cliente pero sin pago aprobado
+  // Carritos abandonados: SOLO pedidos de pago online (mercadopago) sin pagar.
+  // Un pedido contra entrega NUNCA es carrito abandonado ni "No pagó".
   const carritosAbandonados = useMemo(() => {
     if (!PEDIDOS || !Array.isArray(PEDIDOS)) return [];
     return PEDIDOS.filter(p => {
+      const formaPago = (p.forma_pago || '').toLowerCase().trim();
+      const metodoPago = (p.metodo_pago || p.metodo_pago_elegido || '').toLowerCase().trim();
+      const esContraEntrega = formaPago === 'entrega' || esFormaPagoContraEntrega(formaPago, metodoPago);
+      if (esContraEntrega) return false;
+
       const estadoPago = (p.estado_pago || '').toLowerCase().trim();
-      const tieneAprobado = estadoPago === 'approved';
-      const tieneDatos = !!(p.nombre || p.telefono);
-      return !tieneAprobado && tieneDatos;
+      const esAprobado = estadoPago === 'approved' || estadoPago === 'pagado';
+      const tieneDatos = !!(p.nombre || p.telefono || p.email);
+      return !esAprobado && tieneDatos;
     }).sort((a, b) => (b.fecha > a.fecha ? 1 : -1));
   }, [PEDIDOS]);
 
@@ -270,7 +301,7 @@ El equipo de Huerta Urbana`;
           <div>
             <h2 className="text-xl font-bold text-white">Clientes</h2>
             <p className="text-gray-500 text-sm mt-1">
-              {clientes.length} clientes con pago aprobado
+              {clientes.length} clientes registrados
             </p>
           </div>
           
@@ -294,12 +325,29 @@ El equipo de Huerta Urbana`;
         {clientes.length === 0 ? (
           <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-10 text-center">
             <ShoppingBag size={32} className="text-gray-600 mx-auto mb-3" />
-            <p className="text-gray-500">Aún no hay clientes con pagos aprobados.</p>
+            <p className="text-gray-500">Aún no hay clientes registrados.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {clientes.map(c => (
-              <div key={c.email} className="bg-[#1f2937] border border-gray-800 rounded-2xl p-5 hover:border-gray-700 transition-all fade-in">
+            {clientes.map(c => {
+              const pedidosCliente = (PEDIDOS || []).filter(p => (c.email && p.email === c.email) || (c.telefono && p.telefono === c.telefono));
+              const ultimoPedido = pedidosCliente && pedidosCliente.length > 0
+                ? [...pedidosCliente].sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''))[0]
+                : c.ultimoPedidoObj || null;
+              let prep = null;
+              if (ultimoPedido) {
+                try {
+                  const s = localStorage.getItem('huerta_preparaciones_v1');
+                  if (s) {
+                    const parsed = JSON.parse(s);
+                    prep = parsed[ultimoPedido.numero_pedido] || null;
+                  }
+                } catch (_) {}
+              }
+              const estaArmado = ultimoPedido ? estaPedidoArmado(ultimoPedido, prep) : false;
+
+              return (
+              <div key={c.email || c.telefono || c.nombre} className="bg-[#1f2937] border border-gray-800 rounded-2xl p-5 hover:border-gray-700 transition-all fade-in">
                 {/* Avatar + nombre */}
                 <div className="flex items-start gap-3 mb-4">
                   <div className="w-10 h-10 rounded-xl bg-green-500/10 border border-green-500/20 flex items-center justify-center text-green-400 font-bold text-sm shrink-0">
@@ -337,17 +385,17 @@ El equipo de Huerta Urbana`;
                   </div>
                 </div>
 
-                {/* Stats */}
+                {/* Stats: solo ventas cerradas */}
                 <div className="grid grid-cols-3 gap-2 mb-4">
                   <div className="bg-[#111827] rounded-xl p-2 text-center">
                     <ShoppingBag size={12} className="text-gray-500 mx-auto mb-1" />
                     <p className="text-base font-bold text-white">{c.pedidos}</p>
-                    <p className="text-[10px] text-gray-500">Pedidos</p>
+                    <p className="text-[10px] text-gray-500">Ventas cerradas</p>
                   </div>
                   <div className="bg-[#111827] rounded-xl p-2 text-center">
                     <DollarSign size={12} className="text-gray-500 mx-auto mb-1" />
                     <p className="text-xs font-bold text-green-400">{$$(c.totalGastado)}</p>
-                    <p className="text-[10px] text-gray-500">Gastado</p>
+                    <p className="text-[10px] text-gray-500">Total cobrado</p>
                   </div>
                   <div className="bg-[#111827] rounded-xl p-2 text-center">
                     <Calendar size={12} className="text-gray-500 mx-auto mb-1" />
@@ -357,6 +405,31 @@ El equipo de Huerta Urbana`;
                     <p className="text-[10px] text-gray-500">Último</p>
                   </div>
                 </div>
+
+                {/* Último pedido con insignias de Entrega y Pago */}
+                {ultimoPedido && (() => {
+                  const estEnt = estadoEntregaPedido(ultimoPedido, prep);
+                  const estPag = estadoPagoPedido(ultimoPedido);
+                  return (
+                    <div className="bg-[#111827] rounded-xl p-3 mb-4 border border-gray-800">
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <span className="font-mono text-gray-400 font-bold">{ultimoPedido.numero_pedido}</span>
+                        <span className="text-emerald-400 font-bold">{$$(ultimoPedido.total)}</span>
+                      </div>
+                      <p className="text-[11px] text-gray-400 truncate mb-2">{ultimoPedido.producto || 'Varios'}</p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${estEnt.color}`}>
+                          <span className={`w-1 h-1 rounded-full ${estEnt.dot}`} />
+                          {estEnt.label}
+                        </span>
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${estPag.color}`}>
+                          <span className={`w-1 h-1 rounded-full ${estPag.dot}`} />
+                          {estPag.label}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* FIDELIZACIÓN (Cupones y referidos) */}
                 <div className="grid grid-cols-2 gap-2 mb-4">
@@ -374,56 +447,37 @@ El equipo de Huerta Urbana`;
                 </button>
 
                 {/* Botón Imprimir Remito */}
-                {(() => {
-                  const pedidosCliente = (PEDIDOS || []).filter(p => (c.email && p.email === c.email) || (c.telefono && p.telefono === c.telefono));
-                  const ultimoPedido = pedidosCliente && pedidosCliente.length > 0
-                    ? [...pedidosCliente].sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''))[0]
-                    : null;
-                  let prep = null;
-                  if (ultimoPedido) {
-                    try {
-                      const s = localStorage.getItem('huerta_preparaciones_v1');
-                      if (s) {
-                        const parsed = JSON.parse(s);
-                        prep = parsed[ultimoPedido.numero_pedido] || null;
-                      }
-                    } catch (_) {}
-                  }
-                  const estaArmado = ultimoPedido ? estaPedidoArmado(ultimoPedido, prep) : false;
-
-                  return (
-                    <button
-                      type="button"
-                      onClick={() => estaArmado ? imprimirRemitoCliente(c) : null}
-                      disabled={!estaArmado}
-                      className={`w-full flex items-center justify-center gap-2 mt-2 border text-xs font-semibold py-2.5 rounded-xl transition-all shadow-sm ${
-                        estaArmado
-                          ? 'bg-indigo-500/15 hover:bg-indigo-500/25 border-indigo-500/30 text-indigo-300 cursor-pointer active:scale-98'
-                          : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed opacity-60'
-                      }`}
-                      title={estaArmado ? 'Imprimir remito del último pedido de este cliente' : 'Primero pesá y armá el pedido'}
-                    >
-                      <Printer size={13} className={estaArmado ? 'text-indigo-400' : 'text-gray-500'} />
-                      <span>{estaArmado ? 'Imprimir Remito del Cliente' : 'Primero pesá y armá el pedido'}</span>
-                    </button>
-                  );
-                })()}
+                <button
+                  type="button"
+                  onClick={() => estaArmado ? imprimirRemitoCliente(c) : null}
+                  disabled={!estaArmado}
+                  className={`w-full flex items-center justify-center gap-2 mt-2 border text-xs font-semibold py-2.5 rounded-xl transition-all shadow-sm ${
+                    estaArmado
+                      ? 'bg-indigo-500/15 hover:bg-indigo-500/25 border-indigo-500/30 text-indigo-300 cursor-pointer active:scale-98'
+                      : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed opacity-60'
+                  }`}
+                  title={estaArmado ? 'Imprimir remito del último pedido de este cliente' : 'Primero pesá y armá el pedido'}
+                >
+                  <Printer size={13} className={estaArmado ? 'text-indigo-400' : 'text-gray-500'} />
+                  <span>{estaArmado ? 'Imprimir Remito del Cliente' : 'Primero pesá y armá el pedido'}</span>
+                </button>
               </div>
-            ))}
-          </div>
+            );
+          })}
+        </div>
         )}
       </div>
 
-      {/* ── CARRITOS ABANDONADOS ─────────────────────────── */}
+      {/* ── PAGOS ONLINE SIN COMPLETAR ─────────────────────────── */}
       <div>
         <div className="mb-6 flex items-start gap-3">
           <div className="w-9 h-9 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-center shrink-0">
             <ShoppingCart size={18} className="text-amber-400" />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-white">Carritos Abandonados</h2>
+            <h2 className="text-xl font-bold text-white">Pagos online sin completar</h2>
             <p className="text-gray-500 text-sm mt-0.5">
-              {carritosAbandonados.length} contactos que completaron el formulario pero no pagaron
+              {carritosAbandonados.length} {carritosAbandonados.length === 1 ? 'pago online pendiente o sin completar' : 'pagos online pendientes o sin completar'}
             </p>
           </div>
         </div>
@@ -431,7 +485,7 @@ El equipo de Huerta Urbana`;
         {carritosAbandonados.length === 0 ? (
           <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-10 text-center">
             <AlertTriangle size={32} className="text-gray-600 mx-auto mb-3" />
-            <p className="text-gray-500">No hay carritos abandonados registrados.</p>
+            <p className="text-gray-500">No hay pagos online sin completar registrados.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -451,11 +505,11 @@ El equipo de Huerta Urbana`;
                     </div>
                   </div>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded-lg shrink-0">
-                    No pagó
+                    Sin completar
                   </span>
                 </div>
 
-                {/* Info del carrito */}
+                {/* Info del pago online */}
                 <div className="bg-[#111827] border border-gray-800 rounded-xl p-3 mb-4 space-y-1.5">
                   <div className="flex justify-between items-start">
                     <span className="text-[11px] text-gray-500 mt-0.5">Producto</span>
