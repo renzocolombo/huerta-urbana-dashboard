@@ -4171,6 +4171,11 @@ export default function AgendaEntregas({ rol, usuario }) {
                               <p className="text-[11px] text-gray-400 font-mono mt-0.5">
                                 Solicitado: <span className="text-gray-300 font-bold">{item.cantidad} {esUnidad ? (item.cantidad === 1 ? 'unidad' : 'unidades') : (item.cantidad === 1 ? 'bolsa' : 'bolsas')}</span>
                                 {(!esUnidad && pesoPedido) ? ` · ${pesoPedido.toFixed(3)} kg` : ''}
+                                {obtenerPrecioCongelado(item.nombre) <= 0 && (
+                                  <span className="ml-2 text-amber-400 font-sans font-semibold text-[10px] bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                                    ⚠️ Sin precio en catálogo
+                                  </span>
+                                )}
                               </p>
                             </div>
                           </div>
@@ -4402,7 +4407,7 @@ export default function AgendaEntregas({ rol, usuario }) {
                       ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white cursor-pointer active:scale-95'
                       : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed opacity-60'
                   }`}
-                  title={todosChequeados ? 'Guarda el pedido armado e imprime el remito fiscal con precios congelados' : 'Tildá todos los productos en la lista de control'}
+                  title={todosChequeados ? 'Guarda el pedido armado e imprime el remito fiscal' : 'Tildá todos los productos en la lista de control'}
                 >
                   <Printer size={16} />
                   <span>Imprimir remito</span>

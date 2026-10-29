@@ -6,6 +6,9 @@
 import { generarQRSvg } from './qrLocal.js';
 import { APPS_SCRIPT_URL } from './appsScriptUrl.js';
 import { parseDiaEntrega, BLOQUES, turnoDePedido } from './entregaCalendario.js';
+import { parsearCantidad, formatearCantidad, formatearMoneda, formatearPrecioUnitario } from './formatoRemito.js';
+import { apiGetPreciosWeb } from './mercaderiaApi.js';
+import { METODOS_PAGO_CONTRA_ENTREGA } from './agendaCalendario.js';
 
 /**
  * DATOS FISCALES Y COMERCIALES DEL EMISOR
@@ -20,25 +23,62 @@ export const EMISOR = {
 
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
+// Cache en memoria para catálogo de PreciosWeb
+let cachePreciosWeb = null;
+let cachePreciosWebPromise = null;
+
+export async function obtenerCatalogoPreciosWeb() {
+  if (cachePreciosWeb && cachePreciosWeb.length > 0) return cachePreciosWeb;
+  if (cachePreciosWebPromise) return cachePreciosWebPromise;
+  cachePreciosWebPromise = (async () => {
+    try {
+      const res = await apiGetPreciosWeb();
+      if (res && res.productos && Array.isArray(res.productos)) {
+        cachePreciosWeb = res.productos;
+        return cachePreciosWeb;
+      }
+    } catch (e) {
+      console.warn('[REMITO] No se pudo cargar catálogo PreciosWeb:', e.message);
+    }
+    return [];
+  })();
+  return cachePreciosWebPromise;
+}
+
+export function setCatalogoPreciosWebCache(catalogo) {
+  cachePreciosWeb = Array.isArray(catalogo) ? catalogo : [];
+}
+
 /**
  * Parsea el texto del campo producto de un pedido cuando no proviene de detalle_json.
  * Mantiene compatibilidad estricta con Finanzas, Faltantes y AgendaEntregas.
+ * Evita duplicar/multiplicar cantidades cuando el peso ya viene especificado en el texto del producto.
  */
 export function parsearProductosPedido(textoProducto, cantidadGeneral = 1) {
   if (!textoProducto) return [];
   const partes = String(textoProducto).split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+  const cantGral = parsearCantidad(cantidadGeneral).valor || 1;
   
   return partes.map(parte => {
-    let cantidad = cantidadGeneral;
+    let multiplicador = 1;
     let pesoSolicitado = null;
+    let cantidad = null;
     let texto = parte;
     
-    const cantInicio = texto.match(/^(\d+)\s*[xX]?\s+(.+)$/);
-    if (cantInicio) { cantidad = parseInt(cantInicio[1], 10); texto = cantInicio[2]; }
+    // Multiplicador tipo "2x" o "2 x": e.g. "2x 2kg" o "2 x 1kg"
+    const cantInicio = texto.match(/^(\d+)\s*[xX]\s+(.+)$/);
+    if (cantInicio) {
+      multiplicador = parseInt(cantInicio[1], 10);
+      texto = cantInicio[2];
+    }
     
     const cantFinal = texto.match(/^(.+?)\s+[xX](\d+)$/);
-    if (cantFinal) { cantidad = parseInt(cantFinal[2], 10); texto = cantFinal[1]; }
+    if (cantFinal) {
+      multiplicador = parseInt(cantFinal[2], 10);
+      texto = cantFinal[1];
+    }
     
+    // Peso tipo "6.5 KILOS", "4,250 kg", "4250 g", "1kg", etc.
     const pesoMatch = texto.match(/(\d+(?:[.,]\d+)?)\s*(kg|kilos?|g|gr?)\b/i);
     if (pesoMatch) {
       let val = parseFloat(pesoMatch[1].replace(',', '.'));
@@ -46,9 +86,29 @@ export function parsearProductosPedido(textoProducto, cantidadGeneral = 1) {
       if (unit.startsWith('g')) val = val / 1000;
       pesoSolicitado = Math.round(val * 1000) / 1000;
       texto = texto.replace(pesoMatch[0], '').trim();
+    } else {
+      // Si no es peso, verificar si empieza con número de unidades: e.g. "2 LECHUGA" o "2 ATADOS"
+      const unitMatch = texto.match(/^(\d+(?:[.,]\d+)?)\s+(.+)$/);
+      if (unitMatch && !/^(kilo|kg|g|gr)/i.test(unitMatch[2])) {
+        cantidad = parseFloat(unitMatch[1].replace(',', '.'));
+        texto = unitMatch[2];
+      }
     }
     
-    const nombre = texto.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+    // Limpieza de caracteres de relleno
+    const nombre = texto.replace(/[-_()]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+    // Si encontramos peso solicitado, la cantidad base de este ítem es el peso
+    if (pesoSolicitado !== null) {
+      cantidad = Math.round(pesoSolicitado * multiplicador * 1000) / 1000;
+    } else if (cantidad !== null) {
+      cantidad = Math.round(cantidad * multiplicador * 1000) / 1000;
+    } else {
+      // Si no pudimos extraer ni peso ni cantidad del texto del producto:
+      // Si el pedido tiene un solo producto, tomamos la cantidad general
+      cantidad = partes.length === 1 ? cantGral : 1;
+    }
+
     return { nombre, cantidad, pesoSolicitado, bolsasAsignadas: [] };
   });
 }
@@ -105,8 +165,43 @@ export async function obtenerNumeroRemito(numeroPedido) {
  * @param {Object} preparacion - Objeto de preparación local { items: [...], completado: bool }
  * @returns {Object} { tieneDetalleJson, items, subtotal, descuentos, credito, totalACobrar }
  */
-export function obtenerPesosReales(pedido, preparacion) {
-  // 1. Verificar si existe detalle_json nuevo (en pedido o en preparacion)
+/**
+ * Concentra la lectura y normalización de las pesadas reales o solicitadas de un pedido.
+ * Resuelve precios unitarios desde detalle_json, catálogo PreciosWeb o cálculo directo.
+ * No inventa valores: si un precio no existe, devuelve null para mostrar '—'.
+ *
+ * @param {Object} pedido - Objeto con datos del pedido (Google Sheets / mockData)
+ * @param {Object} preparacion - Objeto de preparación local { items: [...], completado: bool }
+ * @param {Object} [opciones={}] - Opciones adicionales ({ catalogoPrecios })
+ * @returns {Object} { tieneDetalleJson, esPesado, items, subtotal, descuentos, descuentoCupon, cuponNombre, descuentoCredito, totalACobrar }
+ */
+export function obtenerPesosReales(pedido, preparacion, opciones = {}) {
+  const catalogo = opciones?.catalogoPrecios || cachePreciosWeb || [];
+
+  const buscarPrecioCatalogo = (nombreProd) => {
+    if (!catalogo || catalogo.length === 0) return null;
+    const k = norm(nombreProd);
+    const item = catalogo.find(p => {
+      const pNorm = norm(p.nombre || p.producto);
+      return pNorm === k || k.includes(pNorm) || pNorm.includes(k);
+    });
+    if (item && Number(item.precio) > 0) return Number(item.precio);
+    return null;
+  };
+
+  const tienePrep = preparacion && Array.isArray(preparacion.items) && preparacion.items.length > 0;
+  const prepItems = tienePrep ? preparacion.items : [];
+
+  const buscarBolsasParaProducto = (nombreProd) => {
+    const k = norm(nombreProd);
+    const pItem = prepItems.find(pi => {
+      const pNorm = norm(pi.nombre || pi.producto);
+      return pNorm === k || pNorm.includes(k) || k.includes(pNorm);
+    });
+    return (pItem && Array.isArray(pItem.bolsasAsignadas)) ? pItem.bolsasAsignadas : [];
+  };
+
+  // 1. Verificar si existe detalle_json (congelado en Sheet o preparación local)
   let detalleItems = null;
   const rawDetalle = pedido?.detalle_json || preparacion?.detalle_json;
   if (rawDetalle) {
@@ -120,33 +215,27 @@ export function obtenerPesosReales(pedido, preparacion) {
     }
   }
 
-  const tienePrep = preparacion && Array.isArray(preparacion.items) && preparacion.items.length > 0;
-  const prepItems = tienePrep ? preparacion.items : [];
+  let itemsProcesados = [];
+  let tieneDetalleJson = false;
+  let esPesado = Boolean(preparacion?.completado);
 
-  // Helper para vincular bolsas escaneadas en la preparación por nombre normalizado
-  const buscarBolsasParaProducto = (nombreProd) => {
-    const k = norm(nombreProd);
-    const pItem = prepItems.find(pi => {
-      const pNorm = norm(pi.nombre || pi.producto);
-      return pNorm === k || pNorm.includes(k) || k.includes(pNorm);
-    });
-    return (pItem && Array.isArray(pItem.bolsasAsignadas)) ? pItem.bolsasAsignadas : [];
-  };
-
-  // ── CASO 1: Existe detalle_json con precios unitarios y desglose ────────────
   if (Array.isArray(detalleItems) && detalleItems.length > 0) {
-    const itemsProcesados = detalleItems.map(item => {
+    tieneDetalleJson = true;
+    itemsProcesados = detalleItems.map(item => {
       const nombre = String(item.producto || item.nombre || '').trim();
       const unidadRaw = (item.unidad || '').toLowerCase().trim();
       const unidad = unidadRaw === 'kg' ? 'kg' : (unidadRaw === 'atado' ? 'atado' : 'un');
       const bolsas = buscarBolsasParaProducto(nombre);
+      if (bolsas.length > 0) esPesado = true;
 
       let cantidadReal = 0;
       if (item.cantidad_real != null && Number(item.cantidad_real) > 0) {
         cantidadReal = Number(item.cantidad_real);
+        esPesado = true;
       } else if (item.cantidad != null && Number(item.cantidad) > 0) {
         cantidadReal = Number(item.cantidad);
       } else if (bolsas.length > 0) {
+        esPesado = true;
         if (unidad === 'kg') {
           const sumaKg = bolsas.reduce((acc, b) => acc + (Number(b.peso) || 0), 0);
           cantidadReal = Number(sumaKg.toFixed(3));
@@ -157,16 +246,7 @@ export function obtenerPesosReales(pedido, preparacion) {
         cantidadReal = Number(item.cantidad_pedida || 1);
       }
 
-      // Formateo estricto: kg -> 3 decimales con coma; nunca 0,90 un para peso
-      let cantidadFormateada = '';
-      if (unidad === 'kg') {
-        cantidadFormateada = `${cantidadReal.toFixed(3).replace('.', ',')} kg`;
-      } else if (unidad === 'atado') {
-        cantidadFormateada = `${Math.round(cantidadReal)} atado${cantidadReal > 1 ? 's' : ''}`;
-      } else {
-        cantidadFormateada = `${Math.round(cantidadReal)} un`;
-      }
-
+      const cantidadFormateada = formatearCantidad(cantidadReal, unidad);
       const precioUnit = Number(item.precio_unitario != null ? item.precio_unitario : (item.precio_unit != null ? item.precio_unit : (item.precio || 0)));
       const dtoUnit = Number(item.dto_unit || item.descuento_unitario || 0);
       const precioNeto = Math.max(0, precioUnit - dtoUnit);
@@ -179,100 +259,136 @@ export function obtenerPesosReales(pedido, preparacion) {
         unidad,
         cantidadReal,
         cantidadFormateada,
-        precioUnitario: precioUnit,
-        descuentoUnitario: dtoUnit,
-        totalLinea,
-        subtotalLinea,
-        descuentoLinea,
+        precioUnitario: precioUnit > 0 ? precioUnit : null,
+        descuentoUnitario: dtoUnit > 0 ? dtoUnit : null,
+        totalLinea: totalLinea > 0 ? totalLinea : null,
+        subtotalLinea: subtotalLinea > 0 ? subtotalLinea : null,
+        descuentoLinea: descuentoLinea > 0 ? descuentoLinea : null,
         bolsasDetalle: bolsas
       };
     });
+  } else {
+    // ── CASO 2: Sin detalle_json (pedidos web pendientes de armado o pedidos históricos) ──
+    const itemsFuente = tienePrep ? prepItems : parsearProductosPedido(pedido?.producto, pedido?.cantidades);
+    const itemsFallback = (!itemsFuente || itemsFuente.length === 0)
+      ? [{ nombre: pedido?.producto || 'Productos Varios', cantidad: parsearCantidad(pedido?.cantidades).valor || 1, bolsasAsignadas: [] }]
+      : itemsFuente;
 
-    const subtotal = itemsProcesados.reduce((acc, it) => acc + it.subtotalLinea, 0);
-    const descuentos = itemsProcesados.reduce((acc, it) => acc + it.descuentoLinea, 0);
-    const totalACobrar = itemsProcesados.reduce((acc, it) => acc + it.totalLinea, 0);
+    itemsProcesados = itemsFallback.map(item => {
+      const bolsas = Array.isArray(item.bolsasAsignadas) ? item.bolsasAsignadas : [];
+      const nombreLimpio = (item.nombre || '').trim();
+      const nombreLower = nombreLimpio.toLowerCase();
 
-    return {
-      tieneDetalleJson: true,
-      items: itemsProcesados,
-      subtotal,
-      descuentos,
-      credito: 0,
-      totalACobrar
-    };
+      const esAtado = /\batado\b/i.test(nombreLower);
+      const esPorPeso = !esAtado && (
+        Boolean(item.pesoSolicitado) ||
+        /\b(kg|kilos?|g|gr?)\b/i.test(nombreLower) ||
+        bolsas.some(b => b.peso && b.peso > 0) ||
+        !/\b(combo|pack|promo|botella|frasco|unidad|docena)\b/i.test(nombreLower)
+      );
+
+      let unidad = 'un';
+      if (esAtado) unidad = 'atado';
+      else if (esPorPeso) unidad = 'kg';
+
+      let cantidadReal = 0;
+      if (bolsas.length > 0) {
+        esPesado = true;
+        if (unidad === 'kg') {
+          const sumaKg = bolsas.reduce((acc, b) => acc + (Number(b.peso) || 0), 0);
+          cantidadReal = Number(sumaKg.toFixed(3));
+        } else {
+          cantidadReal = bolsas.length;
+        }
+      } else {
+        cantidadReal = item.pesoSolicitado != null ? item.pesoSolicitado : (item.cantidad || 1);
+      }
+
+      const cantidadFormateada = formatearCantidad(cantidadReal, unidad);
+
+      // Resolución de precio unitario:
+      // 1) Catálogo PreciosWeb
+      let precioUnit = buscarPrecioCatalogo(nombreLimpio);
+
+      // 2) Fallback para pedido de 1 producto cuando no está en catálogo pero viene pedido.total:
+      if (precioUnit === null && itemsFallback.length === 1 && Number(pedido?.total) > 0 && cantidadReal > 0) {
+        precioUnit = Math.round(Number(pedido.total) / cantidadReal);
+      }
+
+      const totalLinea = precioUnit !== null ? Math.round(cantidadReal * precioUnit) : null;
+
+      return {
+        nombre: nombreLimpio,
+        unidad,
+        cantidadReal,
+        cantidadFormateada,
+        precioUnitario: precioUnit,
+        descuentoUnitario: null,
+        totalLinea,
+        subtotalLinea: totalLinea,
+        descuentoLinea: null,
+        bolsasDetalle: bolsas
+      };
+    });
   }
 
-  // ── CASO 2: Pedidos viejos sin detalle_json (mantiene '—' y pedido.total) ──
-  const itemsFuente = tienePrep ? prepItems : parsearProductosPedido(pedido?.producto, pedido?.cantidades);
-  const itemsFallback = (!itemsFuente || itemsFuente.length === 0)
-    ? [{ nombre: pedido?.producto || 'Productos Varios', cantidad: pedido?.cantidades || 1, bolsasAsignadas: [] }]
-    : itemsFuente;
+  // Descuentos y totales globales
+  let descuentoCupon = 0;
+  let cuponNombre = '';
+  let descuentoCredito = 0;
 
-  const itemsProcesados = itemsFallback.map(item => {
-    const bolsas = Array.isArray(item.bolsasAsignadas) ? item.bolsasAsignadas : [];
-    const nombreLimpio = (item.nombre || '').trim();
-    const nombreLower = nombreLimpio.toLowerCase();
+  const rawCupon = String(pedido?.cupon_bienvenida_estado || '').trim();
+  if (rawCupon && !['no', 'false', '0', 'null', 'undefined'].includes(rawCupon.toLowerCase())) {
+    cuponNombre = rawCupon;
+  }
 
-    const esAtado = /\batado\b/i.test(nombreLower);
-    const esPorPeso = !esAtado && (
-      Boolean(item.pesoSolicitado) ||
-      /\b(kg|kilos?|g|gr?)\b/i.test(nombreLower) ||
-      bolsas.some(b => b.peso && b.peso > 0) ||
-      !/\b(combo|pack|promo|botella|frasco|unidad|docena)\b/i.test(nombreLower)
-    );
+  const rawCredito = String(pedido?.credito_usado || '').trim();
+  const numCred = Number(rawCredito);
+  if (!isNaN(numCred) && numCred > 0) {
+    descuentoCredito = Math.round(numCred);
+  }
 
-    let unidad = 'un';
-    if (esAtado) unidad = 'atado';
-    else if (esPorPeso) unidad = 'kg';
+  const sumaLineas = itemsProcesados.reduce((acc, it) => acc + (it.totalLinea || 0), 0);
+  const totalSheet = Number(pedido?.total || 0);
 
-    let cantidadReal = 0;
-    if (bolsas.length > 0) {
-      if (unidad === 'kg') {
-        const sumaKg = bolsas.reduce((acc, b) => acc + (Number(b.peso) || 0), 0);
-        cantidadReal = Number(sumaKg.toFixed(3));
-      } else {
-        cantidadReal = bolsas.length;
+  let subtotal = 0;
+  if (itemsProcesados.every(it => it.totalLinea !== null) && sumaLineas > 0) {
+    subtotal = sumaLineas;
+  } else {
+    subtotal = totalSheet > 0 ? (totalSheet + descuentoCredito) : sumaLineas;
+  }
+
+  // Deducción de cupón porcentual (e.g. BIENVENIDO10 -> 10%) o diferencia
+  if (cuponNombre) {
+    const pctMatch = cuponNombre.match(/(\d+)/);
+    if (pctMatch) {
+      const pct = Number(pctMatch[1]);
+      if (pct > 0 && pct <= 100) {
+        descuentoCupon = Math.round(subtotal * (pct / 100));
       }
-    } else {
-      if (unidad === 'kg') {
-        cantidadReal = item.pesoSolicitado ? (item.pesoSolicitado * (item.cantidad || 1)) : (item.cantidad || 1);
-      } else {
-        cantidadReal = item.cantidad || 1;
-      }
+    } else if (subtotal > totalSheet && (subtotal - totalSheet - descuentoCredito) > 0) {
+      descuentoCupon = Math.round(subtotal - totalSheet - descuentoCredito);
     }
+  }
 
-    let cantidadFormateada = '';
-    if (unidad === 'kg') {
-      cantidadFormateada = `${cantidadReal.toFixed(3).replace('.', ',')} kg`;
-    } else if (unidad === 'atado') {
-      cantidadFormateada = `${Math.round(cantidadReal)} atado${cantidadReal > 1 ? 's' : ''}`;
-    } else {
-      cantidadFormateada = `${Math.round(cantidadReal)} un`;
-    }
-
-    return {
-      nombre: nombreLimpio,
-      unidad,
-      cantidadReal,
-      cantidadFormateada,
-      precioUnitario: null,
-      descuentoUnitario: null,
-      totalLinea: null,
-      subtotalLinea: null,
-      descuentoLinea: null,
-      bolsasDetalle: bolsas
-    };
-  });
-
-  const totalViejo = Number(pedido?.total || 0);
+  const totalDescuentos = descuentoCupon + descuentoCredito;
+  let totalACobrar = 0;
+  if (tieneDetalleJson || (itemsProcesados.every(it => it.totalLinea !== null) && sumaLineas > 0)) {
+    totalACobrar = Math.max(0, subtotal - totalDescuentos);
+  } else {
+    totalACobrar = totalSheet > 0 ? totalSheet : Math.max(0, subtotal - totalDescuentos);
+  }
 
   return {
-    tieneDetalleJson: false,
+    tieneDetalleJson,
+    esPesado,
     items: itemsProcesados,
-    subtotal: totalViejo,
-    descuentos: null,
-    credito: null,
-    totalACobrar: totalViejo
+    subtotal,
+    descuentos: totalDescuentos,
+    descuentoCupon,
+    cuponNombre,
+    descuentoCredito,
+    totalACobrar
   };
 }
 
@@ -591,11 +707,17 @@ const ESTILOS_REMITO = `
     border-bottom: 1.5px solid #000;
   }
 
-  .th-cant, .td-cant { width: 95px; text-align: right; font-weight: 700; font-family: monospace; }
   .th-desc, .td-desc { text-align: left; }
-  .th-unit, .td-unit { width: 75px; text-align: right; font-family: monospace; }
-  .th-dto, .td-dto { width: 55px; text-align: right; font-family: monospace; }
-  .th-total, .td-total { width: 85px; text-align: right; font-weight: 700; font-family: monospace; }
+  .th-cant, .td-cant { width: 95px; text-align: right; font-weight: 700; font-family: monospace; }
+  .th-unit, .td-unit { width: 85px; text-align: right; font-family: monospace; }
+  .th-total, .td-total { width: 95px; text-align: right; font-weight: 700; font-family: monospace; }
+  .aviso-total-estimado {
+    margin-top: 3px;
+    font-size: 7.5pt;
+    color: #b45309;
+    font-weight: 700;
+    text-align: right;
+  }
 
   /* Auditoría de pesadas para copia Empresa */
   .bolsas-auditoria {
@@ -815,45 +937,61 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
       `;
     }
 
-    const avisoSinPrecios = '<span style="font-size:7.5pt; color:#b45309; font-weight:600; font-style:italic;">pedido sin precios congelados</span>';
-    const precioUnitStr = item.precioUnitario !== null ? `$${item.precioUnitario.toLocaleString('es-AR')}` : avisoSinPrecios;
-    const descuentoStr = (item.descuentoUnitario !== null && item.descuentoUnitario > 0)
-      ? `$${item.descuentoUnitario.toLocaleString('es-AR')}`
-      : '—';
-    const totalLineaStr = item.totalLinea !== null ? `$${item.totalLinea.toLocaleString('es-AR')}` : avisoSinPrecios;
+    const precioUnitStr = item.precioUnitario !== null ? formatearMoneda(item.precioUnitario) : '—';
+    const totalLineaStr = item.totalLinea !== null ? formatearMoneda(item.totalLinea) : '—';
 
     return `
       <tr>
-        <td class="td-cant">${item.cantidadFormateada}</td>
         <td class="td-desc">
           <strong>${item.nombre}</strong>
           ${detalleBolsasEmpresa}
         </td>
+        <td class="td-cant">${item.cantidadFormateada}</td>
         <td class="td-unit">${precioUnitStr}</td>
-        <td class="td-dto">${descuentoStr}</td>
         <td class="td-total">${totalLineaStr}</td>
       </tr>
     `;
   }).join('');
 
-  // Cuadro de Totales: si hay detalle_json se calcula sumando líneas con pesadas reales; si no, usa pedido.total
-  const avisoTotalSinPrecios = !calculo.tieneDetalleJson 
-    ? '<div style="margin-top:4px; font-size:7.5pt; color:#b45309; font-weight:700; text-align:right;">⚠️ pedido sin precios congelados</div>' 
+  // Cuadro de Totales y Descuentos detallados
+  const formaPago = (pedido?.forma_pago || '').toLowerCase().trim();
+  const metodoPago = (pedido?.metodo_pago || '').toLowerCase().trim();
+  const esContraEntrega = formaPago === 'entrega' || METODOS_PAGO_CONTRA_ENTREGA.includes(metodoPago);
+  const esEstimado = esContraEntrega && !calculo.esPesado;
+
+  const subtotalStr = formatearMoneda(calculo.subtotal);
+
+  let filasDescuentosHTML = '';
+  if (calculo.descuentoCupon > 0) {
+    filasDescuentosHTML += `
+      <tr>
+        <td>Cupón bienvenida (${calculo.cuponNombre}):</td>
+        <td style="text-align:right; font-family:monospace; color:#15803d;">-${formatearMoneda(calculo.descuentoCupon)}</td>
+      </tr>
+    `;
+  }
+  if (calculo.descuentoCredito > 0) {
+    filasDescuentosHTML += `
+      <tr>
+        <td>Crédito de referido:</td>
+        <td style="text-align:right; font-family:monospace; color:#15803d;">-${formatearMoneda(calculo.descuentoCredito)}</td>
+      </tr>
+    `;
+  }
+  if (!filasDescuentosHTML) {
+    filasDescuentosHTML = `
+      <tr>
+        <td>Descuentos:</td>
+        <td style="text-align:right; font-family:monospace;">—</td>
+      </tr>
+    `;
+  }
+
+  const avisoEstimadoTotal = esEstimado
+    ? '<div class="aviso-total-estimado">⚠️ Total estimado: puede variar según el peso real</div>'
     : '';
 
-  const subtotalStr = calculo.tieneDetalleJson
-    ? `$${calculo.subtotal.toLocaleString('es-AR')}`
-    : `$${Number(pedido?.total || 0).toLocaleString('es-AR')}`;
-
-  const descuentosStr = (calculo.tieneDetalleJson && calculo.descuentos > 0)
-    ? `-$${calculo.descuentos.toLocaleString('es-AR')}`
-    : '—';
-
-  const creditoStr = '—';
-
-  const totalFinalStr = calculo.tieneDetalleJson
-    ? `$${calculo.totalACobrar.toLocaleString('es-AR')}`
-    : `$${Number(pedido?.total || 0).toLocaleString('es-AR')}${avisoTotalSinPrecios}`;
+  const totalFinalStr = `${formatearMoneda(calculo.totalACobrar)}${avisoEstimadoTotal}`;
 
   const estadoPago = (pedido?.estado_pago || '').toLowerCase().trim();
   const estaCobrado = Boolean(pedido?.cobrado || estadoPago === 'approved' || estadoPago === 'pagado' || pedido?.monto_cobrado);
@@ -871,7 +1009,7 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
   const montoCobradoNum = pedido?.monto_cobrado != null && !isNaN(Number(pedido.monto_cobrado))
     ? Number(pedido.monto_cobrado)
     : (calculo.tieneDetalleJson ? calculo.totalACobrar : Number(pedido?.total || 0));
-  const montoCobradoStr = `$${Math.round(montoCobradoNum).toLocaleString('es-AR')}`;
+  const montoCobradoStr = formatearMoneda(montoCobradoNum);
 
   // Generación local 100% offline del código QR
   const qrUrlDestino = `https://www.huertaurbana.com.ar/pedido/${encodeURIComponent(pedido?.numero_pedido || '')}`;
@@ -979,11 +1117,10 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
           <table class="items-table">
             <thead>
               <tr>
+                <th class="th-desc">Producto</th>
                 <th class="th-cant">Cantidad</th>
-                <th class="th-desc">Descripción</th>
-                <th class="th-unit">Precio unit.</th>
-                <th class="th-dto">Dto.</th>
-                <th class="th-total">Total</th>
+                <th class="th-unit">Precio unitario</th>
+                <th class="th-total">Importe</th>
               </tr>
             </thead>
             <tbody>
@@ -997,7 +1134,7 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
         <!-- ── 4. CUADRO DE TOTALES Y LEYENDA ─────────────────────────── -->
         <div class="totales-wrapper">
           <div class="leyenda-calculo">
-            Precio final calculado sobre el peso real entregado.
+            ${esEstimado ? 'Total estimado: puede variar según el peso real.' : 'Precio final calculado sobre el peso real entregado.'}
           </div>
 
           <table class="tabla-totales">
@@ -1005,14 +1142,7 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
               <td>Subtotal:</td>
               <td style="text-align:right; font-family:monospace;">${subtotalStr}</td>
             </tr>
-            <tr>
-              <td>Descuentos:</td>
-              <td style="text-align:right; font-family:monospace;">${descuentosStr}</td>
-            </tr>
-            <tr>
-              <td>Crédito aplicado:</td>
-              <td style="text-align:right; font-family:monospace;">${creditoStr}</td>
-            </tr>
+            ${filasDescuentosHTML}
             <tr class="row-total-final">
               <td>${estaCobrado ? 'TOTAL COBRADO:' : 'TOTAL A COBRAR:'}</td>
               <td style="text-align:right; font-family:monospace;">${estaCobrado ? montoCobradoStr : totalFinalStr}</td>
@@ -1061,12 +1191,16 @@ export async function imprimirRemitoIndividual(pedido, preparacion, opciones = {
 
   win.document.write('<!DOCTYPE html><html><head><title>Cargando remito...</title><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#555;font-size:14px;background:#f9fafb;}</style></head><body><div>🌿 Cargando remito...</div></body></html>');
 
+  if (!opciones.catalogoPrecios) {
+    opciones.catalogoPrecios = await obtenerCatalogoPreciosWeb();
+  }
+
   let numeroRemito = opciones.numeroRemito || pedido.numero_remito || null;
   if (!numeroRemito) {
     numeroRemito = await obtenerNumeroRemito(pedido.numero_pedido);
   }
 
-  const hojasHTML = copias.map(c => generarHojaRemitoHTML(pedido, preparacion, c, { numeroRemito })).join('');
+  const hojasHTML = copias.map(c => generarHojaRemitoHTML(pedido, preparacion, c, { numeroRemito, ...opciones })).join('');
 
   win.document.open();
   win.document.write(`
@@ -1136,10 +1270,14 @@ export async function imprimirRemitosEnLote(pedidos = [], preparaciones = {}, ti
 
   const totalHojas = pedidos.length * copiasPorPedido.length;
 
+  if (!opciones.catalogoPrecios) {
+    opciones.catalogoPrecios = await obtenerCatalogoPreciosWeb();
+  }
+
   const todasLasHojasHTML = pedidos.map(p => {
     const prep = preparaciones[p.numero_pedido] || null;
     const numeroRemito = mapaNumerosRemito[p.numero_pedido] || p.numero_pedido;
-    return copiasPorPedido.map(tipo => generarHojaRemitoHTML(p, prep, tipo, { numeroRemito })).join('');
+    return copiasPorPedido.map(tipo => generarHojaRemitoHTML(p, prep, tipo, { numeroRemito, ...opciones })).join('');
   }).join('');
 
   win.document.open();
