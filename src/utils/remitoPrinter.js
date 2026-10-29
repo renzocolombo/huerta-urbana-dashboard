@@ -155,16 +155,44 @@ export async function obtenerNumeroRemito(numeroPedido) {
 }
 
 /**
- * AISLAMIENTO FASE 2:
- * Concentra en una única función la lectura y normalización de las pesadas reales de un pedido.
- * Sabor 1: Si existe `pedido.detalle_json` (string JSON o array con [{nombre, unidad, precio_unit, dto_unit, cantidad_pedida}]),
- *          calcula precios unitarios, subtotales, descuentos y total con las pesadas reales.
- * Sabor 2: Si NO existe `detalle_json` (pedidos viejos), preserva el comportamiento previo con '—' y usa pedido.total.
+ * Verifica si un pedido ha sido armado y pesado.
+ * El remito es el comprobante de la ENTREGA y se emite recién cuando el pedido
+ * fue pesado y armado (posee detalle_json generado o pesadas reales).
  *
- * @param {Object} pedido - Objeto con datos del pedido (Google Sheets / mockData)
- * @param {Object} preparacion - Objeto de preparación local { items: [...], completado: bool }
- * @returns {Object} { tieneDetalleJson, items, subtotal, descuentos, credito, totalACobrar }
+ * @param {Object} pedido - Pedido a validar
+ * @param {Object} preparacion - Preparación local en memoria
+ * @returns {boolean}
  */
+export function estaPedidoArmado(pedido, preparacion) {
+  if (!pedido) return false;
+
+  // 1. Verificar si existe detalle_json generado por el Armado (en pedido o preparación)
+  const rawDetalle = pedido.detalle_json || preparacion?.detalle_json;
+  if (rawDetalle) {
+    try {
+      const parsed = typeof rawDetalle === 'string' ? JSON.parse(rawDetalle) : rawDetalle;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return true;
+      }
+    } catch (_) {}
+  }
+
+  // 2. Verificar preparación completada con pesadas reales registradas
+  if (preparacion?.completado) {
+    const items = preparacion.items;
+    if (Array.isArray(items) && items.length > 0) {
+      const tienePesadas = items.some(it => {
+        const tieneBolsas = Array.isArray(it.bolsasAsignadas) && it.bolsasAsignadas.length > 0;
+        const cantReal = Number(it.cantidad_real || 0);
+        return tieneBolsas || cantReal > 0;
+      });
+      if (tienePesadas) return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Concentra la lectura y normalización de las pesadas reales o solicitadas de un pedido.
  * Resuelve precios unitarios desde detalle_json, catálogo PreciosWeb o cálculo directo.
@@ -173,7 +201,7 @@ export async function obtenerNumeroRemito(numeroPedido) {
  * @param {Object} pedido - Objeto con datos del pedido (Google Sheets / mockData)
  * @param {Object} preparacion - Objeto de preparación local { items: [...], completado: bool }
  * @param {Object} [opciones={}] - Opciones adicionales ({ catalogoPrecios })
- * @returns {Object} { tieneDetalleJson, esPesado, items, subtotal, descuentos, descuentoCupon, cuponNombre, descuentoCredito, totalACobrar }
+ * @returns {Object} { tieneDetalleJson, esPesado, items, subtotal, descuentos, descuentosDetalle, descuentoCupon, cuponNombre, descuentoCredito, totalACobrar }
  */
 export function obtenerPesosReales(pedido, preparacion, opciones = {}) {
   const catalogo = opciones?.catalogoPrecios || cachePreciosWeb || [];
@@ -337,7 +365,7 @@ export function obtenerPesosReales(pedido, preparacion, opciones = {}) {
   let cuponNombre = '';
   let descuentoCredito = 0;
 
-  const rawCupon = String(pedido?.cupon_bienvenida_estado || '').trim();
+  const rawCupon = String(pedido?.cupon_bienvenida_estado || pedido?.cupon || '').trim();
   if (rawCupon && !['no', 'false', '0', 'null', 'undefined'].includes(rawCupon.toLowerCase())) {
     cuponNombre = rawCupon;
   }
@@ -358,7 +386,7 @@ export function obtenerPesosReales(pedido, preparacion, opciones = {}) {
     subtotal = totalSheet > 0 ? (totalSheet + descuentoCredito) : sumaLineas;
   }
 
-  // Deducción de cupón porcentual (e.g. BIENVENIDO10 -> 10%) o diferencia
+  // Deducción de cupón porcentual (e.g. BIENVENIDO10 -> 10%) o monto fijo
   if (cuponNombre) {
     const pctMatch = cuponNombre.match(/(\d+)/);
     if (pctMatch) {
@@ -366,12 +394,53 @@ export function obtenerPesosReales(pedido, preparacion, opciones = {}) {
       if (pct > 0 && pct <= 100) {
         descuentoCupon = Math.round(subtotal * (pct / 100));
       }
+    } else if (pedido?.descuento_cupon != null && Number(pedido.descuento_cupon) > 0) {
+      descuentoCupon = Math.round(Number(pedido.descuento_cupon));
     } else if (subtotal > totalSheet && (subtotal - totalSheet - descuentoCredito) > 0) {
       descuentoCupon = Math.round(subtotal - totalSheet - descuentoCredito);
     }
   }
 
-  const totalDescuentos = descuentoCupon + descuentoCredito;
+  // Descuentos desglosados individuales (nombre y monto)
+  const descuentosDetalle = [];
+  if (descuentoCupon > 0) {
+    descuentosDetalle.push({
+      tipo: 'cupon',
+      nombre: `Cupón bienvenida (${cuponNombre})`,
+      monto: descuentoCupon
+    });
+  }
+  if (descuentoCredito > 0) {
+    descuentosDetalle.push({
+      tipo: 'credito',
+      nombre: 'Crédito de referido',
+      monto: descuentoCredito
+    });
+  }
+
+  // Otras promociones del pedido
+  const promoMonto = Number(pedido?.descuento_promocion || pedido?.descuento_promo || 0);
+  if (promoMonto > 0) {
+    descuentosDetalle.push({
+      tipo: 'promocion',
+      nombre: pedido?.promocion_nombre || pedido?.promo_nombre || 'Promoción especial',
+      monto: Math.round(promoMonto)
+    });
+  }
+  if (Array.isArray(pedido?.descuentos)) {
+    pedido.descuentos.forEach(d => {
+      const m = Number(d.monto || 0);
+      if (m > 0) {
+        descuentosDetalle.push({
+          tipo: 'descuento',
+          nombre: d.nombre || 'Descuento',
+          monto: Math.round(m)
+        });
+      }
+    });
+  }
+
+  const totalDescuentos = descuentosDetalle.reduce((sum, d) => sum + d.monto, 0);
   let totalACobrar = 0;
   if (tieneDetalleJson || (itemsProcesados.every(it => it.totalLinea !== null) && sumaLineas > 0)) {
     totalACobrar = Math.max(0, subtotal - totalDescuentos);
@@ -385,6 +454,7 @@ export function obtenerPesosReales(pedido, preparacion, opciones = {}) {
     items: itemsProcesados,
     subtotal,
     descuentos: totalDescuentos,
+    descuentosDetalle,
     descuentoCupon,
     cuponNombre,
     descuentoCredito,
@@ -956,30 +1026,35 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
   }).join('');
 
   // Cuadro de Totales y Descuentos detallados
-  const formaPago = (pedido?.forma_pago || '').toLowerCase().trim();
-  const metodoPago = (pedido?.metodo_pago || '').toLowerCase().trim();
-  const esContraEntrega = formaPago === 'entrega' || METODOS_PAGO_CONTRA_ENTREGA.includes(metodoPago);
-  const esEstimado = esContraEntrega && !calculo.esPesado;
-
   const subtotalStr = formatearMoneda(calculo.subtotal);
 
   let filasDescuentosHTML = '';
-  if (calculo.descuentoCupon > 0) {
-    filasDescuentosHTML += `
+  if (Array.isArray(calculo.descuentosDetalle) && calculo.descuentosDetalle.length > 0) {
+    filasDescuentosHTML = calculo.descuentosDetalle.map(d => `
       <tr>
-        <td>Cupón bienvenida (${calculo.cuponNombre}):</td>
-        <td style="text-align:right; font-family:monospace; color:#15803d;">-${formatearMoneda(calculo.descuentoCupon)}</td>
+        <td>${d.nombre}:</td>
+        <td style="text-align:right; font-family:monospace; color:#15803d;">-${formatearMoneda(d.monto)}</td>
       </tr>
-    `;
+    `).join('');
+  } else if (calculo.descuentoCupon > 0 || calculo.descuentoCredito > 0) {
+    if (calculo.descuentoCupon > 0) {
+      filasDescuentosHTML += `
+        <tr>
+          <td>Cupón bienvenida (${calculo.cuponNombre}):</td>
+          <td style="text-align:right; font-family:monospace; color:#15803d;">-${formatearMoneda(calculo.descuentoCupon)}</td>
+        </tr>
+      `;
+    }
+    if (calculo.descuentoCredito > 0) {
+      filasDescuentosHTML += `
+        <tr>
+          <td>Crédito de referido:</td>
+          <td style="text-align:right; font-family:monospace; color:#15803d;">-${formatearMoneda(calculo.descuentoCredito)}</td>
+        </tr>
+      `;
+    }
   }
-  if (calculo.descuentoCredito > 0) {
-    filasDescuentosHTML += `
-      <tr>
-        <td>Crédito de referido:</td>
-        <td style="text-align:right; font-family:monospace; color:#15803d;">-${formatearMoneda(calculo.descuentoCredito)}</td>
-      </tr>
-    `;
-  }
+
   if (!filasDescuentosHTML) {
     filasDescuentosHTML = `
       <tr>
@@ -989,11 +1064,7 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
     `;
   }
 
-  const avisoEstimadoTotal = esEstimado
-    ? '<div class="aviso-total-estimado">⚠️ Total estimado: puede variar según el peso real</div>'
-    : '';
-
-  const totalFinalStr = `${formatearMoneda(calculo.totalACobrar)}${avisoEstimadoTotal}`;
+  const totalFinalStr = formatearMoneda(calculo.totalACobrar);
 
   const estadoPago = (pedido?.estado_pago || '').toLowerCase().trim();
   const estaCobrado = Boolean(pedido?.cobrado || estadoPago === 'approved' || estadoPago === 'pagado' || pedido?.monto_cobrado);
@@ -1128,7 +1199,7 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
         <!-- ── 4. CUADRO DE TOTALES Y LEYENDA ─────────────────────────── -->
         <div class="totales-wrapper">
           <div class="leyenda-calculo">
-            ${esEstimado ? 'Total estimado: puede variar según el peso real.' : 'Precio final calculado sobre el peso real entregado.'}
+            Precio final calculado sobre el peso real entregado.
           </div>
 
           <table class="tabla-totales">
@@ -1173,13 +1244,24 @@ export function generarHojaRemitoHTML(pedido, preparacion, tipoCopia = "ORIGINAL
 /**
  * Imprime un único remito en una ventana emergente.
  * Genera consecutivamente: ORIGINAL - CLIENTE y DUPLICADO - EMPRESA.
+ * REGLA: El remito es el comprobante de la ENTREGA y solo puede emitirse
+ * cuando el pedido ya fue pesado y armado.
  */
 export async function imprimirRemitoIndividual(pedido, preparacion, opciones = {}) {
   if (!pedido) return;
+  if (!estaPedidoArmado(pedido, preparacion)) {
+    if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+      window.alert('Primero pesá y armá el pedido: el remito solo puede emitirse una vez pesado y armado.');
+    }
+    return;
+  }
+
   const copias = opciones.copias || ['ORIGINAL - CLIENTE', 'DUPLICADO - EMPRESA'];
   const win = window.open('', '_blank');
   if (!win) {
-    alert('El navegador bloqueó la ventana emergente de impresión. Por favor habilitala para este sitio.');
+    if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+      window.alert('El navegador bloqueó la ventana emergente de impresión. Por favor habilitala para este sitio.');
+    }
     return;
   }
 
@@ -1233,10 +1315,29 @@ export async function imprimirRemitoIndividual(pedido, preparacion, opciones = {
  * Pedido 1: ORIGINAL + DUPLICADO
  * Pedido 2: ORIGINAL + DUPLICADO
  * ...
+ * REGLA: Omite los pedidos que no hayan sido armados y notifica cuáles se omitieron.
  */
 export async function imprimirRemitosEnLote(pedidos = [], preparaciones = {}, tituloLote = "Remitos del Día", opciones = {}) {
   if (!pedidos || pedidos.length === 0) {
-    alert('No hay pedidos en la selección para imprimir.');
+    if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+      window.alert('No hay pedidos en la selección para imprimir.');
+    }
+    return;
+  }
+
+  // Filtrar solo los pedidos armados y detectar los omitidos
+  const armados = pedidos.filter(p => estaPedidoArmado(p, preparaciones?.[p.numero_pedido]));
+  const noArmados = pedidos.filter(p => !estaPedidoArmado(p, preparaciones?.[p.numero_pedido]));
+
+  if (noArmados.length > 0 && typeof window !== 'undefined' && typeof window.alert === 'function') {
+    const listaOmitidos = noArmados.map(p => `#${p.numero_pedido}`).join(', ');
+    window.alert(`Impresión masiva: Se omitieron ${noArmados.length} pedidos sin armar (${listaOmitidos}). Primero pesá y armá el pedido.`);
+  }
+
+  if (armados.length === 0) {
+    if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+      window.alert('No hay pedidos armados en la selección para imprimir. Primero pesá y armá el pedido.');
+    }
     return;
   }
 
@@ -1244,15 +1345,17 @@ export async function imprimirRemitosEnLote(pedidos = [], preparaciones = {}, ti
 
   const win = window.open('', '_blank');
   if (!win) {
-    alert('El navegador bloqueó la ventana emergente de impresión. Por favor habilitala para este sitio.');
+    if (typeof window !== 'undefined' && window.alert) {
+      alert('El navegador bloqueó la ventana emergente de impresión. Por favor habilitala para este sitio.');
+    }
     return;
   }
 
-  win.document.write(`<!DOCTYPE html><html><head><title>Cargando remitos...</title><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#555;font-size:14px;background:#f9fafb;}</style></head><body><div>🌿 Cargando ${pedidos.length} remitos...</div></body></html>`);
+  win.document.write(`<!DOCTYPE html><html><head><title>Cargando remitos...</title><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#555;font-size:14px;background:#f9fafb;}</style></head><body><div>🌿 Cargando ${armados.length} remitos...</div></body></html>`);
 
   const mapaNumerosRemito = {};
   await Promise.all(
-    pedidos.map(async (p) => {
+    armados.map(async (p) => {
       try {
         const num = p.numero_remito || await obtenerNumeroRemito(p.numero_pedido);
         mapaNumerosRemito[p.numero_pedido] = num;
@@ -1262,14 +1365,14 @@ export async function imprimirRemitosEnLote(pedidos = [], preparaciones = {}, ti
     })
   );
 
-  const totalHojas = pedidos.length * copiasPorPedido.length;
+  const totalHojas = armados.length * copiasPorPedido.length;
 
   if (!opciones.catalogoPrecios) {
     opciones.catalogoPrecios = await obtenerCatalogoPreciosWeb();
   }
 
-  const todasLasHojasHTML = pedidos.map(p => {
-    const prep = preparaciones[p.numero_pedido] || null;
+  const todasLasHojasHTML = armados.map(p => {
+    const prep = preparaciones?.[p.numero_pedido] || null;
     const numeroRemito = mapaNumerosRemito[p.numero_pedido] || p.numero_pedido;
     return copiasPorPedido.map(tipo => generarHojaRemitoHTML(p, prep, tipo, { numeroRemito, ...opciones })).join('');
   }).join('');

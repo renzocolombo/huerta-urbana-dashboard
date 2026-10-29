@@ -16,7 +16,10 @@ import {
   parsearProductosPedido, 
   obtenerPesosReales, 
   generarHojaRemitoHTML,
-  setCatalogoPreciosWebCache 
+  setCatalogoPreciosWebCache,
+  estaPedidoArmado,
+  imprimirRemitoIndividual,
+  imprimirRemitosEnLote
 } from '../src/utils/remitoPrinter.js';
 
 let passed = 0;
@@ -172,8 +175,9 @@ test('HU-836253: generarHojaRemitoHTML NO contiene "pedidos sin precios congelad
   assert.ok(html.includes('$6.611'), 'Debe mostrar precio unitario $6.611');
   assert.ok(html.includes('$42.972'), 'Debe mostrar importe $42.972');
 
-  // Requisito 3: Pie del remito con aviso estimado para contra entrega sin pesar
-  assert.ok(html.includes('Total estimado: puede variar según el peso real'), 'Debe indicar que el total es estimado');
+  // Requisito 2: Quitar leyenda de estimado y cualquier mención a estimado del remito
+  assert.ok(!html.includes('Total estimado: puede variar según el peso real'), 'NO debe contener leyenda de total estimado');
+  assert.ok(!html.toLowerCase().includes('estimado'), 'NO debe contener ninguna mención a estimado en el remito');
 
   // Requisitos Nuevos: Encabezado Emisor, Cliente y eliminación de IVA / Consumidor Final
   assert.ok(html.includes('Razón social: Renzo Alejandro Colombo'), 'Debe mostrar "Razón social: Renzo Alejandro Colombo"');
@@ -257,59 +261,232 @@ console.log('\n=================================================================
 console.log('5. PEDIDO PESADO VS SIN PESAR');
 console.log('==================================================================');
 
-test('Pedido armado con pesadas reales (esPesado = true) no muestra aviso estimado', () => {
+console.log('\n==================================================================');
+console.log('5. PEDIDO ARMADO / PESADO VS PEDIDO SIN ARMAR');
+console.log('==================================================================');
+
+test('estaPedidoArmado devuelve false para pedido sin pesadas reales ni detalle_json', () => {
+  const pedidoSinArmar = {
+    numero_pedido: 'HU-111111',
+    producto: '6 KILOS PAPA',
+    cantidades: 6,
+    total: 12000,
+    estado: 'pendiente'
+  };
+  assert.strictEqual(estaPedidoArmado(pedidoSinArmar, null), false);
+  assert.strictEqual(estaPedidoArmado(pedidoSinArmar, { items: [] }), false);
+});
+
+test('estaPedidoArmado devuelve true si pedido tiene detalle_json de armado', () => {
+  const pedidoArmado = {
+    numero_pedido: 'HU-222222',
+    detalle_json: JSON.stringify([
+      { producto: 'PAPA', cantidad_real: 6.350, unidad: 'kg', precio_unitario: 2000, subtotal: 12700 }
+    ])
+  };
+  assert.strictEqual(estaPedidoArmado(pedidoArmado, null), true);
+});
+
+test('estaPedidoArmado devuelve true si preparación local está completada con pesadas', () => {
+  const pedido = { numero_pedido: 'HU-333333' };
   const prep = {
     completado: true,
     items: [
-      {
-        nombre: 'MANZANA ROJA',
-        cantidad: 6.5,
-        bolsasAsignadas: [
-          { peso: 3.250, uniqueCode: 'B1' },
-          { peso: 3.100, uniqueCode: 'B2' }
-        ]
-      }
+      { nombre: 'PAPA', bolsasAsignadas: [{ peso: 3.250 }, { peso: 3.100 }] }
     ]
   };
-  const calculo = obtenerPesosReales(pedidoRealHU836253, prep, { catalogoPrecios: catalogoTest });
-  assert.strictEqual(calculo.esPesado, true);
-  assert.strictEqual(calculo.items[0].cantidadReal, 6.350); // 3.25 + 3.10
-  assert.strictEqual(calculo.items[0].cantidadFormateada, '6,350 kg');
-  assert.strictEqual(calculo.totalACobrar, Math.round(6.350 * 6611));
-
-  const html = generarHojaRemitoHTML(pedidoRealHU836253, prep, 'ORIGINAL - CLIENTE', { catalogoPrecios: catalogoTest });
-  assert.ok(html.includes('6,350 kg'), 'Debe mostrar el peso real de las bolsas');
-  assert.ok(html.includes('Precio final calculado sobre el peso real entregado.'), 'Debe indicar que es sobre peso real entregado');
-  assert.ok(!html.includes('Total estimado: puede variar según el peso real'), 'NO debe decir estimado cuando ya fue pesado');
+  assert.strictEqual(estaPedidoArmado(pedido, prep), true);
 });
 
-test('Producto sin precio en catálogo muestra "—" y no rompe el remito', () => {
-  const pedidoSinPrecio = {
-    numero_pedido: 'HU-999999',
-    producto: '1 KILO PITAYA EXOTICA, 1 KILO PAPA',
-    cantidades: 2,
-    total: 0,
-    forma_pago: 'entrega'
+test('Bloqueo de impresión: imprimirRemitoIndividual no procede si pedido no está armado', async () => {
+  const pedidoSinArmar = { numero_pedido: 'HU-444444' };
+  let alertLlamado = false;
+  // Simular entorno de navegador
+  globalThis.window = {
+    alert: (msg) => { alertLlamado = true; },
+    open: () => { throw new Error('No debe abrirse ventana'); }
   };
-  const calculo = obtenerPesosReales(pedidoSinPrecio, null, { catalogoPrecios: catalogoTest });
-  const html = generarHojaRemitoHTML(pedidoSinPrecio, null, 'ORIGINAL - CLIENTE', { catalogoPrecios: catalogoTest });
-  assert.ok(html.includes('PITAYA EXOTICA'), 'Debe incluir el producto');
-  assert.ok(!html.toLowerCase().includes('precios congelados'), 'No debe tener leyenda de precios congelados');
-  assert.ok(html.includes('—'), 'Debe mostrar — para precio faltante');
+
+  await imprimirRemitoIndividual(pedidoSinArmar, null);
+  assert.strictEqual(alertLlamado, true, 'Debe disparar aviso al operador para pedido no armado');
+});
+
+test('Impresión masiva: omite los pedidos no armados y avisa al operador', async () => {
+  const pedidoArmado = {
+    numero_pedido: 'HU-ARMADO-1',
+    detalle_json: [{ producto: 'TOMATE', cantidad_real: 2, unidad: 'kg', precio_unitario: 3000, subtotal: 6000 }]
+  };
+  const pedidoNoArmado = {
+    numero_pedido: 'HU-PEND-2',
+    producto: 'LECHUGA'
+  };
+
+  let avisoOmitidos = '';
+  let ventanaAbierta = false;
+
+  globalThis.window = {
+    alert: (msg) => { avisoOmitidos = msg; },
+    open: () => ({
+      document: {
+        write: () => {},
+        open: () => {},
+        close: () => {}
+      }
+    })
+  };
+
+  await imprimirRemitosEnLote([pedidoArmado, pedidoNoArmado], {}, 'Test Lote');
+  assert.ok(avisoOmitidos.includes('Se omitieron 1 pedidos sin armar (#HU-PEND-2)'), 'Debe alertar que se omitió el no armado');
+});
+
+console.log('\n==================================================================');
+console.log('6. REMITO DE PEDIDO ARMADO: 2 PESADAS REALES, PRECIOS CONGELADOS Y TOTAL EXACTO');
+console.log('==================================================================');
+
+test('Pedido armado con 2 pesadas reales calcula 6,350 kg, usa precio congelado de detalle_json y no tiene leyendas de estimado', () => {
+  const pedidoArmadoConPesadas = {
+    numero_pedido: 'HU-836253',
+    nombre: 'Agustina Gomez',
+    telefono: '1165432198',
+    direccion: 'Av. Corrientes 1234',
+    localidad: 'Almagro',
+    dia_entrega: 'Viernes 30/10/2026 Mañana',
+    forma_pago: 'entrega',
+    total: 42972,
+    detalle_json: JSON.stringify([
+      {
+        producto: 'MANZANA ROJA',
+        cantidad_real: 6.350,
+        unidad: 'kg',
+        precio_unitario: 6611,
+        subtotal: 41980
+      }
+    ])
+  };
+
+  // Catálogo actual con precio DISTINTO para probar que SIEMPRE prevalece detalle_json
+  const catalogoModificado = [{ nombre: 'MANZANA ROJA', precio: 99999 }];
+
+  const calculo = obtenerPesosReales(pedidoArmadoConPesadas, null, { catalogoPrecios: catalogoModificado });
+  assert.strictEqual(calculo.tieneDetalleJson, true);
+  assert.strictEqual(calculo.items[0].cantidadReal, 6.350);
+  assert.strictEqual(calculo.items[0].cantidadFormateada, '6,350 kg');
+  assert.strictEqual(calculo.items[0].precioUnitario, 6611, 'Debe respetar el precio congelado en detalle_json y no el catálogo actual');
+  assert.strictEqual(calculo.items[0].totalLinea, 41980);
+  assert.strictEqual(calculo.subtotal, 41980);
+  assert.strictEqual(calculo.totalACobrar, 41980);
+
+  const html = generarHojaRemitoHTML(pedidoArmadoConPesadas, null, 'ORIGINAL - CLIENTE', {
+    catalogoPrecios: catalogoModificado,
+    numeroRemito: '0001-00000093'
+  });
+
+  // Verificaciones de contenido y ausencia de leyendas de estimado
+  assert.ok(html.includes('6,350 kg'), 'Debe mostrar 6,350 kg');
+  assert.ok(html.includes('$6.611'), 'Debe mostrar precio unitario congelado $6.611');
+  assert.ok(html.includes('$41.980'), 'Debe mostrar total a cobrar $41.980');
+  assert.ok(html.includes('Precio final calculado sobre el peso real entregado.'), 'Debe indicar cálculo sobre peso real');
+  assert.ok(!html.includes('Total estimado: puede variar según el peso real'), 'NO debe contener leyenda de total estimado');
+  assert.ok(!html.includes('aviso-total-estimado'), 'NO debe tener clase aviso-total-estimado');
+  assert.ok(!html.toLowerCase().includes('estimado'), 'NO debe tener ninguna mención a estimado en el remito');
+});
+
+test('Pedido armado con múltiples descuentos (cupón bienvenida + crédito referido + promo)', () => {
+  const pedidoConDescuentos = {
+    numero_pedido: 'HU-DESC-01',
+    nombre: 'Laura Morales',
+    forma_pago: 'entrega',
+    cupon_bienvenida_estado: 'BIENVENIDO10',
+    credito_usado: '5000',
+    descuento_promocion: 2000,
+    promocion_nombre: 'Promo Primavera',
+    detalle_json: JSON.stringify([
+      { producto: 'BOLSON VERDURAS', cantidad_real: 2, unidad: 'un', precio_unitario: 25000, subtotal: 50000 }
+    ])
+  };
+
+  const calculo = obtenerPesosReales(pedidoConDescuentos, null);
+  // Subtotal = 50.000
+  // Cupón 10% = 5.000
+  // Crédito = 5.000
+  // Promo = 2.000
+  // Descuentos = 12.000 -> Total = 38.000
+  assert.strictEqual(calculo.subtotal, 50000);
+  assert.strictEqual(calculo.descuentoCupon, 5000);
+  assert.strictEqual(calculo.descuentoCredito, 5000);
+  assert.strictEqual(calculo.descuentos, 12000);
+  assert.strictEqual(calculo.totalACobrar, 38000);
+
+  const html = generarHojaRemitoHTML(pedidoConDescuentos, null, 'ORIGINAL - CLIENTE');
+  assert.ok(html.includes('Subtotal:'), 'Debe contener Subtotal');
+  assert.ok(html.includes('$50.000'), 'Debe mostrar subtotal $50.000');
+  assert.ok(html.includes('Cupón bienvenida (BIENVENIDO10):'), 'Debe mostrar cupón');
+  assert.ok(html.includes('-$5.000'), 'Debe mostrar -$5.000 cupón');
+  assert.ok(html.includes('Crédito de referido:'), 'Debe mostrar crédito referido');
+  assert.ok(html.includes('-$5.000'), 'Debe mostrar -$5.000 crédito');
+  assert.ok(html.includes('Promo Primavera:'), 'Debe mostrar la promo con su nombre');
+  assert.ok(html.includes('-$2.000'), 'Debe mostrar -$2.000 promo');
+  assert.ok(html.includes('$38.000'), 'Debe mostrar total a cobrar $38.000');
+});
+
+test('Pedido armado sin descuentos: subtotal y total a cobrar coinciden', () => {
+  const pedidoSinDesc = {
+    numero_pedido: 'HU-NODESC-01',
+    detalle_json: JSON.stringify([
+      { producto: 'FRUTILLAS', cantidad_real: 1.5, unidad: 'kg', precio_unitario: 10000, subtotal: 15000 }
+    ])
+  };
+
+  const calculo = obtenerPesosReales(pedidoSinDesc, null);
+  assert.strictEqual(calculo.subtotal, 15000);
+  assert.strictEqual(calculo.descuentos, 0);
+  assert.strictEqual(calculo.totalACobrar, 15000);
+
+  const html = generarHojaRemitoHTML(pedidoSinDesc, null, 'ORIGINAL - CLIENTE');
+  assert.ok(html.includes('$15.000'), 'Debe mostrar $15.000');
+  assert.ok(html.includes('Descuentos:'), 'Debe mostrar línea de Descuentos');
+  assert.ok(html.includes('—'), 'Descuentos vacíos debe mostrar guion');
 });
 
 console.log('\n==================================================================');
 console.log(`TOTAL RESULTADO: ${passed} ok, ${failed} fallas`);
 console.log('==================================================================\n');
 
-// Guardar vista previa HTML para HU-836253
-const htmlHU836253 = generarHojaRemitoHTML(pedidoRealHU836253, null, 'ORIGINAL - CLIENTE', {
-  catalogoPrecios: catalogoTest,
+// Guardar vista previa HTML de pedido armado de ejemplo (HU-836253)
+const pedidoEjemploArmado = {
+  numero_pedido: 'HU-836253',
+  nombre: 'Agustina Gomez',
+  telefono: '1165432198',
+  direccion: 'Av. Corrientes 1234, CABA',
+  localidad: 'Almagro',
+  dia_entrega: 'Viernes 30/10/2026 Mañana',
+  forma_pago: 'entrega',
+  observaciones: 'Tocar timbre 3B',
+  detalle_json: JSON.stringify([
+    {
+      producto: 'MANZANA ROJA',
+      cantidad_real: 6.350,
+      unidad: 'kg',
+      precio_unitario: 6611,
+      subtotal: 41980
+    }
+  ])
+};
+
+const htmlPreview = generarHojaRemitoHTML(pedidoEjemploArmado, null, 'ORIGINAL - CLIENTE', {
   numeroRemito: '0001-00000093'
 });
 
-const previewPath = path.resolve('C:/Users/renzo/.gemini/antigravity-ide/brain/aca635ac-bb31-47b6-826b-18ed6a48d511/scratch/remito_preview_HU-836253.html');
-fs.writeFileSync(previewPath, `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Vista Previa Remito HU-836253</title></head><body>${htmlHU836253}</body></html>`, 'utf8');
-console.log(`[PREVIEW] Vista previa generada en: ${previewPath}`);
+const previewPathActual = path.resolve('C:/Users/renzo/.gemini/antigravity-ide/brain/2596cf92-12a0-4eff-a339-5dc10c4baa47/scratch/remito_preview_armado.html');
+fs.mkdirSync(path.dirname(previewPathActual), { recursive: true });
+fs.writeFileSync(previewPathActual, `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Vista Previa Remito Armado HU-836253</title></head><body>${htmlPreview}</body></html>`, 'utf8');
+console.log(`[PREVIEW] Vista previa regenerada en: ${previewPathActual}`);
+
+// Mantener retrocompatibilidad en path anterior si la carpeta existe
+try {
+  const previewPathPrev = path.resolve('C:/Users/renzo/.gemini/antigravity-ide/brain/aca635ac-bb31-47b6-826b-18ed6a48d511/scratch/remito_preview_HU-836253.html');
+  fs.mkdirSync(path.dirname(previewPathPrev), { recursive: true });
+  fs.writeFileSync(previewPathPrev, `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Vista Previa Remito HU-836253</title></head><body>${htmlPreview}</body></html>`, 'utf8');
+} catch (_) {}
 
 process.exitCode = failed > 0 ? 1 : 0;

@@ -13,7 +13,7 @@ import {
   etiquetaMedioPagoDisplay,
   METODOS_PAGO_CONTRA_ENTREGA 
 } from '../utils/agendaCalendario';
-import { imprimirRemitoIndividual, imprimirRemitosEnLote } from '../utils/remitoPrinter';
+import { imprimirRemitoIndividual, imprimirRemitosEnLote, estaPedidoArmado } from '../utils/remitoPrinter';
 
 const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
 const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -138,6 +138,10 @@ export default function PedidosDelDia() {
 
   const imprimirRemitoPedido = (p) => {
     const prep = preparaciones[p.numero_pedido] || null;
+    if (!estaPedidoArmado(p, prep)) {
+      alert('Primero pesá y armá el pedido');
+      return;
+    }
     imprimirRemitoIndividual(p, prep);
     if (p.sheetRowIndex && actualizarRemitoEnSheet) {
       actualizarRemitoEnSheet(p.sheetRowIndex, true);
@@ -149,8 +153,22 @@ export default function PedidosDelDia() {
       alert('No hay pedidos en la fecha seleccionada para imprimir.');
       return;
     }
-    imprimirRemitosEnLote(pedidosDelDia, preparaciones, `Remitos · Entrega ${fechaSeleccionada}`);
-    pedidosDelDia.forEach(p => {
+
+    const armados = pedidosDelDia.filter(p => estaPedidoArmado(p, preparaciones[p.numero_pedido]));
+    const noArmados = pedidosDelDia.filter(p => !estaPedidoArmado(p, preparaciones[p.numero_pedido]));
+
+    if (noArmados.length > 0) {
+      const omitidosStr = noArmados.map(p => `#${p.numero_pedido}`).join(', ');
+      alert(`Impresión masiva: Se omitieron ${noArmados.length} pedidos sin armar (${omitidosStr}). Primero pesá y armá el pedido.`);
+    }
+
+    if (armados.length === 0) {
+      alert('No hay pedidos armados para imprimir en la fecha seleccionada. Primero pesá y armá el pedido.');
+      return;
+    }
+
+    imprimirRemitosEnLote(armados, preparaciones, `Remitos · Entrega ${fechaSeleccionada}`);
+    armados.forEach(p => {
       if (p.sheetRowIndex && actualizarRemitoEnSheet) {
         actualizarRemitoEnSheet(p.sheetRowIndex, true);
       }
@@ -356,6 +374,7 @@ export default function PedidosDelDia() {
               icono={<Sun size={16} className="text-amber-400" />}
               pedidos={gruposTurno.manana}
               imprimirRemitoPedido={imprimirRemitoPedido}
+              preparaciones={preparaciones}
             />
           )}
 
@@ -367,6 +386,7 @@ export default function PedidosDelDia() {
               icono={<Sunset size={16} className="text-indigo-400" />}
               pedidos={gruposTurno.tarde}
               imprimirRemitoPedido={imprimirRemitoPedido}
+              preparaciones={preparaciones}
             />
           )}
 
@@ -378,6 +398,7 @@ export default function PedidosDelDia() {
               icono={<Clock size={16} className="text-gray-400" />}
               pedidos={gruposTurno.sinTurno}
               imprimirRemitoPedido={imprimirRemitoPedido}
+              preparaciones={preparaciones}
             />
           )}
 
@@ -393,7 +414,7 @@ export default function PedidosDelDia() {
   );
 }
 
-function TablaTurno({ titulo, horario, icono, pedidos, imprimirRemitoPedido }) {
+function TablaTurno({ titulo, horario, icono, pedidos, imprimirRemitoPedido, preparaciones = {} }) {
   return (
     <div className="bg-[#1f2937] border border-gray-800 rounded-2xl overflow-hidden shadow-md">
       <div className="px-5 py-3.5 bg-[#111827]/70 border-b border-gray-800 flex items-center justify-between">
@@ -467,15 +488,26 @@ function TablaTurno({ titulo, horario, icono, pedidos, imprimirRemitoPedido }) {
                     )}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <button
-                      type="button"
-                      onClick={() => imprimirRemitoPedido(p)}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 hover:text-white rounded-lg text-xs font-semibold transition-all active:scale-95 cursor-pointer"
-                      title="Imprimir remito individual"
-                    >
-                      <Printer size={12} className="text-indigo-400" />
-                      <span>Remito</span>
-                    </button>
+                    {(() => {
+                      const prep = preparaciones[p.numero_pedido] || null;
+                      const armado = estaPedidoArmado(p, prep);
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => armado ? imprimirRemitoPedido(p) : null}
+                          disabled={!armado}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                            armado
+                              ? 'bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 hover:text-white active:scale-95 cursor-pointer'
+                              : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed opacity-60'
+                          }`}
+                          title={armado ? 'Imprimir remito individual' : 'Primero pesá y armá el pedido'}
+                        >
+                          <Printer size={12} className={armado ? 'text-indigo-400' : 'text-gray-500'} />
+                          <span>{armado ? 'Remito' : 'Primero pesá y armá el pedido'}</span>
+                        </button>
+                      );
+                    })()}
                   </td>
                 </tr>
               );

@@ -6,7 +6,7 @@ import {
   X, Trash2, Check, RotateCcw, Lock, AlertTriangle, Sparkles, Tag, CheckSquare, Square,
   CreditCard, DollarSign, Calendar, ArrowRight
 } from 'lucide-react';
-import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido } from '../utils/remitoPrinter';
+import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido, estaPedidoArmado } from '../utils/remitoPrinter';
 import { getEanMapping, esCodigoEan } from '../data/productUtils';
 import { syncProductWithSheet } from '../utils/stockSync';
 import { 
@@ -314,6 +314,7 @@ export default function AgendaEntregas({ rol, usuario }) {
 
   // ── Estados de proceso y feedback ─────────────────────────────────────────
   const [guardandoPedidoArmado, setGuardandoPedidoArmado] = useState(false);
+  const [pedidoRecienArmado, setPedidoRecienArmado] = useState(null); // { pedido, numPedido, prep }
   const [avisoReserva, setAvisoReserva] = useState(null); // { tipo: 'warning' | 'error', mensaje: string }
   const reservasLlamadasRef = useRef(new Set());
 
@@ -1640,6 +1641,7 @@ export default function AgendaEntregas({ rol, usuario }) {
       setModalPreparacion(null);
       setScanError(null);
       setScanSuccess(null);
+      setPedidoRecienArmado({ pedido, numPedido, prep: prepFinal });
     } catch (err) {
       alert(`Error al guardar pedido armado: ${err.message}`);
     } finally {
@@ -1961,6 +1963,10 @@ export default function AgendaEntregas({ rol, usuario }) {
   // ── IMPRIMIR REMITOS (INDIVIDUAL O LOTE UNIFICADO) ─────────────────────────
   const imprimirRemitoConPesoReal = useCallback((p, opciones = {}) => {
     const prep = preparaciones[p.numero_pedido];
+    if (!estaPedidoArmado(p, prep)) {
+      alert('Primero pesá y armá el pedido');
+      return;
+    }
     imprimirRemitoIndividual(p, prep, opciones);
     if (p.sheetRowIndex) actualizarRemitoEnSheet(p.sheetRowIndex, true);
   }, [preparaciones, actualizarRemitoEnSheet]);
@@ -1989,11 +1995,8 @@ export default function AgendaEntregas({ rol, usuario }) {
   }, []);
 
   const pedidosArmadosDelTurno = useMemo(() => {
-    return pedidosDelTurno.filter(p => {
-      const est = (estados[p.numero_pedido] || p.estado || '').toLowerCase();
-      return est === 'preparado' || est === 'listo';
-    });
-  }, [pedidosDelTurno, estados]);
+    return pedidosDelTurno.filter(p => estaPedidoArmado(p, preparaciones[p.numero_pedido]));
+  }, [pedidosDelTurno, preparaciones]);
 
   const pedidosParaMostrar = useMemo(() => {
     const base = filtroSoloArmados ? pedidosArmadosDelTurno : pedidosDelTurno;
@@ -2014,12 +2017,25 @@ export default function AgendaEntregas({ rol, usuario }) {
   }, [pedidosArmadosDelTurno, seleccionadosRemito]);
 
   const imprimirRemitosArmadosSeleccionados = useCallback(() => {
-    const pedidosAImprimir = (PEDIDOS || []).filter(p => seleccionadosRemito.includes(p.numero_pedido));
-    if (pedidosAImprimir.length === 0) {
+    const pedidosSeleccionados = (PEDIDOS || []).filter(p => seleccionadosRemito.includes(p.numero_pedido));
+    if (pedidosSeleccionados.length === 0) {
       alert('Seleccioná al menos un pedido armado para imprimir.');
       return;
     }
-    imprimirRemitosEnLote(pedidosAImprimir, preparaciones, 'Remitos de Pedidos Armados');
+    const armados = pedidosSeleccionados.filter(p => estaPedidoArmado(p, preparaciones[p.numero_pedido]));
+    const noArmados = pedidosSeleccionados.filter(p => !estaPedidoArmado(p, preparaciones[p.numero_pedido]));
+
+    if (noArmados.length > 0) {
+      const listaOmitidos = noArmados.map(p => `#${p.numero_pedido}`).join(', ');
+      alert(`Impresión masiva: Se omitieron ${noArmados.length} pedidos sin armar (${listaOmitidos}). Primero pesá y armá el pedido.`);
+    }
+
+    if (armados.length === 0) {
+      alert('No hay pedidos armados en la selección para imprimir. Primero pesá y armá el pedido.');
+      return;
+    }
+
+    imprimirRemitosEnLote(armados, preparaciones, 'Remitos de Pedidos Armados');
   }, [PEDIDOS, seleccionadosRemito, preparaciones]);
 
   const handleScanKeyDown = (e) => {
@@ -2312,15 +2328,26 @@ export default function AgendaEntregas({ rol, usuario }) {
 
                           {/* Botón Reimprimir Remito */}
                           <td className="px-4 py-3.5 text-right whitespace-nowrap">
-                            <button
-                              type="button"
-                              onClick={() => imprimirRemitoConPesoReal(p)}
-                              className="inline-flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-gray-500 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition-all shadow-sm cursor-pointer active:scale-95"
-                              title="Reimprimir remito de este pedido"
-                            >
-                              <Printer size={13} className="text-amber-400" />
-                              <span>Reimprimir remito</span>
-                            </button>
+                            {(() => {
+                              const prep = preparaciones[p.numero_pedido];
+                              const estaArmado = estaPedidoArmado(p, prep);
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => estaArmado ? imprimirRemitoConPesoReal(p) : null}
+                                  disabled={!estaArmado}
+                                  className={`inline-flex items-center gap-1.5 border text-xs font-semibold px-3 py-1.5 rounded-xl transition-all shadow-sm ${
+                                    estaArmado
+                                      ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 hover:border-gray-500 text-white cursor-pointer active:scale-95'
+                                      : 'bg-gray-900 border-gray-800 text-gray-500 cursor-not-allowed opacity-60'
+                                  }`}
+                                  title={estaArmado ? 'Reimprimir remito de este pedido' : 'Primero pesá y armá el pedido'}
+                                >
+                                  <Printer size={13} className={estaArmado ? 'text-amber-400' : 'text-gray-600'} />
+                                  <span>{estaArmado ? 'Reimprimir remito' : 'Primero pesá y armá el pedido'}</span>
+                                </button>
+                              );
+                            })()}
                           </td>
                         </tr>
                       );
@@ -2874,16 +2901,25 @@ export default function AgendaEntregas({ rol, usuario }) {
                           <button onClick={() => abrirWhatsApp(p.telefono, p.nombre)} className="flex-1 flex items-center justify-center gap-2 bg-[#25D366]/10 hover:bg-[#25D366]/20 border border-[#25D366]/30 text-[#25D366] text-sm font-bold px-4 py-3 rounded-xl transition-all">
                             <MessageCircle size={18} /> WhatsApp: {p.telefono}
                           </button>
-                          {rol !== 'repartidor' && (
-                            <button 
-                              type="button"
-                              onClick={() => imprimirRemitoConPesoReal(p)} 
-                              className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-sm font-bold px-4 py-3 rounded-xl transition-all shadow-md shadow-indigo-900/30 cursor-pointer"
-                              title="Imprimir remito con toda la información actual del pedido"
-                            >
-                              <Printer size={18} /> 🖨️ Imprimir Remito
-                            </button>
-                          )}
+                          {rol !== 'repartidor' && (() => {
+                            const estaArmado = estaPedidoArmado(p, prep);
+                            return (
+                              <button 
+                                type="button"
+                                onClick={() => estaArmado ? imprimirRemitoConPesoReal(p) : null} 
+                                disabled={!estaArmado}
+                                className={`flex-1 flex items-center justify-center gap-2 text-sm font-bold px-4 py-3 rounded-xl transition-all shadow-md ${
+                                  estaArmado
+                                    ? 'bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white shadow-indigo-900/30 cursor-pointer'
+                                    : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed opacity-60'
+                                }`}
+                                title={estaArmado ? 'Imprimir remito con el peso real y detalle congelado' : 'Primero pesá y armá el pedido'}
+                              >
+                                <Printer size={18} />
+                                <span>{estaArmado ? '🖨️ Imprimir Remito' : 'Primero pesá y armá el pedido'}</span>
+                              </button>
+                            );
+                          })()}
                         </div>
                         <div className="bg-black/40 border border-white/5 flex flex-col justify-center p-4 rounded-xl flex-1">
                           {rol !== 'repartidor' ? (
@@ -3270,15 +3306,26 @@ export default function AgendaEntregas({ rol, usuario }) {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => imprimirRemitoConPesoReal(p)}
-                        className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 hover:border-gray-500 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition-all shadow-sm cursor-pointer active:scale-95"
-                        title="Reimprimir remito"
-                      >
-                        <Printer size={13} className="text-amber-400" />
-                        <span>Reimprimir remito</span>
-                      </button>
+                      {(() => {
+                        const prep = preparaciones[p.numero_pedido];
+                        const estaArmado = estaPedidoArmado(p, prep);
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => estaArmado ? imprimirRemitoConPesoReal(p) : null}
+                            disabled={!estaArmado}
+                            className={`flex items-center gap-1.5 border text-xs font-semibold px-3 py-1.5 rounded-xl transition-all shadow-sm ${
+                              estaArmado
+                                ? 'bg-gray-800 hover:bg-gray-700 border-gray-600 hover:border-gray-500 text-white cursor-pointer active:scale-95'
+                                : 'bg-gray-900 border-gray-800 text-gray-500 cursor-not-allowed opacity-60'
+                            }`}
+                            title={estaArmado ? 'Reimprimir remito' : 'Primero pesá y armá el pedido'}
+                          >
+                            <Printer size={13} className={estaArmado ? 'text-amber-400' : 'text-gray-600'} />
+                            <span>{estaArmado ? 'Reimprimir remito' : 'Primero pesá y armá el pedido'}</span>
+                          </button>
+                        );
+                      })()}
                     </div>
                   </div>
                 );
@@ -4493,6 +4540,47 @@ export default function AgendaEntregas({ rol, usuario }) {
                 className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 border border-purple-500/50 text-white text-xs font-bold shadow-[0_0_20px_rgba(168,85,247,0.3)] transition-all active:scale-[0.98] cursor-pointer"
               >
                 ✅ Sumar al pedido (Enter)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════ MODAL POST-ARMADO: SACAR REMITO EN EL MOMENTO (REQUISITO 4) ═══════ */}
+      {pedidoRecienArmado && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
+          <div className="bg-[#1e232d] border border-green-500/40 rounded-3xl p-6 max-w-md w-full shadow-[0_0_50px_rgba(34,197,94,0.25)] text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="w-16 h-16 bg-green-500/20 text-green-400 rounded-2xl flex items-center justify-center mx-auto border border-green-500/30">
+              <CheckCircle size={36} />
+            </div>
+            <div>
+              <h3 className="text-lg font-black text-white">¡Pedido Armado con Éxito!</h3>
+              <p className="text-gray-300 text-xs mt-1">
+                Pedido <strong className="text-white">#{pedidoRecienArmado.numPedido}</strong> &middot; {pedidoRecienArmado.pedido.nombre || 'Cliente'}<br />
+                Pesadas reales y precios congelados guardados correctamente.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                type="button"
+                autoFocus
+                onClick={() => {
+                  const { pedido, prep } = pedidoRecienArmado;
+                  imprimirRemitoIndividual(pedido, prep);
+                  if (pedido.sheetRowIndex) actualizarRemitoEnSheet(pedido.sheetRowIndex, true);
+                  setPedidoRecienArmado(null);
+                }}
+                className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-bold py-3.5 px-5 rounded-2xl transition-all shadow-lg shadow-indigo-900/40 active:scale-95 cursor-pointer text-sm"
+              >
+                <Printer size={18} />
+                <span>Imprimir remito</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPedidoRecienArmado(null)}
+                className="w-full py-2.5 px-4 bg-gray-800/80 hover:bg-gray-700/80 text-gray-400 hover:text-white font-semibold rounded-xl text-xs transition-all border border-gray-700 cursor-pointer"
+              >
+                Continuar sin imprimir
               </button>
             </div>
           </div>
