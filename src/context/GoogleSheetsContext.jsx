@@ -117,7 +117,7 @@ export function GoogleSheetsProvider({ children }) {
         headers.forEach((h, i) => { obj[h] = row[i] || ''; });
 
         const formaPagoRaw = (obj.forma_pago || '').toLowerCase().trim();
-        const metodoPagoRaw = (obj.metodo_pago || obj.medio_pago || obj.medio_cobro || '').toLowerCase().trim();
+        const metodoPagoRaw = (obj.metodo_pago || '').toLowerCase().trim();
         const formaPago = formaPagoRaw || (METODOS_PAGO_CONTRA_ENTREGA.includes(metodoPagoRaw) ? 'entrega' : '');
 
         return {
@@ -135,8 +135,10 @@ export function GoogleSheetsProvider({ children }) {
           total:           Number((obj.total || '0').toString().replace(/[$.]/g, '').replace(',', '.')) || 0,
           estado_pago:     obj.estado_pago || obj.pago || 'pendiente',
           forma_pago:      formaPago,
-          metodo_pago:     (obj.metodo_pago || '').toLowerCase().trim(),
-          medio_pago:      obj.medio_cobro || obj.medio_pago || obj.metodo_pago || '',
+          metodo_pago:     metodoPagoRaw,
+          metodo_pago_elegido: metodoPagoRaw,
+          medio_cobro:     obj.medio_cobro || '',
+          medio_pago:      obj.medio_cobro || '',
           monto_cobrado:   obj.monto_cobrado != null && obj.monto_cobrado !== '' ? Number(obj.monto_cobrado) : null,
           detalle_json:    obj.detalle_json || null,
           cupon_bienvenida_estado: obj.cupon_bienvenida_estado || '',
@@ -159,7 +161,7 @@ export function GoogleSheetsProvider({ children }) {
           reembolso_medio:   (obj.reembolso_medio || obj.medio_reembolso || '').toLowerCase().trim(),
           reembolso_ref:     obj.reembolso_ref || obj.ref_reembolso || '',
           fecha_reembolso:   obj.fecha_reembolso || '',
-          cobrado:           obj.cobrado === true || obj.cobrado === 'TRUE' || obj.cobrado === 'true' || Boolean(obj.fecha_cobro) || Boolean(obj.monto_cobrado != null && obj.monto_cobrado !== ''),
+          cobrado:           obj.cobrado === true || obj.cobrado === 'TRUE' || obj.cobrado === 'true' || Boolean(obj.fecha_cobro) || Boolean(obj.monto_cobrado != null && obj.monto_cobrado !== '' && Number(obj.monto_cobrado) > 0) || Boolean(obj.medio_cobro && String(obj.medio_cobro).trim() !== ''),
         };
       });
 

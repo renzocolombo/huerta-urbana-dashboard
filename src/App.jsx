@@ -61,6 +61,14 @@ export default function App() {
     return localStorage.getItem('huerta_auth_usuario') || '';
   });
   const [seccion, setSeccion] = useState('finanzas');
+  const [fechaCompartida, setFechaCompartida] = useState(null);
+
+  const handleNav = (id, fecha = null) => {
+    if (fecha) {
+      setFechaCompartida(fecha);
+    }
+    setSeccion(id);
+  };
 
   // Si se accede directamente mediante link del hogar (#hogar), no requiere login del dashboard
   if (esRutaHogarDirecta) {
@@ -92,10 +100,11 @@ export default function App() {
       {/* Header de navegación */}
       <Header
         seccion={seccion}
-        onNav={(id) => setSeccion(id)}
+        onNav={handleNav}
         onLogout={() => { 
           setLogueado(false); 
           setSeccion('finanzas'); 
+          setFechaCompartida(null);
           setUsuario(''); 
           try {
             localStorage.removeItem('huerta_auth_logueado');
@@ -112,7 +121,13 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 py-6">
           {/* Key fuerza remount al cambiar sección para animar entrada */}
           <div key={seccion} className="fade-in">
-            <ComponenteActual rol={rol} usuario={usuario} />
+            <ComponenteActual 
+              rol={rol} 
+              usuario={usuario} 
+              onNav={handleNav}
+              fechaCompartida={fechaCompartida}
+              setFechaCompartida={setFechaCompartida}
+            />
           </div>
         </div>
       </main>
