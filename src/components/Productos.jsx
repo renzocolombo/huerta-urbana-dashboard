@@ -7,9 +7,10 @@ import {
   Barcode
 } from 'lucide-react';
 import CargaEanTab from './CargaEanTab';
+import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { 
   apiGetStockKg, apiGetPreciosSugeridos, apiCrearProducto,
-  apiSetMargen, apiPublicarPrecios, apiGetConfig, apiSetConfig,
+  apiSetMargen, apiPublicarPrecios, apiGetPreciosWeb, apiGetConfig, apiSetConfig,
   apiCrearIngreso, apiGetIngresos, apiGetProveedores,
   apiRegistrarSalidas, apiGetMovimientos,
   getAdminPinSession, setAdminPinSession, clearAdminPinSession
@@ -22,6 +23,13 @@ const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u
 const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
 
 export default function Productos() {
+  // Contexto de Sheets (Almacén para cruce de stock)
+  let sheetsCtx = null;
+  try {
+    sheetsCtx = useGoogleSheets();
+  } catch (_) {}
+  const { productosCostos = [] } = sheetsCtx || {};
+
   // Pestañas internas
   const [subTab, setSubTab] = useState('tabla'); // 'tabla' | 'ingresos' | 'salidas'
 
@@ -56,15 +64,16 @@ export default function Productos() {
   const [margenesEditados, setMargenesEditados] = useState({});
   const [guardandoMargen, setGuardandoMargen] = useState({});
 
-  // Cargar datos principales (Stock en kg + Precios sugeridos)
+  // Cargar datos principales (Stock en kg + Precios sugeridos + PreciosWeb)
   const cargarDatos = async () => {
     setCargando(true);
     setError(null);
     try {
-      const [resStock, resPrecios, resConfig] = await Promise.all([
+      const [resStock, resPrecios, resConfig, resWeb] = await Promise.all([
         apiGetStockKg(),
         apiGetPreciosSugeridos(),
-        apiGetConfig()
+        apiGetConfig(),
+        apiGetPreciosWeb().catch(() => null)
       ]);
 
       if (resConfig && resConfig.ok) {
@@ -82,20 +91,83 @@ export default function Productos() {
       const listaStock = (resStock && resStock.ok && Array.isArray(resStock.productos)) ? resStock.productos : [];
       const listaPrecios = (resPrecios && resPrecios.ok && (Array.isArray(resPrecios.precios) ? resPrecios.precios : (Array.isArray(resPrecios.productos) ? resPrecios.productos : []))) || [];
 
+      // Mapa de productos actualmente en PreciosWeb para recordar disponible tras recargar
+      const mapaWeb = new Map();
+      if (resWeb && resWeb.ok && Array.isArray(resWeb.productos)) {
+        resWeb.productos.forEach(pw => {
+          if (pw && (pw.nombre || pw.producto)) {
+            mapaWeb.set(norm(pw.nombre || pw.producto), pw);
+          }
+        });
+      }
+
+      // Mapa de Almacén para cruce de stock en unidades
+      const mapaAlmacen = new Map();
+      if (Array.isArray(productosCostos)) {
+        productosCostos.forEach(pc => {
+          if (pc && (pc.nombre || pc.producto)) {
+            mapaAlmacen.set(norm(pc.nombre || pc.producto), pc);
+          }
+        });
+      }
+
+      // Resolver disponibilidad según reglas:
+      // - Almacén: si stock_unidades <= 0, disponible = false automáticamente con aviso, pero editable/forzable
+      // - Frutas y verduras: 100% manual (sin inferir por stock en kg)
+      // - Retrocompatible: sin flag = true
+      const resolveInfoDisp = (prodNombre, cat, dispSugerido) => {
+        const k = norm(prodNombre);
+        const pw = mapaWeb.get(k);
+        const alm = mapaAlmacen.get(k);
+        const catNorm = (cat || '').toLowerCase();
+        const esAlmacen = catNorm.includes('almacen') || getCategoriaPrincipal(prodNombre) === 'Almacén' || Boolean(alm);
+
+        let stockUds = null;
+        if (alm && alm.stock_unidades !== undefined) {
+          stockUds = Number(alm.stock_unidades);
+        }
+        const sinStockAlmacenAuto = esAlmacen && stockUds !== null && stockUds <= 0;
+
+        let disponible = true;
+        let esForzado = false;
+
+        if (pw && pw.disponible !== undefined) {
+          disponible = pw.disponible !== false;
+          if (sinStockAlmacenAuto && disponible) esForzado = true;
+        } else if (dispSugerido !== undefined) {
+          disponible = dispSugerido !== false;
+          if (sinStockAlmacenAuto && disponible) esForzado = true;
+        } else if (sinStockAlmacenAuto) {
+          disponible = false;
+        } else {
+          disponible = true;
+        }
+
+        return { disponible, sinStockAlmacenAuto, esAlmacen, esForzado, stock_unidades: stockUds };
+      };
+
       // Combinar por nombre normalizado
       const mapa = new Map();
 
       listaPrecios.forEach(p => {
         if (!p || !p.producto) return;
         const k = norm(p.producto);
+        const cat = p.categoria || getCategoriaPrincipal(p.producto);
+        const infoDisp = resolveInfoDisp(p.producto, cat, p.disponible);
+
         mapa.set(k, {
           producto: p.producto,
-          categoria: p.categoria || getCategoriaPrincipal(p.producto),
+          categoria: cat,
           unidad: p.unidad || 'kg',
           costo_kg_ultimo: Number(p.costo_kg_ultimo || p.costo || 0),
           margen_pct: Number(p.margen_pct !== undefined ? p.margen_pct : 60),
           precio_sugerido: Number(p.precio_sugerido || 0),
           precio_publicado: Number(p.precio_publicado || 0),
+          disponible: infoDisp.disponible,
+          sinStockAlmacenAuto: infoDisp.sinStockAlmacenAuto,
+          es_almacen: infoDisp.esAlmacen,
+          es_forzado: infoDisp.esForzado,
+          stock_unidades: infoDisp.stock_unidades,
           en_deposito: 0,
           comprometido: 0,
           vendible: 0,
@@ -106,14 +178,16 @@ export default function Productos() {
       listaStock.forEach(s => {
         if (!s || !s.producto) return;
         const k = norm(s.producto);
+        const cat = s.categoria || getCategoriaPrincipal(s.producto);
         const existing = mapa.get(k) || {
           producto: s.producto,
-          categoria: s.categoria || getCategoriaPrincipal(s.producto),
+          categoria: cat,
           unidad: s.unidad || 'kg',
           costo_kg_ultimo: Number(s.costo_kg_ultimo || 0),
           margen_pct: 60,
           precio_sugerido: 0,
-          precio_publicado: 0
+          precio_publicado: 0,
+          ...resolveInfoDisp(s.producto, cat, undefined)
         };
 
         mapa.set(k, {
@@ -178,6 +252,21 @@ export default function Productos() {
     }
   };
 
+  // Alternar disponibilidad (Disponible / Sin stock) por producto
+  const handleToggleDisponible = (prodNombre) => {
+    setProductos(prev => prev.map(p => {
+      if (p.producto !== prodNombre) return p;
+      const nuevoDisp = !(p.disponible !== false);
+      const nuevoForzado = Boolean(p.sinStockAlmacenAuto && nuevoDisp);
+      return {
+        ...p,
+        disponible: nuevoDisp,
+        es_forzado: nuevoForzado,
+        disponible_cambio: true
+      };
+    }));
+  };
+
   // Helper para solicitar PIN de Admin con memoria de 15 minutos
   const ejecutarConAdminPin = (accionCallback) => {
     const pinMem = getAdminPinSession();
@@ -236,7 +325,11 @@ export default function Productos() {
         precio_publicado: publicado,
         diferencia,
         difPct,
-        cambia: sugerido > 0 && sugerido !== publicado
+        disponible: p.disponible !== false,
+        es_almacen: p.es_almacen,
+        sinStockAlmacenAuto: p.sinStockAlmacenAuto,
+        es_forzado: p.es_forzado,
+        cambia: (sugerido > 0 && sugerido !== publicado) || Boolean(p.disponible_cambio)
       };
     });
   }, [productos, margenesEditados, config.redondeo]);
@@ -417,6 +510,7 @@ export default function Productos() {
                   <tr className="bg-black/60 border-b border-gray-800 text-gray-400 font-bold uppercase text-[10px] tracking-wider">
                     <th className="py-3 px-4">Producto</th>
                     <th className="py-3 px-3">Categoría</th>
+                    <th className="py-3 px-3 text-center">Disponible</th>
                     <th className="py-3 px-3 text-right">Stock</th>
                     <th className="py-3 px-3 text-right">Costo / Ud</th>
                     <th className="py-3 px-3 text-center">Margen %</th>
@@ -429,14 +523,14 @@ export default function Productos() {
                 <tbody className="divide-y divide-gray-800/60 font-medium">
                   {cargando && productos.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="py-12 text-center text-gray-500">
+                      <td colSpan={10} className="py-12 text-center text-gray-500">
                         <RefreshCw size={20} className="animate-spin mx-auto mb-2 text-green-500" />
                         <span>Cargando catálogo unificado desde Google Sheets...</span>
                       </td>
                     </tr>
                   ) : productosFiltrados.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="py-12 text-center text-gray-500">
+                      <td colSpan={10} className="py-12 text-center text-gray-500">
                         No se encontraron productos con los filtros aplicados.
                       </td>
                     </tr>
@@ -449,7 +543,7 @@ export default function Productos() {
                       const sug = calcularPrecioSugerido(p.costo_kg_ultimo, margenVal);
                       const pub = Number(p.precio_publicado || 0);
                       const dif = sug - pub;
-                      const esSinStock = Number(p.en_deposito || 0) <= 0;
+                      const esSinStock = p.disponible === false;
 
                       // Explicación de la cuenta: costo × factor -> redondeado
                       const factor = (1 + (Number(margenVal) || 0) / 100).toFixed(2).replace('.', ',');
@@ -460,11 +554,18 @@ export default function Productos() {
                       return (
                         <tr 
                           key={idx} 
-                          className={`hover:bg-white/[0.02] transition-colors ${esSinStock ? 'opacity-40 hover:opacity-100' : ''}`}
+                          className={`hover:bg-white/[0.02] transition-colors ${esSinStock ? 'bg-red-950/10' : ''}`}
                         >
                           {/* 1. Producto */}
                           <td className="py-3 px-4 font-bold text-white text-sm">
-                            {p.producto}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span>{p.producto}</span>
+                              {p.disponible === false && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-red-600/20 text-red-400 border border-red-500/40">
+                                  Sin stock
+                                </span>
+                              )}
+                            </div>
                           </td>
 
                           {/* 2. Categoría */}
@@ -472,6 +573,44 @@ export default function Productos() {
                             <span className="px-2 py-0.5 rounded-md bg-gray-800/80 border border-gray-700/60 text-gray-300 text-[10px] font-semibold">
                               {p.categoria || 'Sin categoría'}
                             </span>
+                          </td>
+
+                          {/* 2b. Disponible Switch */}
+                          <td className="py-3 px-3 text-center">
+                            <div className="inline-flex flex-col items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleDisponible(p.producto)}
+                                className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors cursor-pointer ${
+                                  p.disponible !== false ? 'bg-green-600' : 'bg-gray-700'
+                                }`}
+                                title={p.disponible !== false ? 'Disponible en la web (clic para marcar Sin stock)' : 'Sin stock (clic para marcar Disponible)'}
+                              >
+                                <span
+                                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                                    p.disponible !== false ? 'translate-x-5' : 'translate-x-1'
+                                  }`}
+                                />
+                              </button>
+                              <div className="text-[10px] font-bold leading-tight">
+                                {p.disponible !== false ? (
+                                  p.es_forzado ? (
+                                    <span className="text-amber-400 font-semibold text-[9px] bg-amber-500/10 px-1 py-0.5 rounded border border-amber-500/20" title="Almacén en 0 pero forzado a disponible">
+                                      Forzado
+                                    </span>
+                                  ) : (
+                                    <span className="text-green-400">Disponible</span>
+                                  )
+                                ) : (
+                                  <span className="text-red-400">
+                                    Sin stock
+                                    {p.sinStockAlmacenAuto && (
+                                      <span className="block text-[8px] text-amber-400 font-normal">Sin stock en almacén</span>
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </td>
 
                           {/* 3. Stock con unidad */}
@@ -1929,17 +2068,23 @@ function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, con
   const [publicando, setPublicando] = useState(false);
   const [error, setError] = useState(null);
 
+  const totalProds = preciosList.length;
+  const cantDisponibles = preciosList.filter(p => p.disponible !== false).length;
+  const prodsSinStock = preciosList.filter(p => p.disponible === false);
+
   const handleConfirmar = async () => {
     setPublicando(true);
     setError(null);
 
-    // Contrato estricto: origen 'mercaderia', solo nombre y precio
+    // Contrato estricto: origen 'mercaderia', enviando nombre, precio y disponible
     const prodsParaPublicar = preciosList.map(p => {
       const margenActual = margenesEditados[p.producto] !== undefined ? margenesEditados[p.producto] : p.margen_pct;
-      const precioFinal = calcularPrecioSugerido(p.costo_kg_ultimo, margenActual);
+      const sugerido = calcularPrecioSugerido(p.costo_kg_ultimo, margenActual);
+      const precioFinal = sugerido > 0 ? sugerido : (Number(p.precio_publicado) || 0);
       return {
         nombre: p.producto,
-        precio: precioFinal
+        precio: precioFinal,
+        disponible: p.disponible !== false
       };
     });
 
@@ -1962,7 +2107,7 @@ function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, con
       <div className="bg-[#121212] border border-gray-800 rounded-3xl w-full max-w-lg p-6 shadow-2xl space-y-4">
         <div className="flex items-center justify-between border-b border-gray-800 pb-3">
           <h2 className="text-sm font-black uppercase text-white flex items-center gap-2">
-            <Check size={16} className="text-green-400" /> Publicar Precios en Tienda
+            <Check size={16} className="text-green-400" /> Publicar Catálogo en Tienda
           </h2>
           <button onClick={onClose} className="text-gray-400 hover:text-white cursor-pointer">
             <X size={16} />
@@ -1970,18 +2115,44 @@ function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, con
         </div>
 
         <p className="text-xs text-gray-300">
-          Se actualizarán los precios en la tienda web y se auditarán en Google Sheets.
+          Se actualizarán precios y disponibilidad en la tienda web y se auditarán en Google Sheets.
         </p>
 
-        <div className="max-h-56 overflow-y-auto space-y-2 pr-1 divide-y divide-gray-800">
+        {/* Resumen de catálogo y disponibilidad */}
+        <div className="flex items-center justify-between text-xs bg-black/50 border border-gray-800 px-3 py-2 rounded-xl">
+          <span className="text-gray-400">Total: <strong className="text-white">{totalProds}</strong></span>
+          <span className="text-gray-600">|</span>
+          <span className="text-green-400 font-bold">Disponibles: {cantDisponibles}</span>
+          <span className="text-gray-600">|</span>
+          <span className={prodsSinStock.length > 0 ? 'text-red-400 font-bold' : 'text-gray-500'}>
+            Sin stock: {prodsSinStock.length}
+          </span>
+        </div>
+
+        {/* Cambios de precio */}
+        <div className="max-h-52 overflow-y-auto space-y-2 pr-1 divide-y divide-gray-800">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400">
+            Cambios de precio pendientes ({productosQueCambian.length}):
+          </p>
           {productosQueCambian.length === 0 ? (
-            <p className="py-4 text-center text-xs text-gray-500">
-              No hay productos con cambios de precio pendientes. Se republicarán los precios actuales.
+            <p className="py-2 text-center text-xs text-gray-500">
+              No hay productos con cambios de precio pendientes. Se republicarán los precios actuales con su disponibilidad.
             </p>
           ) : (
             productosQueCambian.map((c, i) => (
               <div key={i} className="pt-2 flex items-center justify-between text-xs">
-                <span className="font-bold text-white">{c.producto}</span>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-white">{c.producto}</span>
+                  {c.disponible === false ? (
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-red-600/30 text-red-300 border border-red-500/40">
+                      Sin stock
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-bold text-green-400 bg-green-500/10 border border-green-500/20">
+                      Disp.
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 font-mono">
                   <span className="text-gray-500 line-through">$${c.precio_publicado}</span>
                   <span className="text-gray-400">→</span>
@@ -1991,6 +2162,31 @@ function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, con
             ))
           )}
         </div>
+
+        {/* Bloque explícito de productos que se publicarán como Sin Stock */}
+        {prodsSinStock.length > 0 && (
+          <div className="pt-3 border-t border-gray-800 space-y-1.5">
+            <p className="text-[11px] font-black uppercase tracking-wider text-red-400 flex items-center gap-1.5">
+              <AlertTriangle size={13} />
+              Productos marcados "Sin stock" a publicar ({prodsSinStock.length}):
+            </p>
+            <div className="max-h-28 overflow-y-auto space-y-1 pr-1">
+              {prodsSinStock.map((p, i) => (
+                <div key={i} className="flex items-center justify-between text-xs py-1 px-2.5 rounded-lg bg-red-500/10 border border-red-500/25">
+                  <div className="flex items-center gap-2">
+                    <span className="text-white font-medium">{p.producto}</span>
+                    {p.sinStockAlmacenAuto && (
+                      <span className="text-[9px] text-amber-400 font-mono">(almacén: 0)</span>
+                    )}
+                  </div>
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-red-600/40 text-red-200 border border-red-500/50">
+                    Sin stock
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {error && <div className="p-3 rounded-xl bg-red-500/10 text-red-300 text-xs">{error}</div>}
 
