@@ -18,6 +18,7 @@ const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_KEY || import.meta.env.VITE_
 import { APPS_SCRIPT_URL } from '../utils/appsScriptUrl';
 import { parsearFecha, extraerFechaYMD, getHoyYMD } from '../utils/fechasEntrega';
 import { METODOS_PAGO_CONTRA_ENTREGA } from '../utils/agendaCalendario';
+import { parsearCantidad } from '../utils/formatoRemito';
 
 export function GoogleSheetsProvider({ children }) {
   const [pedidos, setPedidos]         = useState(PEDIDOS_MOCK);
@@ -69,7 +70,13 @@ export function GoogleSheetsProvider({ children }) {
             if (json.status === 'ok' && json.table) {
               const headers = (json.table.cols || []).map(c => c.label || '');
               const rows = (json.table.rows || []).map(r => 
-                (r.c || []).map(cell => (cell ? (cell.v !== null && cell.v !== undefined ? cell.v : cell.f || '') : ''))
+                (r.c || []).map(cell => {
+                  if (!cell) return '';
+                  if (cell.f && typeof cell.v === 'number' && cell.v > 40000 && /^\d+([.,]\d+)?$/.test(String(cell.f).trim())) {
+                    return cell.f.trim();
+                  }
+                  return (cell.v !== null && cell.v !== undefined ? cell.v : cell.f || '');
+                })
               );
               return [headers, ...rows];
             }
@@ -123,7 +130,7 @@ export function GoogleSheetsProvider({ children }) {
           direccion:       obj.direccion || '',
           localidad:       obj.localidad || obj.zona || '',
           producto:        obj.producto || obj.combo || '',
-          cantidades:      Number(obj.cantidades || 1),
+          cantidades:      parsearCantidad(obj.cantidades).valor || 1,
           observaciones:   obj.observaciones || obj.notas || '',
           total:           Number((obj.total || '0').toString().replace(/[$.]/g, '').replace(',', '.')) || 0,
           estado_pago:     obj.estado_pago || obj.pago || 'pendiente',
@@ -132,6 +139,9 @@ export function GoogleSheetsProvider({ children }) {
           medio_pago:      obj.medio_cobro || obj.medio_pago || obj.metodo_pago || '',
           monto_cobrado:   obj.monto_cobrado != null && obj.monto_cobrado !== '' ? Number(obj.monto_cobrado) : null,
           detalle_json:    obj.detalle_json || null,
+          cupon_bienvenida_estado: obj.cupon_bienvenida_estado || '',
+          credito_usado:   obj.credito_usado != null && obj.credito_usado !== '' ? String(obj.credito_usado).trim() : '',
+          codigo_referido: obj.codigo_referido || '',
           dia_entrega:     obj.dia_entrega || obj.dia || '',
           horario_entrega: obj.horario_entrega || obj.turno_entrega || obj.turno || '09:00 - 13:00',
           turno_entrega:   obj.turno_entrega || obj.turno || 'mañana',

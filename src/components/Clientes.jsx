@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { MessageCircle, ShoppingBag, DollarSign, Calendar, ShoppingCart, AlertTriangle, Check, X, Printer } from 'lucide-react';
 import { db } from '../config/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
-import { imprimirRemitoIndividual } from '../utils/remitoPrinter';
+import { imprimirRemitoIndividual, estaPedidoArmado } from '../utils/remitoPrinter';
 
 const $$ = (n) => {
   const num = Number(n);
@@ -117,6 +117,11 @@ export default function Clientes() {
         prep = parsed[ultimoPedido.numero_pedido] || null;
       }
     } catch (e) {}
+
+    if (!estaPedidoArmado(ultimoPedido, prep)) {
+      alert('Primero pesá y armá el pedido');
+      return;
+    }
 
     imprimirRemitoIndividual(ultimoPedido, prep);
   };
@@ -369,15 +374,40 @@ El equipo de Huerta Urbana`;
                 </button>
 
                 {/* Botón Imprimir Remito */}
-                <button
-                  type="button"
-                  onClick={() => imprimirRemitoCliente(c)}
-                  className="w-full flex items-center justify-center gap-2 mt-2 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 text-xs font-semibold py-2.5 rounded-xl transition-all cursor-pointer shadow-sm active:scale-98"
-                  title="Imprimir remito del último pedido de este cliente"
-                >
-                  <Printer size={13} className="text-indigo-400" />
-                  Imprimir Remito del Cliente
-                </button>
+                {(() => {
+                  const pedidosCliente = (PEDIDOS || []).filter(p => (c.email && p.email === c.email) || (c.telefono && p.telefono === c.telefono));
+                  const ultimoPedido = pedidosCliente && pedidosCliente.length > 0
+                    ? [...pedidosCliente].sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''))[0]
+                    : null;
+                  let prep = null;
+                  if (ultimoPedido) {
+                    try {
+                      const s = localStorage.getItem('huerta_preparaciones_v1');
+                      if (s) {
+                        const parsed = JSON.parse(s);
+                        prep = parsed[ultimoPedido.numero_pedido] || null;
+                      }
+                    } catch (_) {}
+                  }
+                  const estaArmado = ultimoPedido ? estaPedidoArmado(ultimoPedido, prep) : false;
+
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => estaArmado ? imprimirRemitoCliente(c) : null}
+                      disabled={!estaArmado}
+                      className={`w-full flex items-center justify-center gap-2 mt-2 border text-xs font-semibold py-2.5 rounded-xl transition-all shadow-sm ${
+                        estaArmado
+                          ? 'bg-indigo-500/15 hover:bg-indigo-500/25 border-indigo-500/30 text-indigo-300 cursor-pointer active:scale-98'
+                          : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed opacity-60'
+                      }`}
+                      title={estaArmado ? 'Imprimir remito del último pedido de este cliente' : 'Primero pesá y armá el pedido'}
+                    >
+                      <Printer size={13} className={estaArmado ? 'text-indigo-400' : 'text-gray-500'} />
+                      <span>{estaArmado ? 'Imprimir Remito del Cliente' : 'Primero pesá y armá el pedido'}</span>
+                    </button>
+                  );
+                })()}
               </div>
             ))}
           </div>
