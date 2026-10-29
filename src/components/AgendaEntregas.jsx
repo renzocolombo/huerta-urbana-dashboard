@@ -379,11 +379,6 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     return t ? t.label : '';
   }, [tabsEntrega, tabActiva]);
 
-  // Resumen de estados de entrega y cobro para la pestaña activa
-  const resumenDia = useMemo(() => {
-    return calcularResumenDia(pedidosDelDia, preparaciones);
-  }, [pedidosDelDia, preparaciones]);
-
   // Cantidad de pedidos programados por fecha (para el Calendario)
   const conteoCalendario = useMemo(() => conteoPorFecha(pedidosActivosTodos), [pedidosActivosTodos]);
 
@@ -559,6 +554,11 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
   const [preparaciones, setPreparaciones] = useState(() => {
     try { const s = localStorage.getItem(PREPARACIONES_KEY); return s ? JSON.parse(s) : {}; } catch (e) { return {}; }
   });
+
+  // Resumen de estados de entrega y cobro para la pestaña activa
+  const resumenDia = useMemo(() => {
+    return calcularResumenDia(pedidosDelDia, preparaciones);
+  }, [pedidosDelDia, preparaciones]);
   const [preparandoPedido, setPreparandoPedido] = useState(null);
   const [modalPreparacion, setModalPreparacion] = useState(null); // { pedido }
   const [modalItemExtra, setModalItemExtra] = useState(null);     // { nombre, mappedEan, cleanCode, matchedStockId, numPedido, peso, tagId, slot, esUnidad }
