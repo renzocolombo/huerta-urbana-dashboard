@@ -23,11 +23,14 @@ import {
   apiRegistrarNoEntrega,
   apiGetNoEntregasCliente,
   apiGetNoEntregasBatch,
+  apiLiberarCredito,
+  apiGetEstadoCreditoPedidos,
   apiRegistrarReembolso,
   apiGetReembolsosPendientes,
   apiGetReembolsos,
   apiGetFeriados
 } from '../utils/mercaderiaApi';
+import { calcularTotalPedido, esItemSinStock } from '../utils/totalesPedido';
 import { imprimirEtiquetaBolsa } from '../utils/etiquetaPrinter';
 import { esPedidoCobrado, estadoEntregaPedido, estadoPagoPedido, calcularResumenDia } from '../utils/estadosPedido';
 import ResumenDiaBar from './ResumenDiaBar';
@@ -524,6 +527,35 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     cargarNoEntregasBatch();
   }, [cargarNoEntregasBatch]);
 
+  // Consultar estado de crédito de referidos en lote para pedidos con crédito usado
+  const [estadosCreditoMap, setEstadosCreditoMap] = useState({});
+  const consultadosCreditoRef = useRef(new Set());
+
+  const cargarEstadosCreditoBatch = useCallback(async () => {
+    if (!pedidosDelDia || pedidosDelDia.length === 0) return;
+
+    const pedidosAConsultar = pedidosDelDia
+      .filter(p => p.numero_pedido && Number(p.credito_usado) > 0 && !consultadosCreditoRef.current.has(p.numero_pedido))
+      .map(p => p.numero_pedido);
+
+    if (pedidosAConsultar.length === 0) return;
+
+    pedidosAConsultar.forEach(num => consultadosCreditoRef.current.add(num));
+
+    try {
+      const res = await apiGetEstadoCreditoPedidos({ pedidos: pedidosAConsultar });
+      if (res && res.ok && res.resultados) {
+        setEstadosCreditoMap(prev => ({ ...prev, ...res.resultados }));
+      }
+    } catch (err) {
+      console.warn('[AGENDA] Error consultando estados de credito:', err.message);
+    }
+  }, [pedidosDelDia]);
+
+  useEffect(() => {
+    cargarEstadosCreditoBatch();
+  }, [cargarEstadosCreditoBatch]);
+
   // Modales
   const [modalNoEntrega, setModalNoEntrega] = useState(null); // { pedido, motivoSeleccionado, motivoOtro, accion, nuevoDia, nuevoHorario, guardando, resultado, error }
   const [modalCobrar, setModalCobrar] = useState(null);       // { pedido, totalCobrar, items, medio, nota, guardando, resultado, error }
@@ -726,30 +758,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
 
   // ── Helper: calcular total exacto a cobrar (redondeado a $1) ───────────────
   const calcularTotalDetalle = useCallback((p, prep) => {
-    let detalleItems = null;
-    const raw = p.detalle_json || prep?.detalle_json;
-    if (raw) {
-      try {
-        detalleItems = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : null);
-      } catch (e) {}
-    }
-    if (Array.isArray(detalleItems) && detalleItems.length > 0) {
-      const sum = detalleItems.reduce((acc, it) => acc + (it.sin_stock ? 0 : (Number(it.subtotal) || 0)), 0);
-      return Math.round(sum);
-    }
-    if (prep && Array.isArray(prep.items)) {
-      let sum = 0;
-      prep.items.forEach(it => {
-        if (it.sin_stock) return;
-        const bolsas = it.bolsasAsignadas || [];
-        const esUnidad = it.esUnidad || it.slot === 'unidades';
-        const cantReal = esUnidad ? bolsas.length : Number(bolsas.reduce((s, b) => s + (Number(b.peso) || 0), 0).toFixed(3));
-        const precioUnit = obtenerPrecioCongelado(it.nombre);
-        sum += Math.round(cantReal * precioUnit);
-      });
-      return Math.round(sum);
-    }
-    return Math.round(Number(p.total) || 0);
+    return calcularTotalPedido(p, prep, { obtenerPrecioCongelado }).monto;
   }, [obtenerPrecioCongelado]);
 
   // ── Total a cobrar del turno calculado SOLO sobre pedidos Activos (Requisito 5) ──
@@ -765,7 +774,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     }, 0);
   }, [pedidosDelTurno, preparaciones, calcularTotalDetalle]);
 
-  // ── Helper: obtener items para enviar a cobrarPedido con pesadas reales ───
+  // ── Helper: obtener items para enviar a cobrarPedido con pesadas reales (sin items sin_stock) ───
   const obtenerItemsParaCobro = useCallback((p, prep) => {
     let detalleItems = null;
     const raw = p.detalle_json || prep?.detalle_json;
@@ -776,7 +785,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     }
     if (Array.isArray(detalleItems) && detalleItems.length > 0) {
       return detalleItems
-        .filter(it => !it.sin_stock)
+        .filter(it => !esItemSinStock(it))
         .map(it => ({
           producto: it.producto || it.nombre,
           cantidad_real: Number(it.cantidad_real != null ? it.cantidad_real : (it.cantidad || 0))
@@ -784,7 +793,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     }
     if (prep && Array.isArray(prep.items)) {
       return prep.items
-        .filter(it => !it.sin_stock)
+        .filter(it => !esItemSinStock(it))
         .map(it => {
           const bolsas = it.bolsasAsignadas || [];
           const esUnidad = it.esUnidad || it.slot === 'unidades';
@@ -800,11 +809,15 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
 
   const abrirModalCobrar = useCallback((p) => {
     const prep = preparaciones[p.numero_pedido];
-    const totalExacto = calcularTotalDetalle(p, prep);
+    const calc = calcularTotalPedido(p, prep, { obtenerPrecioCongelado });
     const itemsCobro = obtenerItemsParaCobro(p, prep);
     setModalCobrar({
       pedido: p,
-      totalCobrar: totalExacto,
+      totalCalculado: calc.monto,
+      totalCobrar: calc.monto,
+      esEstimado: calc.esEstimado,
+      motivoEstimado: calc.motivoEstimado,
+      estaArmado: calc.estaArmado,
       items: itemsCobro,
       medio: 'debito',
       nota: '',
@@ -812,10 +825,19 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
       resultado: null,
       error: null,
     });
-  }, [preparaciones, calcularTotalDetalle, obtenerItemsParaCobro]);
+  }, [preparaciones, obtenerPrecioCongelado, obtenerItemsParaCobro]);
 
   const handleConfirmarCobro = useCallback(async () => {
     if (!modalCobrar || modalCobrar.guardando) return;
+
+    // Si el pedido no está armado, advertencia y confirmación obligatoria
+    if (!modalCobrar.estaArmado) {
+      const confirma = window.confirm(
+        `⚠️ El pedido ${modalCobrar.pedido.numero_pedido} no está armado (pesadas sin completar).\n\n¿Confirmás registrar el cobro con el monto estimado de $${Number(modalCobrar.totalCobrar).toLocaleString('es-AR')}?`
+      );
+      if (!confirma) return;
+    }
+
     setModalCobrar(prev => ({ ...prev, guardando: true, error: null }));
 
     try {
@@ -864,6 +886,8 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
           comision: res.comision != null ? res.comision : 0,
           neto: res.neto != null ? res.neto : (modalCobrar.totalCobrar - (res.comision || 0)),
           avisos: res.avisos || null,
+          creditos: res.creditos || null,
+          referido: res.referido || null,
         }
       }));
 
@@ -1711,6 +1735,13 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
       if (res && res.ok === false) {
         alert(`Error al liberar el stock en el Sheet: ${res.error}`);
         return;
+      }
+
+      // Liberar crédito de referidos si existía reserva (Requisito 2)
+      try {
+        await apiLiberarCredito({ numero_pedido: numPedido });
+      } catch (eCred) {
+        console.warn(`[CREDITO] Error liberando crédito de pedido ${numPedido}:`, eCred.message);
       }
 
       // Revertir bolsas de preparación si existían en memoria
@@ -2618,7 +2649,8 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
             const esPendiente = esPedidoPendienteDeEntrega(p, estadoActual);
             const noEsPendiente = !esPendiente;
 
-            const totalExactoPedido = calcularTotalDetalle(p, prep);
+            const infoCalculoPedido = calcularTotalPedido(p, prep, { obtenerPrecioCongelado });
+            const totalExactoPedido = infoCalculoPedido.monto;
 
             // Identificar si el pedido fue efectivamente cobrado (o registrado con cobrarPedido)
             const estaCobrado = esPedidoCobrado(p);
@@ -2664,9 +2696,8 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                 className: 'bg-blue-500/20 text-blue-300 border-blue-500/40 shadow-sm'
               };
             } else if (formaPago === 'entrega' || formaPago === 'link') {
-              const tienePesadasReales = esArmado && (p.detalle_json || prep?.detalle_json || prep?.completado);
-              const montoACobrar = tienePesadasReales ? totalExactoPedido : Math.round(Number(p.total) || 0);
-              const sufijo = tienePesadasReales ? '' : ' (estimado)';
+              const montoACobrar = totalExactoPedido;
+              const sufijo = infoCalculoPedido.esEstimado ? ' (estimado)' : '';
               cartelPago = {
                 tipo: 'naranja',
                 texto: `A COBRAR $${montoACobrar.toLocaleString('es-AR')}${sufijo}`,
@@ -2762,6 +2793,61 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                             {cartelPago.texto}
                           </span>
                         )}
+                        {/* Estado del crédito de referidos si credito_usado > 0 (Requisito 3) */}
+                        {Number(p.credito_usado) > 0 && (() => {
+                          const infoCred = estadosCreditoMap[p.numero_pedido];
+                          const estadoCred = (infoCred?.estado || '').toLowerCase().trim();
+                          const montoCred = Number(p.credito_usado);
+
+                          if (estadoCred === 'sin_reserva') {
+                            return (
+                              <span
+                                className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border bg-rose-500/20 text-rose-300 border-rose-500/40 shadow-sm flex items-center gap-1 animate-pulse"
+                                title="Crédito sin reserva: revisar. No tocar saldos."
+                              >
+                                ⚠️ Crédito sin reserva: revisar
+                              </span>
+                            );
+                          }
+                          if (estadoCred === 'reservado') {
+                            return (
+                              <span
+                                className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border bg-amber-500/15 text-amber-300 border-amber-500/30 flex items-center gap-1"
+                                title={`Crédito reservado: $${montoCred.toLocaleString('es-AR')}`}
+                              >
+                                🟡 Crédito: Reservado
+                              </span>
+                            );
+                          }
+                          if (estadoCred === 'consumido') {
+                            return (
+                              <span
+                                className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border bg-emerald-500/15 text-emerald-300 border-emerald-500/30 flex items-center gap-1"
+                                title={`Crédito consumido: $${montoCred.toLocaleString('es-AR')}`}
+                              >
+                                🟢 Crédito: Consumido
+                              </span>
+                            );
+                          }
+                          if (estadoCred === 'liberado') {
+                            return (
+                              <span
+                                className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg border bg-gray-500/20 text-gray-300 border-gray-500/40 flex items-center gap-1"
+                                title={`Crédito liberado: $${montoCred.toLocaleString('es-AR')}`}
+                              >
+                                ⚪ Crédito: Liberado
+                              </span>
+                            );
+                          }
+                          return (
+                            <span
+                              className="text-[10px] font-bold px-2 py-0.5 rounded-lg border bg-gray-500/10 text-gray-400 border-gray-500/20 flex items-center gap-1"
+                              title={`Crédito usado: $${montoCred.toLocaleString('es-AR')}`}
+                            >
+                              Crédito: ${montoCred.toLocaleString('es-AR')}
+                            </span>
+                          );
+                        })()}
                         {/* Alerta de No Entregas: solo visible si el pedido está pendiente (no entregado, no cancelado y no cobrado) */}
                         {totalNoEntregas > 0 && esPedidoPendienteDeEntrega(p, estadoActual) && (
                           <span
@@ -2810,17 +2896,12 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                     {esPorCobrar && esPedidoPendienteDeEntrega(p, estadoActual) && !tieneReembolsoPendiente && (
                       <button
                         type="button"
-                        disabled={!esArmado}
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (esArmado) abrirModalCobrar(p);
+                          abrirModalCobrar(p);
                         }}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-md active:scale-95 ${
-                          esArmado
-                            ? 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white cursor-pointer shadow-emerald-950/40 border border-emerald-400/30'
-                            : 'bg-white/5 border border-white/10 text-gray-500 cursor-not-allowed opacity-50'
-                        }`}
-                        title={esArmado ? `Cobrar ${$$ (totalExactoPedido)}` : 'El pedido debe estar armado para cobrar'}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-md active:scale-95 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white cursor-pointer shadow-emerald-950/40 border border-emerald-400/30"
+                        title={esArmado ? `Cobrar ${$$ (totalExactoPedido)}` : `Cobrar estimado ${$$ (totalExactoPedido)}`}
                       >
                         <CreditCard size={13} />
                         <span>Cobrar</span>
@@ -3026,19 +3107,12 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                               {esPorCobrar && !estaCobrado && !esEntregado && (
                                 <button
                                   type="button"
-                                  disabled={!esArmado}
-                                  onClick={() => {
-                                    if (esArmado) abrirModalCobrar(p);
-                                  }}
-                                  className={`w-full mt-3 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-md active:scale-95 ${
-                                    esArmado
-                                      ? 'bg-gradient-to-r from-emerald-600 via-green-600 to-emerald-500 hover:from-emerald-500 hover:to-green-400 text-white cursor-pointer shadow-emerald-950/40 border border-emerald-400/30'
-                                      : 'bg-white/5 border border-white/10 text-gray-500 cursor-not-allowed opacity-60'
-                                  }`}
-                                  title={esArmado ? 'Abrir pantalla de cobro con pesadas reales' : 'Completá la preparación para habilitar el cobro'}
+                                  onClick={() => abrirModalCobrar(p)}
+                                  className="w-full mt-3 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-md active:scale-95 bg-gradient-to-r from-emerald-600 via-green-600 to-emerald-500 hover:from-emerald-500 hover:to-green-400 text-white cursor-pointer shadow-emerald-950/40 border border-emerald-400/30"
+                                  title={esArmado ? 'Abrir pantalla de cobro con pesadas reales' : 'Cobrar monto estimado'}
                                 >
                                   <CreditCard size={15} />
-                                  <span>{esArmado ? `Cobrar Pedido · ${$$ (totalExactoPedido)}` : 'Cobrar (Requiere pedido armado)'}</span>
+                                  <span>{`Cobrar Pedido · ${$$ (totalExactoPedido)}${infoCalculoPedido.esEstimado ? ' (Estimado)' : ''}`}</span>
                                 </button>
                               )}
                             </>
@@ -3824,6 +3898,20 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                         <p className="text-sm font-black text-emerald-400">${Number(modalCobrar.resultado.neto || 0).toLocaleString('es-AR')}</p>
                       </div>
                     </div>
+
+                    {/* Mensajes del servidor sobre crédito y referido (Requisito 4) */}
+                    {modalCobrar.resultado.creditos && String(modalCobrar.resultado.creditos).toLowerCase().includes('consumido') && (
+                      <div className="bg-emerald-500/15 border border-emerald-500/30 rounded-xl p-3 text-emerald-300 text-xs font-bold flex items-center gap-2">
+                        <CheckCircle size={15} className="text-emerald-400 shrink-0" />
+                        <span>Crédito consumido</span>
+                      </div>
+                    )}
+                    {modalCobrar.resultado.referido && String(modalCobrar.resultado.referido).startsWith('acreditado') && (
+                      <div className="bg-purple-500/15 border border-purple-500/30 rounded-xl p-3 text-purple-300 text-xs font-bold flex items-center gap-2">
+                        <span>🎁</span>
+                        <span>Crédito de referido acreditado al dueño del código</span>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -3852,33 +3940,65 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
               </div>
             ) : (
               <div className="space-y-4">
-                {/* Total exacto a cobrar */}
-                <div className="bg-black/40 border border-white/5 rounded-xl p-4 flex items-center justify-between">
-                  <div>
-                    <p className="text-xs text-gray-400 font-medium">Total Exacto a Cobrar</p>
-                    <p className="text-[10px] text-gray-500 mt-0.5">Suma de subtotales reales (redondeado a $1)</p>
+                {/* Monto precargado y editable con total calculado (Requisito 8) */}
+                <div className="bg-black/40 border border-white/5 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-xs text-gray-400 font-medium">Monto a Cobrar</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">
+                        {modalCobrar.estaArmado
+                          ? (modalCobrar.esEstimado ? modalCobrar.motivoEstimado : 'Suma de subtotales pesados menos descuentos')
+                          : 'Estimado, se ajusta al pesar'}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <div className="flex items-center gap-1.5 justify-end">
+                        <span className="text-lg font-bold text-gray-400">$</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          disabled={modalCobrar.guardando}
+                          value={modalCobrar.totalCobrar}
+                          onChange={(e) => {
+                            const val = e.target.value === '' ? '' : Math.max(0, Math.round(Number(e.target.value)));
+                            setModalCobrar(prev => ({ ...prev, totalCobrar: val }));
+                          }}
+                          className="w-36 bg-black/60 border border-emerald-500/40 focus:border-emerald-400 rounded-lg px-2.5 py-1 text-right text-xl font-black text-emerald-400 outline-none"
+                        />
+                      </div>
+                      <p className="text-[10px] text-gray-500 mt-0.5">Total calculado: ${Number(modalCobrar.totalCalculado || 0).toLocaleString('es-AR')}</p>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-2xl font-black text-emerald-400">
-                      ${modalCobrar.totalCobrar.toLocaleString('es-AR')}
-                    </p>
-                    <p className="text-[10px] text-gray-500">{modalCobrar.items.length} productos con pesadas reales</p>
-                  </div>
+
+                  {/* Aviso si el monto ingresado difiere del total calculado */}
+                  {Number(modalCobrar.totalCobrar) !== Number(modalCobrar.totalCalculado) && (
+                    <div className="bg-amber-500/15 border border-amber-500/30 rounded-lg p-2.5 text-xs text-amber-300 flex items-center gap-2">
+                      <AlertTriangle size={14} className="text-amber-400 shrink-0" />
+                      <span>El monto ingresado (${Number(modalCobrar.totalCobrar || 0).toLocaleString('es-AR')}) difiere del total calculado (${Number(modalCobrar.totalCalculado || 0).toLocaleString('es-AR')}).</span>
+                    </div>
+                  )}
+
+                  {/* Aviso si el pedido no está armado */}
+                  {!modalCobrar.estaArmado && (
+                    <div className="bg-blue-500/15 border border-blue-500/30 rounded-lg p-2.5 text-xs text-blue-300 flex items-center gap-2">
+                      <AlertCircle size={14} className="text-blue-400 shrink-0" />
+                      <span>Pedido sin armar: el monto es estimado (${Number(modalCobrar.totalCalculado || 0).toLocaleString('es-AR')}) y se basa en el pedido original. Se solicitará confirmación al cobrar.</span>
+                    </div>
+                  )}
                 </div>
 
-                {/* Selector de medio de pago (sin efectivo) */}
+                {/* Selector de medio de pago (QR, transferencia, débito, crédito; sin efectivo) */}
                 <div>
                   <label className="block text-[11px] font-black uppercase tracking-wider text-gray-400 mb-2">
                     Medio de Pago:
                   </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {[
-                      { id: 'debito', label: 'Débito', icon: '💳' },
-                      { id: 'credito', label: 'Crédito', icon: '💳' },
-                      { id: 'prepaga', label: 'Prepaga', icon: '💳' },
                       { id: 'qr', label: 'QR', icon: '📱' },
                       { id: 'transferencia', label: 'Transferencia', icon: '🏦' },
-                      { id: 'link_pago', label: 'Link de Pago', icon: '🔗' },
+                      { id: 'debito', label: 'Débito', icon: '💳' },
+                      { id: 'credito', label: 'Crédito', icon: '💳' },
                     ].map((m) => (
                       <button
                         key={m.id}
@@ -3921,7 +4041,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                   </div>
                 )}
 
-                {/* Botones de acción (evitar doble clic con disabled) */}
+                {/* Botón único "Pagado y entregado" (Requisito 8) */}
                 <div className="flex items-center justify-between gap-3 pt-2">
                   <button
                     type="button"
@@ -3933,7 +4053,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                   </button>
                   <button
                     type="button"
-                    disabled={modalCobrar.guardando}
+                    disabled={modalCobrar.guardando || modalCobrar.totalCobrar === '' || Number(modalCobrar.totalCobrar) < 0}
                     onClick={handleConfirmarCobro}
                     className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 active:scale-95 text-white text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-lg shadow-emerald-950/40 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -3943,9 +4063,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                         <span>Registrando cobro...</span>
                       </>
                     ) : (
-                      <>
-                        <span>Confirmar Cobro</span>
-                      </>
+                      <span>Pagado y entregado</span>
                     )}
                   </button>
                 </div>

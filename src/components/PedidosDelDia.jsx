@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { 
   AlertCircle, Clock, Package, Printer, Calendar, Sun, Sunset, 
@@ -21,6 +21,8 @@ import {
   calcularResumenDia,
   esPedidoCobrado 
 } from '../utils/estadosPedido';
+import { calcularTotalPedido } from '../utils/totalesPedido';
+import { apiGetEstadoCreditoPedidos } from '../utils/mercaderiaApi';
 import ResumenDiaBar from './ResumenDiaBar';
 
 const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
@@ -101,6 +103,28 @@ export default function PedidosDelDia({ rol, usuario, onNav, fechaCompartida, se
       })
       .sort((a, b) => (a.estado === 'pendiente' ? -1 : 1));
   }, [pedidosElegibles, fechaSeleccionada]);
+
+  // Consultar estado de crédito de referidos en lote para pedidos con crédito usado
+  const [estadosCreditoMap, setEstadosCreditoMap] = useState({});
+  const consultadosCreditoRef = useRef(new Set());
+
+  useEffect(() => {
+    if (!pedidosDelDia || pedidosDelDia.length === 0) return;
+    const pedidosAConsultar = pedidosDelDia
+      .filter(p => p.numero_pedido && Number(p.credito_usado) > 0 && !consultadosCreditoRef.current.has(p.numero_pedido))
+      .map(p => p.numero_pedido);
+
+    if (pedidosAConsultar.length === 0) return;
+    pedidosAConsultar.forEach(num => consultadosCreditoRef.current.add(num));
+
+    apiGetEstadoCreditoPedidos({ pedidos: pedidosAConsultar })
+      .then(res => {
+        if (res && res.ok && res.resultados) {
+          setEstadosCreditoMap(prev => ({ ...prev, ...res.resultados }));
+        }
+      })
+      .catch(() => {});
+  }, [pedidosDelDia]);
 
   // 3. Conteos del día por turno
   const conteos = useMemo(() => {
@@ -473,6 +497,7 @@ export default function PedidosDelDia({ rol, usuario, onNav, fechaCompartida, se
               pedidos={gruposTurno.manana}
               imprimirRemitoPedido={imprimirRemitoPedido}
               preparaciones={preparaciones}
+              estadosCreditoMap={estadosCreditoMap}
             />
           )}
 
@@ -485,6 +510,7 @@ export default function PedidosDelDia({ rol, usuario, onNav, fechaCompartida, se
               pedidos={gruposTurno.tarde}
               imprimirRemitoPedido={imprimirRemitoPedido}
               preparaciones={preparaciones}
+              estadosCreditoMap={estadosCreditoMap}
             />
           )}
 
@@ -497,6 +523,7 @@ export default function PedidosDelDia({ rol, usuario, onNav, fechaCompartida, se
               pedidos={gruposTurno.sinTurno}
               imprimirRemitoPedido={imprimirRemitoPedido}
               preparaciones={preparaciones}
+              estadosCreditoMap={estadosCreditoMap}
             />
           )}
 
@@ -512,7 +539,7 @@ export default function PedidosDelDia({ rol, usuario, onNav, fechaCompartida, se
   );
 }
 
-function TablaTurno({ titulo, horario, icono, pedidos, imprimirRemitoPedido, preparaciones = {} }) {
+function TablaTurno({ titulo, horario, icono, pedidos, imprimirRemitoPedido, preparaciones = {}, estadosCreditoMap = {} }) {
   return (
     <div className="bg-[#1f2937] border border-gray-800 rounded-2xl overflow-hidden shadow-md">
       <div className="px-5 py-3.5 bg-[#111827]/70 border-b border-gray-800 flex items-center justify-between">
@@ -543,6 +570,7 @@ function TablaTurno({ titulo, horario, icono, pedidos, imprimirRemitoPedido, pre
           <tbody className="divide-y divide-gray-800/60">
             {pedidos.map(p => {
               const prep = preparaciones[p.numero_pedido] || null;
+              const infoCobro = calcularTotalPedido(p, prep);
               const estEnt = estadoEntregaPedido(p, prep);
               const estPag = estadoPagoPedido(p);
 
@@ -560,8 +588,65 @@ function TablaTurno({ titulo, horario, icono, pedidos, imprimirRemitoPedido, pre
                     <span className="text-white text-xs block line-clamp-1">{p.producto || 'Varios'}</span>
                     <span className="text-[11px] text-gray-500">x{p.cantidades || 1}</span>
                   </td>
-                  <td className="px-4 py-3 font-bold text-emerald-400 text-xs">
-                    {$$(p.total)}
+                  <td className="px-4 py-3">
+                    <span className="font-bold text-emerald-400 text-xs block">
+                      {$$(infoCobro.monto)}
+                    </span>
+                    {infoCobro.esEstimado && (
+                      <span className="text-[10px] text-amber-400 block leading-tight font-medium" title={infoCobro.motivoEstimado}>
+                        {infoCobro.motivoEstimado || 'Estimado'}
+                      </span>
+                    )}
+                    {Number(p.credito_usado) > 0 && (() => {
+                      const estadoCred = (estadosCreditoMap[p.numero_pedido]?.estado || '').toLowerCase().trim();
+                      const montoCred = Number(p.credito_usado);
+
+                      if (estadoCred === 'sin_reserva') {
+                        return (
+                          <span
+                            className="text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 block mt-1 w-fit animate-pulse"
+                            title="Crédito sin reserva: revisar. No tocar saldos."
+                          >
+                            ⚠️ Sin reserva: revisar
+                          </span>
+                        );
+                      }
+                      if (estadoCred === 'reservado') {
+                        return (
+                          <span
+                            className="text-[10px] font-bold text-amber-300 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 block mt-1 w-fit"
+                            title={`Crédito reservado: $${montoCred.toLocaleString('es-AR')}`}
+                          >
+                            🟡 Créd: Reservado
+                          </span>
+                        );
+                      }
+                      if (estadoCred === 'consumido') {
+                        return (
+                          <span
+                            className="text-[10px] font-bold text-emerald-300 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 block mt-1 w-fit"
+                            title={`Crédito consumido: $${montoCred.toLocaleString('es-AR')}`}
+                          >
+                            🟢 Créd: Consumido
+                          </span>
+                        );
+                      }
+                      if (estadoCred === 'liberado') {
+                        return (
+                          <span
+                            className="text-[10px] font-bold text-gray-400 bg-gray-500/10 px-1.5 py-0.5 rounded border border-gray-500/20 block mt-1 w-fit"
+                            title={`Crédito liberado: $${montoCred.toLocaleString('es-AR')}`}
+                          >
+                            ⚪ Créd: Liberado
+                          </span>
+                        );
+                      }
+                      return (
+                        <span className="text-[10px] text-gray-500 block mt-1">
+                          Créd: ${montoCred.toLocaleString('es-AR')}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${estEnt.color}`}>
