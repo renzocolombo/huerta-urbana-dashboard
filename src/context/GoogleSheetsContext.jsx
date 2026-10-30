@@ -31,6 +31,7 @@ export function GoogleSheetsProvider({ children }) {
     }
   });
   const [stockData, setStockData]     = useState({});
+  const [clientesSheet, setClientesSheet] = useState([]);
   const [cargando, setCargando]       = useState(false);
   const [error, setError]             = useState(null);
   const [conectado, setConectado]     = useState(false);
@@ -143,7 +144,9 @@ export function GoogleSheetsProvider({ children }) {
           detalle_json:    obj.detalle_json || null,
           cupon_bienvenida_estado: obj.cupon_bienvenida_estado || '',
           credito_usado:   obj.credito_usado != null && obj.credito_usado !== '' ? String(obj.credito_usado).trim() : '',
-          codigo_referido: obj.codigo_referido || '',
+          uid:             obj.uid || obj.user_id || '',
+          codigo_referido: obj.codigo_referido || '', // Código USADO por el comprador al realizar el pedido
+          codigo_referido_usado: obj.codigo_referido || '',
           dia_entrega:     obj.dia_entrega || obj.dia || '',
           horario_entrega: obj.horario_entrega || obj.turno_entrega || obj.turno || '09:00 - 13:00',
           turno_entrega:   obj.turno_entrega || obj.turno || 'mañana',
@@ -425,13 +428,48 @@ export function GoogleSheetsProvider({ children }) {
     }
   }, [fetchRowsFromSheet]);
 
+  const fetchClientesSheet = useCallback(async () => {
+    if (!SHEET_ID) return [];
+    try {
+      const rows = await fetchRowsFromSheet('Clientes');
+      if (!rows || rows.length < 2) {
+        setClientesSheet([]);
+        return [];
+      }
+      const headers = rows[0].map(h =>
+        String(h || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ /g, '_')
+      );
+      const parsed = rows.slice(1).map((row, index) => {
+        const obj = { sheetRowIndex: index + 2 };
+        headers.forEach((h, i) => {
+          obj[h] = row[i] != null ? String(row[i]).trim() : '';
+        });
+        return {
+          sheetRowIndex: obj.sheetRowIndex,
+          uid: obj.uid || obj.user_id || '',
+          email: (obj.email || '').toLowerCase().trim(),
+          nombre: obj.nombre || '',
+          codigo_referido: obj.codigo_referido || '',
+          telefono: obj.telefono || obj.celular || '',
+          credito_acumulado: Number(obj.credito_acumulado || obj.creditos || 0) || 0,
+        };
+      });
+      setClientesSheet(parsed);
+      return parsed;
+    } catch (e) {
+      console.warn('[SHEETS-CLIENTES] Error al cargar hoja Clientes:', e.message);
+      return [];
+    }
+  }, [fetchRowsFromSheet]);
+
   const cargarTodo = useCallback(async () => {
     setCargando(true);
     try {
       await Promise.all([
         fetchSheetPedidos(),
         fetchPanelCostos(),
-        fetchControlStock()
+        fetchControlStock(),
+        fetchClientesSheet()
       ]);
       setConectado(true);
     } catch (e) {
@@ -439,13 +477,14 @@ export function GoogleSheetsProvider({ children }) {
     } finally {
       setCargando(false);
     }
-  }, [fetchSheetPedidos, fetchPanelCostos, fetchControlStock]);
+  }, [fetchSheetPedidos, fetchPanelCostos, fetchControlStock, fetchClientesSheet]);
 
   useEffect(() => {
     fetchSheetPedidos();
     fetchPanelCostos();
     fetchControlStock();
-  }, [fetchSheetPedidos, fetchPanelCostos, fetchControlStock]);
+    fetchClientesSheet();
+  }, [fetchSheetPedidos, fetchPanelCostos, fetchControlStock, fetchClientesSheet]);
 
   const actualizarEstadoEnSheet = useCallback(async (fila, nuevoEstado, motivo = null) => {
     const ahora = new Date();
@@ -586,6 +625,7 @@ export function GoogleSheetsProvider({ children }) {
     <GoogleSheetsContext.Provider value={{
       pedidos, setPedidos,
       productosCostos, setProductosCostos, stockData, setStockData,
+      clientesSheet, setClientesSheet,
       ultimoRefresco,
       cargando,
       error,
@@ -593,6 +633,7 @@ export function GoogleSheetsProvider({ children }) {
       fetchSheetPedidos,
       fetchPanelCostos,
       fetchControlStock,
+      fetchClientesSheet,
       cargarTodo,
       actualizarEstadoEnSheet,
       actualizarRemitoEnSheet,

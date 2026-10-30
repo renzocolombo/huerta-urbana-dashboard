@@ -6,6 +6,12 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 import { imprimirRemitoIndividual, estaPedidoArmado } from '../utils/remitoPrinter';
 import { estadoEntregaPedido, estadoPagoPedido, esVentaCerrada } from '../utils/estadosPedido';
 import { esFormaPagoContraEntrega } from '../utils/agendaCalendario';
+import {
+  obtenerCodigoPropioCliente,
+  validarEnvioCodigoReferido,
+  prepararPayloadReferido,
+  MENSAJE_SIN_CODIGO
+} from '../utils/referidosClientes';
 
 const $$ = (n) => {
   const num = Number(n);
@@ -13,7 +19,7 @@ const $$ = (n) => {
 };
 
 export default function Clientes() {
-  const { pedidos: PEDIDOS, actualizarDatosCliente } = useGoogleSheets();
+  const { pedidos: PEDIDOS, clientesSheet = [], actualizarDatosCliente } = useGoogleSheets();
 
   const [cuponActivo, setCuponActivo] = useState(true);
 
@@ -36,6 +42,7 @@ export default function Clientes() {
 
       if (!mapa[cKey]) {
         mapa[cKey] = {
+          uid: p.uid || '',
           nombre: p.nombre,
           telefono: p.telefono,
           email: p.email,
@@ -48,13 +55,18 @@ export default function Clientes() {
           sheetRowIndex: p.sheetRowIndex,
           cupon: (p.cupon || '').trim().toUpperCase(),
           cupon_bienvenida_estado: p.cupon_bienvenida_estado || '',
-          codigo_referido: p.codigo_referido || '',
+          codigo_referido_usado: p.codigo_referido || '', // Código USADO por el comprador al comprar
+          codigo_referido: '', // El código PROPIO se resuelve exclusivamente desde Clientes (NUNCA de Pedidos)
           referido_estado: p.referido_estado || '',
           referidos_count: parseInt(p.referidos_count) || 0,
           credito_acumulado: parseInt(p.credito_acumulado) || 0,
           acepto_tyc: p.acepto_tyc || '',
           acepto_publicidad: p.acepto_publicidad || ''
         };
+      }
+
+      if (p.uid && !mapa[cKey].uid) {
+        mapa[cKey].uid = p.uid;
       }
 
       // Solo contar como venta cerrada si fue entregado y cobrado
@@ -76,16 +88,33 @@ export default function Clientes() {
       // Merge states: si alguna vez compró con el cupón o tiene un progreso guardado, rescatarlo
       if ((p.cupon || '').toUpperCase() === 'BIENVENIDO10') mapa[cKey].cupon = 'BIENVENIDO10';
       if (p.cupon_bienvenida_estado) mapa[cKey].cupon_bienvenida_estado = p.cupon_bienvenida_estado;
-      if (p.codigo_referido) mapa[cKey].codigo_referido = p.codigo_referido;
+      if (p.codigo_referido) mapa[cKey].codigo_referido_usado = p.codigo_referido;
       if (p.referido_estado) mapa[cKey].referido_estado = p.referido_estado;
       if (p.referidos_count) mapa[cKey].referidos_count = parseInt(p.referidos_count);
       if (p.credito_acumulado) mapa[cKey].credito_acumulado = parseInt(p.credito_acumulado);
     });
+
+    // Cruzar código propio con la hoja Clientes (NUNCA de la columna codigo_referido de Pedidos)
+    Object.values(mapa).forEach(c => {
+      const codigoPropio = obtenerCodigoPropioCliente(c, clientesSheet);
+      c.codigo_referido = codigoPropio;
+
+      // Si clientesSheet tiene crédito acumulado o datos adicionales, enriquecer
+      const csObj = (clientesSheet || []).find(cs =>
+        (cs.uid && c.uid && cs.uid === c.uid) ||
+        (cs.email && c.email && cs.email.toLowerCase().trim() === c.email.toLowerCase().trim())
+      );
+      if (csObj) {
+        if (csObj.codigo_referido && !c.codigo_referido) c.codigo_referido = csObj.codigo_referido;
+        if (csObj.credito_acumulado && !c.credito_acumulado) c.credito_acumulado = csObj.credito_acumulado;
+      }
+    });
+
     return Object.values(mapa).sort((a, b) => {
       if (b.totalGastado !== a.totalGastado) return b.totalGastado - a.totalGastado;
       return (b.ultimoPedido || '').localeCompare(a.ultimoPedido || '');
     });
-  }, [PEDIDOS]);
+  }, [PEDIDOS, clientesSheet]);
 
   // Carritos abandonados: SOLO pedidos de pago online (mercadopago) sin pagar.
   // Un pedido contra entrega NUNCA es carrito abandonado ni "No pagó".
@@ -158,11 +187,11 @@ export default function Clientes() {
   };
 
   const enviarCodigoReferido = async (c) => {
-    let codigo = c.codigo_referido;
+    let codigo = c.codigo_referido || obtenerCodigoPropioCliente(c, clientesSheet);
     let nombreFirestore = '';
 
-    // 1. Intentar obtener el código y nombre desde Firestore
-    if (c.email) {
+    // 1. Si no está en clientesSheet y tiene email, intentar leer de Firestore (solo lectura, sin inventar)
+    if (!codigo && c.email) {
       try {
         const q = query(collection(db, "clientes"), where("email", "==", c.email));
         const querySnapshot = await getDocs(q);
@@ -176,29 +205,28 @@ export default function Clientes() {
       }
     }
 
-    // 2. Fallback: Generar si no existe
+    // 2. Si no tiene código propio en Clientes, NO generar uno al azar
     if (!codigo) {
-      const iniciales = (c.nombre || 'USR').split(' ')[0].toUpperCase().replace(/[^A-Z]/g, '');
-      const num = Math.floor(1000 + Math.random() * 9000);
-      codigo = `${iniciales}${num}`;
+      alert(MENSAJE_SIN_CODIGO);
+      return;
     }
 
-    // 3. Actualizar estado local y Google Sheets
+    // 3. Actualizar ÚNICAMENTE referido_estado en Pedidos (NUNCA escribir codigo_referido en Pedidos!)
     if (actualizarDatosCliente) {
-      actualizarDatosCliente(c.sheetRowIndex, { codigo_referido: codigo, referido_estado: 'Enviado' });
+      actualizarDatosCliente(c.sheetRowIndex, prepararPayloadReferido());
     }
     
-    // 4. Preparar mensaje
+    // 4. Preparar mensaje y abrir WhatsApp
     const nombreFinal = nombreFirestore || c.nombre || 'Cliente';
     const primerNombre = nombreFinal.split(' ')[0];
     
-    const mensaje = `Hola ${primerNombre}! 🌿
-Gracias por tu compra en Huerta Urbana. Es un placer tenerte como cliente.
-Te compartimos tu código de referido personal: ${codigo}
-Cada vez que un amigo o familiar haga su primera compra usando tu código, vos acumulás $5.000 de crédito en tu cuenta. Y ellos reciben un 10% de descuento en su pedido. Todos ganan 🎉
-Podés ver tu crédito acumulado iniciando sesión en huertaurbana.com.ar
-Que tengas un hermoso día! ☀️
-El equipo de Huerta Urbana`;
+    const mensaje = `Hola ${primerNombre}! 🌿\n` +
+      `Gracias por tu compra en Huerta Urbana. Es un placer tenerte como cliente.\n` +
+      `Te compartimos tu código de referido personal: ${codigo}\n` +
+      `Cada vez que un amigo o familiar haga su primera compra usando tu código, vos acumulás $5.000 de crédito en tu cuenta. Y ellos reciben un 10% de descuento en su pedido. Todos ganan 🎉\n` +
+      `Podés ver tu crédito acumulado iniciando sesión en huertaurbana.com.ar\n` +
+      `Que tengas un hermoso día! ☀️\n` +
+      `El equipo de Huerta Urbana`;
 
     const texto = encodeURIComponent(mensaje);
     const url = `https://web.whatsapp.com/send?phone=${(c.telefono || '').replace(/\D/g, '')}&text=${texto}`;
@@ -266,25 +294,52 @@ El equipo de Huerta Urbana`;
         <div className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-blue-500/30 bg-blue-500/10 h-24 relative group">
           <span className="text-[9px] font-black text-blue-500/60 uppercase tracking-tighter">REFERIDO</span>
           <span className="text-xl">🔵</span>
-          <span className="text-[10px] font-bold text-blue-400 uppercase text-center leading-tight">Enviado<br/><span className="text-blue-300 opacity-90 mt-1 block text-[11px] bg-blue-500/20 px-2 py-0.5 rounded border border-blue-500/20">{c.codigo_referido}</span></span>
+          <span className="text-[10px] font-bold text-blue-400 uppercase text-center leading-tight">Enviado<br/><span className="text-blue-300 opacity-90 mt-1 block text-[11px] bg-blue-500/20 px-2 py-0.5 rounded border border-blue-500/20">{c.codigo_referido || 'Enviado'}</span></span>
           <button 
+            type="button"
             onClick={() => actualizarDatosCliente(c.sheetRowIndex, { referido_estado: '' })}
-            className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800/80 hover:bg-gray-700 text-[8px] text-gray-400 px-1.5 py-0.5 rounded border border-gray-700"
+            className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800/80 hover:bg-gray-700 text-[8px] text-gray-400 px-1.5 py-0.5 rounded border border-gray-700 cursor-pointer"
+            title="Resetear estado a No enviado"
           >
             Resetear
           </button>
         </div>
       );
     }
+
+    // Si el cliente no tiene código propio en Clientes: mostrar aviso y botón deshabilitado
+    if (!c.codigo_referido) {
+      return (
+        <div 
+          className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-gray-800 bg-gray-900/60 text-center h-24 w-full opacity-60 cursor-not-allowed select-none"
+          title={MENSAJE_SIN_CODIGO}
+        >
+          <span className="text-[9px] font-black text-gray-500 uppercase tracking-tighter">REFERIDO</span>
+          <span className="text-base">🔒</span>
+          <span className="text-[9px] font-bold text-amber-400/90 leading-tight px-1">
+            Sin código web
+          </span>
+          <span className="text-[8px] text-gray-500 leading-tight px-1 line-clamp-2">
+            {MENSAJE_SIN_CODIGO}
+          </span>
+        </div>
+      );
+    }
+
+    // Cliente con código propio listo para enviar
     return (
       <button 
+        type="button"
         onClick={() => enviarCodigoReferido(c)}
-        className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-gray-700 bg-gray-800/50 hover:bg-gray-800 active:scale-95 transition-all text-left h-24 w-full"
+        className="flex flex-col items-center justify-center gap-1 p-2 rounded-2xl border border-gray-700 bg-gray-800/50 hover:bg-gray-800 active:scale-95 transition-all text-left h-24 w-full cursor-pointer"
+        title={`Enviar código personal ${c.codigo_referido} por WhatsApp`}
       >
         <span className="text-[9px] font-black text-gray-500 uppercase tracking-tighter">REFERIDO</span>
         <span className="text-xl">🔘</span>
         <span className="text-[10px] font-bold text-gray-400 uppercase text-center leading-tight">No enviado</span>
-        <span className="text-[10px] mt-1 text-blue-400 font-bold bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded flex items-center justify-center gap-1 w-full"><UsersIcon/> Generar</span>
+        <span className="text-[10px] mt-1 text-blue-400 font-bold bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded flex items-center justify-center gap-1 w-full truncate">
+          <UsersIcon/> Enviar ({c.codigo_referido})
+        </span>
       </button>
     );
   };
@@ -426,6 +481,14 @@ El equipo de Huerta Urbana`;
                           <span className={`w-1 h-1 rounded-full ${estPag.dot}`} />
                           {estPag.label}
                         </span>
+                        {ultimoPedido.codigo_referido && (
+                          <span 
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border border-purple-500/30 bg-purple-500/10 text-purple-300"
+                            title={`El comprador usó el código de referido ${ultimoPedido.codigo_referido} al realizar esta compra`}
+                          >
+                            Código usado: {ultimoPedido.codigo_referido}
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
