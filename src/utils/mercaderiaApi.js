@@ -367,6 +367,28 @@ export async function apiLiberarPedido({ numero_pedido, motivo = 'Cancelado' }) 
   });
 }
 
+// ── 6. SALIDA Y LIBERACIÓN DE ALMACÉN POR PEDIDO (APPS SCRIPT V20) ───────────
+
+export async function apiSalidaAlmacenPedido({ numero_pedido, items }) {
+  return llamarAppsScript('salidaAlmacenPedido', {
+    numero_pedido: String(numero_pedido).trim(),
+    items: (items || []).map(it => {
+      const itemFormat = {
+        producto: String(it.producto || it.nombre || '').trim(),
+        unidades: Math.round(Number(it.unidades != null ? it.unidades : it.cantidad) || 0)
+      };
+      if (it.ean) itemFormat.ean = String(it.ean).trim();
+      return itemFormat;
+    })
+  });
+}
+
+export async function apiLiberarAlmacenPedido({ numero_pedido }) {
+  return llamarAppsScript('liberarAlmacenPedido', {
+    numero_pedido: String(numero_pedido).trim()
+  });
+}
+
 export async function apiCobrarPedido({ numero_pedido, medio, monto, items, nota }) {
   return llamarAppsScript('cobrarPedido', {
     numero_pedido: String(numero_pedido).trim(),

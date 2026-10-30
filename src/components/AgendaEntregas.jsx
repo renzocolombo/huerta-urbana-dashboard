@@ -19,6 +19,8 @@ import {
   apiSetDetallePedido, 
   apiGetReservas, 
   apiLiberarPedido,
+  apiSalidaAlmacenPedido,
+  apiLiberarAlmacenPedido,
   apiGetPreciosSugeridos,
   apiCobrarPedido,
   apiEntregarPedido,
@@ -272,7 +274,8 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     stockData, 
     setStockData, 
     productosCostos,
-    fetchSheetPedidos
+    fetchSheetPedidos,
+    fetchControlStock
   } = useGoogleSheets();
 
   const esRen = (usuario || localStorage.getItem('huerta_auth_usuario') || '').trim().toLowerCase() === 'ren';
@@ -1353,6 +1356,15 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     const current = stockDataRef.current || {};
     const prod = current[bolsa.matchedStockId];
     if (!prod) return;
+
+    // En v20: El stock de almacén no se descuenta en memoria ni en pantalla durante el armado;
+    // por lo tanto no se incrementa localmente al revertir bolsas.
+    const subcat = (prod.subcategoria || '').toLowerCase().trim();
+    const cat = (prod.categoria || '').toLowerCase().trim();
+    if (subcat === 'almacén' || subcat === 'almacen' || cat === 'almacén' || cat === 'almacen') {
+      return;
+    }
+
     const newData = { ...current };
 
     if (bolsa.esUnidad || bolsa.slot === 'unidades' || bolsa.slot === 'unidad') {
@@ -1399,30 +1411,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     const matchedProd = finalMatchedStockId ? current[finalMatchedStockId] : null;
     if (matchedProd && finalMatchedStockId) {
       if (esUnidad) {
-        const stockActual = Number(matchedProd.stock?.unidades ?? matchedProd.stock?.['1kg']) || 0;
-        const nuevoStock = Math.max(0, stockActual - 1);
-        const updatedProd = {
-          ...matchedProd,
-          stock: { ...matchedProd.stock, '1kg': nuevoStock, unidades: nuevoStock }
-        };
-        const newData = { ...current };
-        newData[finalMatchedStockId] = updatedProd;
-        setStockData(newData);
-        try {
-          const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
-          const pNorm = norm(matchedProd.nombre);
-          if (unitsCache[pNorm]) {
-            unitsCache[pNorm].stock = nuevoStock;
-          } else {
-            unitsCache[pNorm] = { stock: nuevoStock, originalLoad: nuevoStock, subcategoria: matchedProd.subcategoria || mappedEan?.subcategoria };
-          }
-          localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
-        } catch (e) {}
-
-        syncProductWithSheet(updatedProd, {
-          onStatusChange: (status) => handleSyncStatus(status, matchedProd.nombre),
-          currentStockMap: current
-        });
+        // En v20: El stock de almacén se fija en conjunto al finalizar el pedido (handlePedidoArmado)
       } else if (slot) {
         const stockActual = matchedProd.stock?.[slot] || 0;
         const nuevoStock = Math.max(0, stockActual - 1);
@@ -1580,41 +1569,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
         return;
       }
 
-      // Descontar 1 unidad del stock y persistir en cache
-      if (matchedProd && matchedStockId) {
-        const stockActual = Number(matchedProd.stock?.unidades ?? matchedProd.stock?.['1kg']) || 0;
-        if (stockActual <= 0) {
-          setScanError(`🚫 ¡Sin stock! No hay "${nombreProd}" disponible.`);
-          return;
-        }
-        const nuevoStock = Math.max(0, stockActual - 1);
-        const updatedProd = {
-          ...matchedProd,
-          stock: { ...matchedProd.stock, '1kg': nuevoStock, unidades: nuevoStock },
-          ean: cleanCode
-        };
-        const newData = { ...current };
-        newData[matchedStockId] = updatedProd;
-        setStockData(newData);
-
-        try {
-          const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
-          const pNorm = norm(matchedProd.nombre);
-          if (unitsCache[pNorm]) {
-            unitsCache[pNorm].stock = nuevoStock;
-          } else {
-            unitsCache[pNorm] = { stock: nuevoStock, originalLoad: nuevoStock, subcategoria: matchedProd.subcategoria || mappedEan.subcategoria };
-          }
-          localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
-        } catch (e) {}
-
-        // Sincronizar con Google Sheet (con reintentos y aviso visual)
-        syncProductWithSheet(updatedProd, {
-          onStatusChange: (status) => handleSyncStatus(status, nombreProd),
-          currentStockMap: current
-        });
-      }
-
+      // En v20: Cada lectura solo suma en el contador del armado de ese pedido (sin tocar stock ni hoja)
       const now = new Date();
       const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
       const uniqueInstanceId = `${cleanCode}#${Date.now()}`;
@@ -1866,6 +1821,42 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
         alert(`Aviso al armador:\nEl pedido fue pagado online. El total bajó de $${totalOriginal.toLocaleString('es-AR')} a $${totalNuevo.toLocaleString('es-AR')}.\nQueda un saldo a favor de $${(totalOriginal - totalNuevo).toLocaleString('es-AR')} para el cliente.`);
       }
 
+      // 1.5 Salida de Almacén en Apps Script (v20):
+      // ANTES de setDetallePedido / guardarPreparacion / registrarPesadas,
+      // si el pedido tiene items de almacén, llamar a apiSalidaAlmacenPedido(numero_pedido, items)
+      // con la cantidad total escaneada de cada uno ({ producto, unidades, ean }).
+      const itemsAlmacen = (prep.items || [])
+        .filter(it => {
+          const tipo = it.tipoCaptura || determinarTipoCaptura(it, stockDataRef.current);
+          return tipo === TIPOS_CAPTURA.ALMACEN_EAN || Boolean(it.ean);
+        })
+        .map(it => {
+          const esSinStock = Boolean(it.sin_stock);
+          const bolsas = esSinStock ? [] : (it.bolsasAsignadas || []);
+          const cantTotal = esSinStock ? 0 : (it.scans != null ? Number(it.scans) : (bolsas.length > 0 ? bolsas.length : Number(it.cantidad || 0)));
+          const ean = it.ean || it.barcode || (bolsas.find(b => b.rawCode)?.rawCode) || null;
+          return {
+            producto: String(it.nombre || it.producto).trim(),
+            unidades: Math.round(cantTotal),
+            ...(ean ? { ean: String(ean).trim() } : {})
+          };
+        });
+
+      if (itemsAlmacen.length > 0) {
+        const resAlmacen = await apiSalidaAlmacenPedido({
+          numero_pedido: numPedido,
+          items: itemsAlmacen
+        });
+
+        if (!resAlmacen || resAlmacen.ok === false) {
+          const errorMsg = resAlmacen?.error || 'Error al fijar la salida de almacén en el servidor.';
+          alert(errorMsg);
+          setScanError(errorMsg);
+          setGuardandoPedidoArmado(false);
+          return; // NO finalizar el pedido y NO guardar nada más
+        }
+      }
+
       // 2. Guardar detalle_json congelado en el Sheet
       const resDetalle = await apiSetDetallePedido({ numero_pedido: numPedido, detalle_json: detalle });
       if (resDetalle && resDetalle.ok === false) {
@@ -1895,6 +1886,9 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
       pedido.detalle_json = detalle;
       setPreparaciones(prev => ({ ...prev, [numPedido]: prepFinal }));
       actualizarEstado(numPedido, 'Preparado');
+      if (itemsAlmacen.length > 0 && typeof fetchControlStock === 'function') {
+        fetchControlStock().catch(() => {});
+      }
       setPreparandoPedido(null);
       setModalPreparacion(null);
       setScanError(null);
@@ -1905,7 +1899,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     } finally {
       setGuardandoPedidoArmado(false);
     }
-  }, [preparaciones, obtenerPrecioCongelado, actualizarEstado]);
+  }, [preparaciones, obtenerPrecioCongelado, actualizarEstado, fetchControlStock]);
 
   const imprimirRemitoDesdeModal = useCallback(async (pedido, numPedido) => {
     await handlePedidoArmado(pedido, numPedido);
@@ -1947,6 +1941,13 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
         return;
       }
 
+      // Liberar almacén si el pedido tenía stock descontado (Apps Script v20)
+      try {
+        await apiLiberarAlmacenPedido({ numero_pedido: numPedido });
+      } catch (eAlm) {
+        console.warn(`[ALMACEN] Error liberando almacén de pedido ${numPedido}:`, eAlm.message);
+      }
+
       // Liberar crédito de referidos si existía reserva (Requisito 2)
       try {
         await apiLiberarCredito({ numero_pedido: numPedido });
@@ -1964,11 +1965,12 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
 
       setPreparaciones(prev => { const { [numPedido]: _, ...rest } = prev; return rest; });
       actualizarEstado(numPedido, 'no_entregado', 'Cancelado');
+      if (typeof fetchControlStock === 'function') fetchControlStock().catch(() => {});
       alert(`✅ Pedido ${numPedido} cancelado y stock liberado correctamente en el Sheet.`);
     } catch (err) {
       alert(`Error de red al cancelar el pedido: ${err.message}`);
     }
-  }, [preparaciones, revertirStockBolsa, actualizarEstado]);
+  }, [preparaciones, revertirStockBolsa, actualizarEstado, fetchControlStock]);
 
   const handleConfirmarCancelarNoEntrega = useCallback(async () => {
     if (!modalNoEntrega || modalNoEntrega.guardando) return;
@@ -2076,10 +2078,11 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
       }));
 
       if (fetchSheetPedidos) fetchSheetPedidos();
+      if (typeof fetchControlStock === 'function') fetchControlStock().catch(() => {});
     } catch (err) {
       setModalNoEntrega(prev => ({ ...prev, guardando: false, error: err.message || 'Error al cancelar pedido' }));
     }
-  }, [modalNoEntrega, preparaciones, revertirStockBolsa, actualizarEstado, noEntregasMap, fetchSheetPedidos]);
+  }, [modalNoEntrega, preparaciones, revertirStockBolsa, actualizarEstado, noEntregasMap, fetchSheetPedidos, fetchControlStock]);
 
   const abrirModalReembolsoDevuelto = useCallback((p) => {
     const num = String(p.numero_pedido || p.pedido || '').trim();

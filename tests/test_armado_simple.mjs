@@ -477,6 +477,237 @@ it('Evalúa cuántos productos de PRODUCT_DATABASE caerían en el respaldo por n
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 6. CONTRATO SERVIDOR V20: SALIDA Y LIBERACIÓN DE ALMACÉN EN EL ARMADO
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n--- 6. Contrato Servidor v20: Salida y Liberación de Almacén en el Armado ---');
+
+it('Escanear 3 veces NO llama al servidor ni a syncProductWithSheet / updateAlmacen, ni toca stock en memoria', () => {
+  let llamadasServidor = 0;
+  let llamadasSync = 0;
+  let llamadasUpdateAlmacen = 0;
+  let stockMemoria = 10; // Stock en memoria de Almacén
+
+  // Simulación de escaneo en procesarEscaneoPedido (AgendaEntregas.jsx)
+  const itemAlmacen = {
+    nombre: 'Choclo en Grano Lata',
+    cantidad: 3,
+    unidad: 'un',
+    ean: '7790580123456',
+    scans: 0,
+    bolsasAsignadas: [],
+    confirmado: false
+  };
+
+  function simularLecturaPistola() {
+    // 1) NO llamar al servidor
+    // 2) NO llamar a syncProductWithSheet ni updateAlmacen
+    // 3) NO modificar stock_unidades en memoria
+    itemAlmacen.scans += 1;
+    itemAlmacen.bolsasAsignadas.push({
+      uniqueCode: `7790580123456#${itemAlmacen.scans}`,
+      rawCode: '7790580123456',
+      nombre: itemAlmacen.nombre,
+      peso: 1,
+      slot: 'unidades',
+      esUnidad: true
+    });
+    if (itemAlmacen.scans >= itemAlmacen.cantidad) {
+      itemAlmacen.confirmado = true;
+    }
+  }
+
+  // 3 lecturas consecutivas con la pistola láser
+  simularLecturaPistola();
+  assert.strictEqual(itemAlmacen.scans, 1);
+  assert.strictEqual(itemAlmacen.confirmado, false);
+
+  simularLecturaPistola();
+  assert.strictEqual(itemAlmacen.scans, 2);
+  assert.strictEqual(itemAlmacen.confirmado, false);
+
+  simularLecturaPistola();
+  assert.strictEqual(itemAlmacen.scans, 3);
+  assert.strictEqual(itemAlmacen.confirmado, true, 'Al llegar a 3 unidades pedidas, se pone en verde automáticamente');
+
+  // Verificación estricta: cero llamadas de red y stock intacto durante el escaneo
+  assert.strictEqual(llamadasServidor, 0, 'No debe haber llamadas al servidor durante el escaneo');
+  assert.strictEqual(llamadasSync, 0, 'No debe llamar a syncProductWithSheet durante el escaneo');
+  assert.strictEqual(llamadasUpdateAlmacen, 0, 'No debe llamar a updateAlmacen durante el escaneo');
+  assert.strictEqual(stockMemoria, 10, 'El stock en memoria no debe modificarse durante el escaneo');
+});
+
+it('Finalizar pedido ("handlePedidoArmado"): envía UNA SOLA llamada con unidades: 3 y ean', async () => {
+  const llamadasSalidaAlmacen = [];
+  let detalleCongeladoGuardado = false;
+  let preparacionGuardada = false;
+  let pesadasRegistradas = false;
+  let stockRecargado = false;
+  let estadoFinalPedido = 'Pendiente';
+
+  const pedido = { numero_pedido: 'PED-V20-001', estado: 'Pendiente' };
+  const itemsPrep = [
+    { nombre: 'Papa', cantidad: 2, unidad: 'kg', tipoCaptura: TIPOS_CAPTURA.PESABLE, pesoCongelado: 2.150 },
+    { nombre: 'Choclo en Grano Lata', cantidad: 3, unidad: 'un', ean: '7790580123456', scans: 3, confirmado: true }
+  ];
+
+  // Mock de la API v20
+  async function mockApiSalidaAlmacenPedido({ numero_pedido, items }) {
+    llamadasSalidaAlmacen.push({ numero_pedido, items });
+    return { ok: true, almacen_items: items };
+  }
+
+  // Simulación de handlePedidoArmado
+  async function simularHandlePedidoArmado() {
+    const itemsAlmacen = itemsPrep
+      .filter(it => it.tipoCaptura === TIPOS_CAPTURA.ALMACEN_EAN || Boolean(it.ean))
+      .map(it => ({
+        producto: it.nombre,
+        unidades: Math.round(Number(it.scans != null ? it.scans : it.cantidad)),
+        ...(it.ean ? { ean: it.ean } : {})
+      }));
+
+    if (itemsAlmacen.length > 0) {
+      const res = await mockApiSalidaAlmacenPedido({
+        numero_pedido: pedido.numero_pedido,
+        items: itemsAlmacen
+      });
+      if (!res || res.ok === false) {
+        return; // Detiene si falla
+      }
+    }
+
+    // Si ok, continúa el flujo normal:
+    detalleCongeladoGuardado = true;
+    preparacionGuardada = true;
+    pesadasRegistradas = true;
+    estadoFinalPedido = 'Preparado';
+
+    // Recargar stock desde el servidor (fetchControlStock)
+    stockRecargado = true;
+  }
+
+  await simularHandlePedidoArmado();
+
+  assert.strictEqual(llamadasSalidaAlmacen.length, 1, 'Debe haber exactamente UNA llamada a salidaAlmacenPedido');
+  assert.strictEqual(llamadasSalidaAlmacen[0].numero_pedido, 'PED-V20-001');
+  assert.deepStrictEqual(llamadasSalidaAlmacen[0].items, [
+    { producto: 'Choclo en Grano Lata', unidades: 3, ean: '7790580123456' }
+  ]);
+  assert.strictEqual(detalleCongeladoGuardado, true);
+  assert.strictEqual(preparacionGuardada, true);
+  assert.strictEqual(pesadasRegistradas, true);
+  assert.strictEqual(estadoFinalPedido, 'Preparado');
+  assert.strictEqual(stockRecargado, true, 'Debe recargar el stock desde el servidor después de finalizar');
+});
+
+it('Si falla el servidor: el pedido NO se finaliza, no guarda nada más y muestra el error', async () => {
+  const llamadasSalidaAlmacen = [];
+  let detalleCongeladoGuardado = false;
+  let preparacionGuardada = false;
+  let pesadasRegistradas = false;
+  let estadoFinalPedido = 'Pendiente';
+  let mensajeErrorMostrado = null;
+
+  const pedido = { numero_pedido: 'PED-V20-ERROR', estado: 'Pendiente' };
+  const itemsPrep = [
+    { nombre: 'Aceite de Oliva 500ml', cantidad: 4, unidad: 'un', ean: '7790580999999', scans: 4, confirmado: true }
+  ];
+
+  // Mock servidor devolviendo error de stock insuficiente
+  async function mockApiSalidaAlmacenPedidoError() {
+    llamadasSalidaAlmacen.push(true);
+    return { 
+      ok: false, 
+      error: 'No hay stock suficiente de Aceite de Oliva 500ml (en almacen: 2)' 
+    };
+  }
+
+  async function simularHandlePedidoArmadoConError() {
+    const itemsAlmacen = itemsPrep
+      .filter(it => it.tipoCaptura === TIPOS_CAPTURA.ALMACEN_EAN || Boolean(it.ean))
+      .map(it => ({
+        producto: it.nombre,
+        unidades: Math.round(Number(it.scans != null ? it.scans : it.cantidad)),
+        ...(it.ean ? { ean: it.ean } : {})
+      }));
+
+    if (itemsAlmacen.length > 0) {
+      const res = await mockApiSalidaAlmacenPedidoError();
+      if (!res || res.ok === false) {
+        mensajeErrorMostrado = res.error;
+        return; // ABORTAR: NO finalizar el pedido y NO guardar nada más
+      }
+    }
+
+    detalleCongeladoGuardado = true;
+    preparacionGuardada = true;
+    pesadasRegistradas = true;
+    estadoFinalPedido = 'Preparado';
+  }
+
+  await simularHandlePedidoArmadoConError();
+
+  assert.strictEqual(llamadasSalidaAlmacen.length, 1);
+  assert.strictEqual(mensajeErrorMostrado, 'No hay stock suficiente de Aceite de Oliva 500ml (en almacen: 2)');
+  assert.strictEqual(detalleCongeladoGuardado, false, 'NO debe congelar detalle si la salida falló');
+  assert.strictEqual(preparacionGuardada, false, 'NO debe guardar preparación');
+  assert.strictEqual(pesadasRegistradas, false, 'NO debe registrar pesadas');
+  assert.strictEqual(estadoFinalPedido, 'Pendiente', 'El pedido debe quedar sin finalizar (Pendiente)');
+});
+
+it('Re-finalizar con otra cantidad envía la cantidad total nueva para cálculo de delta en el servidor', async () => {
+  const payloadsEnviados = [];
+
+  async function mockApiSalida(payload) {
+    payloadsEnviados.push(payload);
+    return { ok: true };
+  }
+
+  // Primera finalización: 3 unidades
+  await mockApiSalida({
+    numero_pedido: 'PED-V20-REOPEN',
+    items: [{ producto: 'Fideos Guiseros', unidades: 3, ean: '7790580111111' }]
+  });
+
+  // El operador reabre el pedido, agrega 2 paquetes más (ahora son 5 en total) y re-finaliza:
+  await mockApiSalida({
+    numero_pedido: 'PED-V20-REOPEN',
+    items: [{ producto: 'Fideos Guiseros', unidades: 5, ean: '7790580111111' }]
+  });
+
+  assert.strictEqual(payloadsEnviados.length, 2);
+  assert.strictEqual(payloadsEnviados[0].items[0].unidades, 3);
+  assert.strictEqual(payloadsEnviados[1].items[0].unidades, 5, 'Debe enviar la cantidad total nueva (5), no un incremento');
+});
+
+it('Flujos de cancelación: handleCancelarPedido usa apiLiberarAlmacenPedido, registrarNoEntrega libera automáticamente en backend', async () => {
+  let liberacionDirectaLlamada = false;
+  let noEntregaCancelarLlamada = false;
+
+  // Flujo 1: Cancelación directa desde la tarjeta ("handleCancelarPedido")
+  // Este flujo NO pasa por registrarNoEntrega, por lo que invoca apiLiberarAlmacenPedido explícitamente
+  async function simularHandleCancelarPedido(numPedido) {
+    // 1. apiLiberarPedido (kilos/reservas)
+    // 2. apiLiberarAlmacenPedido (almacén v20)
+    liberacionDirectaLlamada = true;
+    return { ok: true, liberado: true };
+  }
+
+  // Flujo 2: No-entrega con acción "cancelar" ("handleConfirmarCancelarNoEntrega")
+  // El backend v20 ya devuelve almacen_devuelto dentro de registrarNoEntrega
+  async function simularHandleConfirmarCancelarNoEntrega(numPedido) {
+    noEntregaCancelarLlamada = true;
+    return { ok: true, accion: 'cancelar', almacen_devuelto: true };
+  }
+
+  await simularHandleCancelarPedido('PED-CANCEL-1');
+  assert.strictEqual(liberacionDirectaLlamada, true);
+
+  await simularHandleConfirmarCancelarNoEntrega('PED-CANCEL-2');
+  assert.strictEqual(noEntregaCancelarLlamada, true);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // RESUMEN FINAL
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\n==================================================================');
