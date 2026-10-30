@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { 
   ShieldCheck, DollarSign, Key, Lock, Plus, RefreshCw, 
-  AlertCircle, AlertTriangle, CheckCircle2, History, X, Check
+  AlertCircle, AlertTriangle, CheckCircle2, History, X, Check, ArrowLeft
 } from 'lucide-react';
 import { 
   apiGetHogar, apiHogarCargar, apiSetHogarPin, apiSetAdminPin, apiGetConfig,
@@ -10,7 +10,7 @@ import {
 
 const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
 
-export default function HogarAdmin() {
+export default function HogarAdmin({ onVolverEleccion }) {
   const [datosHogar, setDatosHogar] = useState(null);
   const [config, setConfig] = useState(null);
   const [cargando, setCargando] = useState(false);
@@ -86,13 +86,24 @@ export default function HogarAdmin() {
           </div>
         </div>
 
-        <button
-          onClick={cargarTodo}
-          disabled={cargando}
-          className="p-2 rounded-xl bg-gray-900 border border-gray-800 text-gray-400 hover:text-white cursor-pointer self-start sm:self-center"
-        >
-          <RefreshCw size={15} className={cargando ? 'animate-spin' : ''} />
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-center">
+          {onVolverEleccion && (
+            <button
+              onClick={onVolverEleccion}
+              className="px-3 py-1.5 rounded-xl bg-gray-900 border border-gray-800 hover:border-gray-700 text-gray-300 hover:text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all"
+            >
+              <ArrowLeft size={14} />
+              <span>Cambiar modo</span>
+            </button>
+          )}
+          <button
+            onClick={cargarTodo}
+            disabled={cargando}
+            className="p-2 rounded-xl bg-gray-900 border border-gray-800 text-gray-400 hover:text-white cursor-pointer"
+          >
+            <RefreshCw size={15} className={cargando ? 'animate-spin' : ''} />
+          </button>
+        </div>
       </div>
 
       {/* Alerta destacada si NO se configuró el PIN de Admin */}

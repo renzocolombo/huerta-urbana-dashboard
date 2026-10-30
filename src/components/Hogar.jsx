@@ -1,22 +1,28 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Home, ShoppingCart, Search, Check, X, AlertCircle, AlertTriangle, 
-  RefreshCw, LogOut, Plus, Minus, Trash2, History, ArrowRight
+  RefreshCw, LogOut, Plus, Minus, Trash2, History, ArrowLeft,
+  Scale, ScanBarcode, CheckCircle2
 } from 'lucide-react';
 import { 
   apiGetHogar, apiVerificarHogarPin, apiRegistrarSalidas, apiGetStockKg,
   getHogarPinSession, setHogarPinSession, clearHogarPinSession
 } from '../utils/mercaderiaApi';
+import { useBalanzaSystel } from '../utils/balanzaSystel';
+import { getEanMapping, esCodigoEan } from '../data/productUtils';
 
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
 
-export default function Hogar({ standalone = false }) {
+export default function Hogar({ standalone = false, onVolverEleccion }) {
   // Estado de autenticación por PIN del hogar
   const [pinHogar, setPinHogar] = useState(() => getHogarPinSession());
   const [pinInput, setPinInput] = useState('');
   const [errorPin, setErrorPin] = useState(null);
   const [verificandoPin, setVerificandoPin] = useState(false);
+
+  // Balanza Systel (Web Serial API)
+  const balanza = useBalanzaSystel();
 
   // Datos del Hogar
   const [datosHogar, setDatosHogar] = useState(null); // { ok, saldo, pin_configurado, movimientos: [] }
@@ -28,17 +34,26 @@ export default function Hogar({ standalone = false }) {
   const [cargandoProds, setCargandoProds] = useState(false);
 
   // Pestañas internas
-  const [subTab, setSubTab] = useState('tienda'); // 'tienda' | 'movimientos'
+  const [subTab, setSubTab] = useState('consumo'); // 'consumo' | 'movimientos'
 
-  // Carrito de compras del hogar
-  const [carrito, setCarrito] = useState([]); // [{ producto, unidad, costo_unitario, cantidad, subtotal }]
-  const [confirmando, setConfirmando] = useState(false);
+  // Producto activo para consumo directo (mínimo de pasos)
+  const [productoActivo, setProductoActivo] = useState(null);
+  const [pesoManual, setPesoManual] = useState('');
+  const [unidadesManual, setUnidadesManual] = useState(1);
+  const [descontarTara, setDescontarTara] = useState(false);
+  const [taraValor, setTaraValor] = useState(0);
+
+  // Estados de confirmación directa
+  const [confirmandoDirecto, setConfirmandoDirecto] = useState(false);
   const [mensajeExito, setMensajeExito] = useState(null);
   const [mensajeError, setMensajeError] = useState(null);
 
-  // Filtros
+  // Filtros y buscador
   const [busqueda, setBusqueda] = useState('');
   const [categoriaChip, setCategoriaChip] = useState('Todos');
+
+  // Input ref para pistola / escáner de código de barras
+  const scannerInputRef = useRef(null);
 
   // 1. Cargar estado inicial del Hogar
   const cargarInfoHogar = async () => {
@@ -64,15 +79,15 @@ export default function Hogar({ standalone = false }) {
     try {
       const res = await apiGetStockKg();
       if (res && res.ok && Array.isArray(res.productos)) {
-        // Filtrar estrictamente productos con vendible / en_deposito > 0
+        // Filtrar productos con stock vendible o en depósito > 0
         const conStock = res.productos
-          .filter(p => Number(p.en_deposito || 0) > 0)
+          .filter(p => Number(p.en_deposito || 0) > 0 || Number(p.vendible || 0) > 0)
           .map(p => ({
             producto: p.producto,
             categoria: p.categoria || 'Verduras',
             unidad: p.unidad || 'kg',
-            costo_unitario: Number(p.costo_kg_ultimo || 0),
-            stock_disponible: Number(p.en_deposito || 0),
+            costo_unitario: Number(p.costo_kg_ultimo || p.costo || 0),
+            stock_disponible: Number(p.en_deposito || p.vendible || 0),
           }));
         setProductos(conStock);
       }
@@ -108,6 +123,7 @@ export default function Hogar({ standalone = false }) {
         setPinHogar(pinInput.trim());
         setPinInput('');
         cargarInfoHogar();
+        cargarProductosDisponibles();
       } else {
         setErrorPin(res?.error || 'PIN incorrecto.');
       }
@@ -122,75 +138,114 @@ export default function Hogar({ standalone = false }) {
   const handleSalir = () => {
     clearHogarPinSession();
     setPinHogar(null);
-    setCarrito([]);
+    setProductoActivo(null);
   };
 
-  // Agregar al carrito
-  const agregarAlCarrito = (p) => {
-    const existe = carrito.find(it => it.producto === p.producto);
-    if (existe) {
-      const step = p.unidad === 'kg' ? 0.5 : 1;
-      const nuevaCant = Number((existe.cantidad + step).toFixed(2));
-      setCarrito(carrito.map(it => it.producto === p.producto ? {
-        ...it,
-        cantidad: nuevaCant,
-        subtotal: Number((nuevaCant * it.costo_unitario).toFixed(2))
-      } : it));
+  // Selección de producto
+  const seleccionarProducto = (prod, pesoPredefinido = null) => {
+    setMensajeExito(null);
+    setMensajeError(null);
+    setProductoActivo(prod);
+    const esKg = (prod.unidad || 'kg').toLowerCase() === 'kg';
+    if (esKg) {
+      if (pesoPredefinido !== null && pesoPredefinido > 0) {
+        setPesoManual(String(pesoPredefinido));
+      } else {
+        setPesoManual('');
+      }
     } else {
-      const cantInicial = 1;
-      setCarrito([
-        ...carrito,
-        {
-          producto: p.producto,
-          unidad: p.unidad,
-          costo_unitario: p.costo_unitario,
-          cantidad: cantInicial,
-          subtotal: Number((cantInicial * p.costo_unitario).toFixed(2)),
-          stock_disponible: p.stock_disponible
+      setUnidadesManual(1);
+    }
+  };
+
+  // Manejo de lectura de pistola / escaneo EAN
+  const handleScanInput = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const code = (e.target.value || '').trim();
+      e.target.value = '';
+      if (!code) return;
+
+      // 1. Verificar si es código de balanza retail (starts with 20 or 02)
+      const eanBalanza = code.match(/^(20|02)(\d{4,5})(\d{5})\d$/);
+      if (eanBalanza) {
+        const plu = eanBalanza[2];
+        const gramos = parseInt(eanBalanza[3], 10);
+        const pesoKg = Math.round((gramos / 1000) * 1000) / 1000;
+
+        // Buscar producto por PLU o nombre
+        const encontrado = productos.find(p => norm(p.producto).includes(norm(plu)));
+        if (encontrado) {
+          seleccionarProducto(encontrado, pesoKg);
+          return;
         }
-      ]);
+      }
+
+      // 2. Verificar en el mapa EAN
+      const eanMap = getEanMapping();
+      const eanInfo = eanMap[code.toUpperCase()];
+      if (eanInfo && eanInfo.nombre) {
+        const prodMatch = productos.find(p => norm(p.producto) === norm(eanInfo.nombre));
+        if (prodMatch) {
+          seleccionarProducto(prodMatch);
+          return;
+        }
+      }
+
+      // 3. Buscar coincidencia directa en catálogo
+      const directo = productos.find(p => norm(p.producto) === norm(code) || norm(p.producto).includes(norm(code)));
+      if (directo) {
+        seleccionarProducto(directo);
+      } else {
+        setMensajeError(`No se encontró ningún producto para el código "${code}".`);
+      }
     }
   };
 
-  // Modificar cantidad en carrito
-  const actualizarCantidadCarrito = (prodNombre, nuevaCant) => {
-    const c = parseFloat(nuevaCant);
-    if (isNaN(c) || c <= 0) {
-      eliminarDelCarrito(prodNombre);
-      return;
-    }
-    setCarrito(carrito.map(it => it.producto === prodNombre ? {
-      ...it,
-      cantidad: c,
-      subtotal: Number((c * it.costo_unitario).toFixed(2))
-    } : it));
-  };
-
-  const eliminarDelCarrito = (prodNombre) => {
-    setCarrito(carrito.filter(it => it.producto !== prodNombre));
-  };
-
-  // Totales del carrito y saldo
+  // Cálculos para producto activo
   const saldoActual = Number(datosHogar?.saldo || 0);
-  const totalCarrito = useMemo(() => {
-    return carrito.reduce((acc, it) => acc + (it.subtotal || 0), 0);
-  }, [carrito]);
 
-  const saldoRestante = Number((saldoActual - totalCarrito).toFixed(2));
-  const saldoInsuficiente = totalCarrito > saldoActual;
+  const pesoTomado = useMemo(() => {
+    if (!productoActivo) return 0;
+    const esKg = (productoActivo.unidad || 'kg').toLowerCase() === 'kg';
+    if (!esKg) return 0;
 
-  // Confirmar consumo del Hogar
-  const handleConfirmarConsumo = async () => {
-    if (carrito.length === 0 || saldoInsuficiente) return;
+    // Si hay balanza conectada y peso vivo > 0 y no hay peso manual escrito
+    if (balanza.conectado && balanza.pesoVivo !== null && balanza.pesoVivo > 0 && !pesoManual) {
+      const bruto = Number(balanza.pesoVivo);
+      const neto = descontarTara && taraValor > 0 ? Math.max(0, bruto - taraValor) : bruto;
+      return Number(neto.toFixed(3));
+    }
 
-    setConfirmando(true);
+    const p = parseFloat(pesoManual);
+    return isNaN(p) || p <= 0 ? 0 : Number(p.toFixed(3));
+  }, [productoActivo, balanza.conectado, balanza.pesoVivo, pesoManual, descontarTara, taraValor]);
+
+  const cantidadFinal = useMemo(() => {
+    if (!productoActivo) return 0;
+    const esKg = (productoActivo.unidad || 'kg').toLowerCase() === 'kg';
+    if (esKg) return pesoTomado;
+    const u = parseInt(unidadesManual, 10);
+    return isNaN(u) || u <= 0 ? 1 : u;
+  }, [productoActivo, pesoTomado, unidadesManual]);
+
+  const costoUnitarioActivo = Number(productoActivo?.costo_unitario || 0);
+  const subtotalConsumo = Number((cantidadFinal * costoUnitarioActivo).toFixed(2));
+  const saldoRestante = Number((saldoActual - subtotalConsumo).toFixed(2));
+  const saldoInsuficiente = subtotalConsumo > saldoActual;
+
+  // Confirmar consumo del Hogar (1 solo clic)
+  const handleConfirmarConsumoDirecto = async () => {
+    if (!productoActivo || cantidadFinal <= 0 || saldoInsuficiente) return;
+
+    setConfirmandoDirecto(true);
     setMensajeError(null);
     setMensajeExito(null);
 
-    const itemsPayload = carrito.map(it => ({
-      producto: it.producto,
-      kg: Number(it.cantidad)
-    }));
+    const itemsPayload = [{
+      producto: productoActivo.producto,
+      kg: Number(cantidadFinal)
+    }];
 
     try {
       const res = await apiRegistrarSalidas({
@@ -201,10 +256,29 @@ export default function Hogar({ standalone = false }) {
 
       if (res && res.ok) {
         const nuevoSaldo = res.saldo !== undefined ? res.saldo : saldoRestante;
-        setMensajeExito(`¡Consumo registrado correctamente! Tu nuevo saldo disponible es $${Number(nuevoSaldo).toLocaleString('es-AR')}`);
-        setCarrito([]);
-        await cargarInfoHogar();
-        await cargarProductosDisponibles();
+        setDatosHogar(prev => ({ ...prev, saldo: nuevoSaldo }));
+        setMensajeExito(
+          `¡Consumo confirmado! Se descontaron ${cantidadFinal} ${productoActivo.unidad} de ${productoActivo.producto} (${$$(subtotalConsumo)}). Nuevo saldo disponible: ${$$(nuevoSaldo)}`
+        );
+
+        // Descontar del stock local para feedback inmediato
+        setProductos(prev => prev.map(p => {
+          if (p.producto === productoActivo.producto) {
+            return {
+              ...p,
+              stock_disponible: Math.max(0, Number((p.stock_disponible - cantidadFinal).toFixed(3)))
+            };
+          }
+          return p;
+        }));
+
+        // Limpiar selección para el próximo producto
+        setProductoActivo(null);
+        setPesoManual('');
+        setUnidadesManual(1);
+
+        // Recargar información en segundo plano
+        cargarInfoHogar();
       } else {
         if (res?.error && res.error.toLowerCase().includes('pin')) {
           handleSalir();
@@ -214,7 +288,7 @@ export default function Hogar({ standalone = false }) {
     } catch (err) {
       setMensajeError(err.message || 'Error de red al registrar el consumo.');
     } finally {
-      setConfirmando(false);
+      setConfirmandoDirecto(false);
     }
   };
 
@@ -245,8 +319,16 @@ export default function Hogar({ standalone = false }) {
           </div>
           <h2 className="text-lg font-black text-white">Hogar de la Familia</h2>
           <p className="text-sm text-gray-400 leading-relaxed">
-            El hogar todavía no tiene PIN. Pedile al administrador que lo configure desde la sección de administración.
+            El hogar todavía no tiene PIN configurado. Pedile al administrador que lo configure desde el panel de administración.
           </p>
+          {onVolverEleccion && (
+            <button
+              onClick={onVolverEleccion}
+              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white font-bold text-xs rounded-xl cursor-pointer"
+            >
+              Volver a la selección
+            </button>
+          )}
         </div>
       </div>
     );
@@ -261,7 +343,7 @@ export default function Hogar({ standalone = false }) {
             <div className="w-12 h-12 rounded-2xl bg-green-500/10 border border-green-500/30 flex items-center justify-center text-green-400 mx-auto">
               <Home size={24} />
             </div>
-            <h1 className="text-xl font-black text-white tracking-tight">Hogar · Acceso Familia</h1>
+            <h1 className="text-xl font-black text-white tracking-tight">Hogar &mdash; Acceso Familia</h1>
             <p className="text-xs text-gray-400">
               Ingresá el PIN del hogar para ver el saldo y cargar tus consumos
             </p>
@@ -295,21 +377,30 @@ export default function Hogar({ standalone = false }) {
             </button>
           </form>
 
+          {onVolverEleccion && (
+            <button
+              onClick={onVolverEleccion}
+              className="w-full text-center text-xs text-gray-500 hover:text-gray-300 cursor-pointer pt-2"
+            >
+              ← Volver a la pantalla de elección
+            </button>
+          )}
+
           <p className="text-[10px] text-gray-600 text-center">
-            El PIN se mantiene activo por 5 minutos de uso. Nunca se guarda en el teléfono.
+            La sesión se mantiene activa por 5 minutos de uso. Nunca se guarda en el teléfono.
           </p>
         </div>
       </div>
     );
   }
 
-  // ── CASO C: PANTALLA PRINCIPAL DEL HOGAR ──────────────────────────────────
+  // ── CASO C: PANTALLA PRINCIPAL DE CONSUMO DEL HOGAR ───────────────────────
   return (
-    <div className={`min-h-screen bg-[#0a0a0a] text-white ${standalone ? 'p-4 sm:p-6' : 'pt-16 pb-20 px-4 sm:px-6 lg:px-8'} max-w-7xl mx-auto`}>
-      {/* Barra de cabecera con Saldo y Salir */}
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#121212] border border-gray-800 p-5 rounded-3xl shadow-xl">
+    <div className={`min-h-screen bg-[#0a0a0a] text-white ${standalone ? 'p-4 sm:p-6' : 'pt-16 pb-20 px-4 sm:px-6 lg:px-8'} max-w-7xl mx-auto space-y-5`}>
+      {/* Barra de cabecera con Saldo y Controles */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#121212] border border-gray-800 p-5 rounded-3xl shadow-xl">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-green-500/10 border border-green-500/30 flex items-center justify-center text-green-400">
+          <div className="w-12 h-12 rounded-2xl bg-green-500/10 border border-green-500/30 flex items-center justify-center text-green-400 shrink-0">
             <Home size={24} />
           </div>
           <div>
@@ -317,7 +408,7 @@ export default function Hogar({ standalone = false }) {
               Hogar Huerta Urbana
             </span>
             <div className="flex items-baseline gap-2">
-              <span className="text-xs text-gray-400 font-bold">Disponible:</span>
+              <span className="text-xs text-gray-400 font-bold">Saldo disponible:</span>
               <span className="text-2xl sm:text-3xl font-mono font-black text-green-400">
                 {$$(saldoActual)}
               </span>
@@ -325,15 +416,16 @@ export default function Hogar({ standalone = false }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 self-end sm:self-center">
+        {/* Botones de navegación y salida */}
+        <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
           <div className="flex bg-black/60 border border-gray-800 p-1 rounded-xl">
             <button
-              onClick={() => setSubTab('tienda')}
+              onClick={() => setSubTab('consumo')}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                subTab === 'tienda' ? 'bg-green-500 text-black shadow' : 'text-gray-400 hover:text-white'
+                subTab === 'consumo' ? 'bg-green-500 text-black shadow' : 'text-gray-400 hover:text-white'
               }`}
             >
-              Productos
+              Registrar Consumo
             </button>
             <button
               onClick={() => setSubTab('movimientos')}
@@ -345,8 +437,19 @@ export default function Hogar({ standalone = false }) {
             </button>
           </div>
 
+          {onVolverEleccion && (
+            <button
+              onClick={onVolverEleccion}
+              className="px-3 py-1.5 rounded-xl bg-gray-900 border border-gray-800 hover:border-gray-700 text-gray-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+            >
+              <ArrowLeft size={14} />
+              <span>Cambiar modo</span>
+            </button>
+          )}
+
           <button
             onClick={handleSalir}
+            title="Bloquear sesión de Hogar"
             className="px-3 py-1.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer border border-gray-700"
           >
             <LogOut size={13} />
@@ -357,43 +460,187 @@ export default function Hogar({ standalone = false }) {
 
       {/* Feedback de mensajes */}
       {mensajeExito && (
-        <div className="mb-4 p-4 rounded-2xl bg-green-500/10 border border-green-500/30 text-green-300 text-xs flex items-center gap-2">
-          <Check size={16} />
+        <div className="p-4 rounded-2xl bg-green-500/10 border border-green-500/30 text-green-300 text-xs flex items-center gap-2 animate-in fade-in">
+          <Check size={16} className="shrink-0 text-green-400" />
           <span>{mensajeExito}</span>
         </div>
       )}
 
       {mensajeError && (
-        <div className="mb-4 p-4 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs flex items-center gap-2">
-          <AlertCircle size={16} />
+        <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs flex items-center gap-2 animate-in fade-in">
+          <AlertCircle size={16} className="shrink-0 text-red-400" />
           <span>{mensajeError}</span>
         </div>
       )}
 
-      {/* ── SUB-VISTA 1: TIENDA DEL HOGAR ──────────────────────────────── */}
-      {subTab === 'tienda' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Columna Izquierda: Catálogo de productos con stock */}
-          <div className="lg:col-span-8 space-y-4">
-            {/* Buscador y chips */}
-            <div className="bg-[#121212] border border-gray-800 p-3.5 rounded-2xl space-y-3">
-              <div className="relative">
-                <Search size={15} className="absolute left-3.5 top-2.5 text-gray-500" />
+      {/* ── SUB-VISTA 1: REGISTRAR CONSUMO (MÍNIMO DE PASOS) ────────────── */}
+      {subTab === 'consumo' && (
+        <div className="space-y-5">
+          {/* ── PASO 2: PANEL DE PESAJE EN VIVO Y CONFIRMAR (SI HAY PRODUCTO ELEGIDO) ── */}
+          {productoActivo && (
+            <div className="bg-[#141414] border-2 border-green-500/60 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95">
+              <div className="flex items-center justify-between border-b border-gray-800 pb-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-xl bg-green-500/20 text-green-300 border border-green-500/30">
+                    Producto elegido
+                  </span>
+                  <div>
+                    <h2 className="text-lg sm:text-xl font-black text-white">
+                      {productoActivo.producto}
+                    </h2>
+                    <p className="text-xs text-gray-400 font-mono">
+                      Costo: <strong className="text-green-400">{$$(productoActivo.costo_unitario)}</strong>/{productoActivo.unidad} &middot; Stock disponible: {productoActivo.stock_disponible} {productoActivo.unidad}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setProductoActivo(null)}
+                  className="px-3 py-1.5 rounded-xl bg-gray-900 border border-gray-700 text-gray-300 hover:text-white text-xs font-bold cursor-pointer"
+                >
+                  ✕ Cancelar
+                </button>
+              </div>
+
+              {/* Si es por peso (kg) -> Balanza Systel en vivo */}
+              {(productoActivo.unidad || 'kg').toLowerCase() === 'kg' ? (
+                <div className="space-y-4">
+                  {/* Tarjeta Balanza Systel */}
+                  <div className="bg-black border border-gray-800 rounded-2xl p-4 text-center space-y-3">
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2.5 h-2.5 rounded-full ${balanza.conectado ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`} />
+                        <span className={`font-bold ${balanza.conectado ? 'text-green-400' : 'text-gray-400'}`}>
+                          {balanza.conectado ? 'Balanza Systel conectada' : 'Balanza no conectada'}
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={balanza.toggle}
+                        className="text-[11px] text-green-400 hover:underline font-bold cursor-pointer"
+                      >
+                        {balanza.conectado ? 'Desconectar balanza' : 'Conectar balanza'}
+                      </button>
+                    </div>
+
+                    {/* Display gigante de peso */}
+                    <div className="py-2">
+                      <span className="text-5xl sm:text-6xl font-mono font-black text-green-400 tracking-tight">
+                        {pesoTomado.toFixed(3)}
+                        <span className="text-2xl font-sans text-gray-500 ml-2">kg</span>
+                      </span>
+                    </div>
+
+                    {/* Input manual alternativo si no usa balanza */}
+                    <div className="max-w-xs mx-auto flex items-center gap-2">
+                      <label className="text-xs text-gray-400 font-bold whitespace-nowrap">
+                        O escribir peso:
+                      </label>
+                      <input
+                        type="number"
+                        step="0.001"
+                        placeholder="Ej: 1.250"
+                        value={pesoManual}
+                        onChange={(e) => setPesoManual(e.target.value)}
+                        className="w-full bg-black/80 border border-gray-700 focus:border-green-500 rounded-xl px-3 py-1.5 text-center font-mono font-bold text-white text-sm outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* Si es producto por unidad (Almacén) */
+                <div className="bg-black border border-gray-800 rounded-2xl p-5 text-center space-y-3">
+                  <span className="text-xs font-bold uppercase text-gray-400 block">
+                    Cantidad a consumir (Unidades)
+                  </span>
+                  <div className="flex items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setUnidadesManual(Math.max(1, (parseInt(unidadesManual, 10) || 1) - 1))}
+                      className="w-10 h-10 rounded-xl bg-gray-800 hover:bg-gray-700 text-white font-bold text-lg flex items-center justify-center cursor-pointer"
+                    >
+                      <Minus size={16} />
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={unidadesManual}
+                      onChange={(e) => setUnidadesManual(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      className="w-20 bg-black/80 border border-gray-700 text-center font-mono font-black text-2xl text-white rounded-xl py-1 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setUnidadesManual((parseInt(unidadesManual, 10) || 1) + 1)}
+                      className="w-10 h-10 rounded-xl bg-gray-800 hover:bg-gray-700 text-white font-bold text-lg flex items-center justify-center cursor-pointer"
+                    >
+                      <Plus size={16} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Resumen del consumo y botón OK */}
+              <div className="bg-black/50 border border-gray-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-xs text-gray-400 font-bold">Total a descontar:</span>
+                    <span className="text-xl sm:text-2xl font-mono font-black text-amber-300">
+                      {$$(subtotalConsumo)}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-400 font-mono">
+                    Saldo que quedaría: <span className={saldoInsuficiente ? 'text-red-400 font-bold' : 'text-green-400 font-bold'}>{$$(saldoRestante)}</span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleConfirmarConsumoDirecto}
+                  disabled={confirmandoDirecto || cantidadFinal <= 0 || saldoInsuficiente}
+                  className="px-6 py-3 bg-green-500 hover:bg-green-400 disabled:opacity-40 text-black font-black uppercase text-sm rounded-xl transition-all shadow-lg shadow-green-500/20 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  {confirmandoDirecto ? (
+                    <>
+                      <RefreshCw size={16} className="animate-spin" />
+                      <span>Descontando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check size={18} />
+                      <span>Confirmar Consumo (OK)</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── PASO 1: BARRA DE ESCANEO PISTOLA EAN & BUSCADOR ──────────────── */}
+          <div className="bg-[#121212] border border-gray-800 p-4 rounded-3xl space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              {/* Input listo para pistola / lector de código de barras */}
+              <div className="relative flex-1">
+                <ScanBarcode size={16} className="absolute left-3.5 top-3 text-cyan-400" />
                 <input
+                  ref={scannerInputRef}
                   type="text"
-                  placeholder="Buscar en lo que hay disponible..."
+                  placeholder="Escaneá con pistola o buscá producto (Enter)..."
                   value={busqueda}
                   onChange={(e) => setBusqueda(e.target.value)}
-                  className="w-full bg-black/60 border border-gray-700 focus:border-green-500 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-gray-500 outline-none"
+                  onKeyDown={handleScanInput}
+                  className="w-full bg-black/80 border border-gray-700 focus:border-green-500 rounded-2xl pl-10 pr-3 py-2.5 text-xs text-white placeholder-gray-500 outline-none"
                 />
               </div>
 
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+              {/* Categorías */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
                 {['Todos', 'Verdura', 'Fruta', 'Almacén', 'Otros'].map(chip => (
                   <button
                     key={chip}
                     onClick={() => setCategoriaChip(chip)}
-                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                       categoriaChip === chip
                         ? 'bg-gray-200 text-black'
                         : 'bg-black/40 text-gray-400 hover:text-white border border-gray-800'
@@ -404,158 +651,54 @@ export default function Hogar({ standalone = false }) {
                 ))}
               </div>
             </div>
-
-            {/* Grilla de productos con stock */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {cargandoProds ? (
-                <div className="col-span-full py-12 text-center text-xs text-gray-500">
-                  <RefreshCw size={18} className="animate-spin mx-auto mb-2 text-green-500" />
-                  Cargando productos disponibles...
-                </div>
-              ) : productosFiltrados.length === 0 ? (
-                <div className="col-span-full py-12 text-center text-xs text-gray-500 bg-[#121212] border border-gray-800 rounded-2xl p-6">
-                  No hay productos con stock disponibles en esta selección.
-                </div>
-              ) : (
-                productosFiltrados.map((p, idx) => {
-                  const enCarrito = carrito.find(it => it.producto === p.producto);
-
-                  return (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => agregarAlCarrito(p)}
-                      className={`bg-[#121212] hover:bg-[#181818] border rounded-2xl p-3.5 text-left transition-all cursor-pointer flex flex-col justify-between space-y-2 relative ${
-                        enCarrito ? 'border-green-500/60 ring-1 ring-green-500/30' : 'border-gray-800'
-                      }`}
-                    >
-                      <div>
-                        <span className="text-[10px] font-mono text-gray-500 uppercase block">
-                          {p.categoria}
-                        </span>
-                        <h3 className="font-bold text-white text-xs sm:text-sm leading-tight mt-0.5">
-                          {p.producto}
-                        </h3>
-                      </div>
-
-                      <div className="pt-2 border-t border-gray-800/60 flex items-baseline justify-between">
-                        <span className="font-mono font-black text-green-400 text-xs sm:text-sm">
-                          {$$(p.costo_unitario)}
-                          <span className="text-[10px] text-gray-500 font-normal">/{p.unidad}</span>
-                        </span>
-                        <span className="text-[10px] text-gray-400 font-mono">
-                          {p.stock_disponible.toFixed(p.unidad === 'kg' ? 1 : 0)} {p.unidad}
-                        </span>
-                      </div>
-
-                      {enCarrito && (
-                        <span className="absolute top-2 right-2 bg-green-500 text-black text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center">
-                          {enCarrito.cantidad}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })
-              )}
-            </div>
           </div>
 
-          {/* Columna Derecha: Carrito de Compras del Hogar */}
-          <div className="lg:col-span-4 space-y-4">
-            <div className="bg-[#121212] border border-gray-800 rounded-3xl p-5 shadow-xl space-y-4">
-              <div className="flex items-center justify-between border-b border-gray-800 pb-3">
-                <h2 className="text-xs font-black uppercase text-white flex items-center gap-1.5">
-                  <ShoppingCart size={15} className="text-green-400" /> Mi Carrito ({carrito.length})
-                </h2>
-                {carrito.length > 0 && (
-                  <button
-                    onClick={() => setCarrito([])}
-                    className="text-[11px] text-red-400 hover:text-red-300 underline cursor-pointer"
-                  >
-                    Vaciar
-                  </button>
-                )}
+          {/* ── GRILLA DE PRODUCTOS DISPONIBLES CON STOCK ──────────────────── */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            {cargandoProds ? (
+              <div className="col-span-full py-16 text-center text-xs text-gray-500">
+                <RefreshCw size={20} className="animate-spin mx-auto mb-2 text-green-500" />
+                Cargando productos con stock...
               </div>
+            ) : productosFiltrados.length === 0 ? (
+              <div className="col-span-full py-12 text-center text-xs text-gray-500 bg-[#121212] border border-gray-800 rounded-2xl p-6">
+                No hay productos disponibles en esta selección.
+              </div>
+            ) : (
+              productosFiltrados.map((p, idx) => {
+                const esActivo = productoActivo?.producto === p.producto;
 
-              {carrito.length === 0 ? (
-                <div className="py-12 text-center text-xs text-gray-500 space-y-1">
-                  <p>Tocá los productos de la izquierda para agregarlos al carrito.</p>
-                </div>
-              ) : (
-                <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
-                  {carrito.map((it, idx) => (
-                    <div key={idx} className="bg-black/50 border border-gray-800 rounded-2xl p-3 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-white text-xs">{it.producto}</span>
-                        <button
-                          onClick={() => eliminarDelCarrito(it.producto)}
-                          className="text-gray-500 hover:text-red-400"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-
-                      <div className="flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-1.5 bg-black border border-gray-800 rounded-lg px-2 py-1">
-                          <input
-                            type="number"
-                            step={it.unidad === 'kg' ? '0.1' : '1'}
-                            value={it.cantidad}
-                            onChange={(e) => actualizarCantidadCarrito(it.producto, e.target.value)}
-                            className="w-14 bg-transparent text-right font-mono font-bold text-white outline-none"
-                          />
-                          <span className="text-[10px] text-gray-500">{it.unidad}</span>
-                        </div>
-
-                        <div className="text-right">
-                          <span className="text-[10px] text-gray-500 block">
-                            {$$(it.costo_unitario)} /{it.unidad}
-                          </span>
-                          <span className="font-mono font-black text-amber-300">
-                            {$$(it.subtotal)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Resumen de Totales y Saldo Restante */}
-              {carrito.length > 0 && (
-                <div className="pt-3 border-t border-gray-800 space-y-2 text-xs">
-                  <div className="flex justify-between items-center text-gray-400">
-                    <span>Total del carrito:</span>
-                    <span className="font-mono font-bold text-white text-base">
-                      {$$(totalCarrito)}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center text-gray-400">
-                    <span>Saldo que quedaría:</span>
-                    <span className={`font-mono font-bold text-sm ${saldoInsuficiente ? 'text-red-400' : 'text-green-400'}`}>
-                      {$$(saldoRestante)}
-                    </span>
-                  </div>
-
-                  {saldoInsuficiente && (
-                    <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs font-bold flex items-center gap-1.5">
-                      <AlertTriangle size={14} className="shrink-0" />
-                      <span>Saldo insuficiente para confirmar este consumo.</span>
-                    </div>
-                  )}
-
+                return (
                   <button
+                    key={idx}
                     type="button"
-                    onClick={handleConfirmarConsumo}
-                    disabled={confirmando || saldoInsuficiente || carrito.length === 0}
-                    className="w-full py-3 bg-green-500 hover:bg-green-400 disabled:opacity-40 text-black font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-lg shadow-green-500/20 text-xs mt-2"
+                    onClick={() => seleccionarProducto(p)}
+                    className={`bg-[#121212] hover:bg-[#181818] border rounded-2xl p-3.5 text-left transition-all cursor-pointer flex flex-col justify-between space-y-2 relative ${
+                      esActivo ? 'border-green-500 ring-2 ring-green-500/40 bg-green-500/5' : 'border-gray-800'
+                    }`}
                   >
-                    {confirmando ? 'Registrando...' : 'Confirmar Consumo'}
+                    <div>
+                      <span className="text-[10px] font-mono text-gray-500 uppercase block">
+                        {p.categoria}
+                      </span>
+                      <h3 className="font-bold text-white text-xs sm:text-sm leading-tight mt-0.5">
+                        {p.producto}
+                      </h3>
+                    </div>
+
+                    <div className="pt-2 border-t border-gray-800/60 flex items-baseline justify-between">
+                      <span className="font-mono font-black text-green-400 text-xs sm:text-sm">
+                        {$$(p.costo_unitario)}
+                        <span className="text-[10px] text-gray-500 font-normal">/{p.unidad}</span>
+                      </span>
+                      <span className="text-[10px] text-gray-400 font-mono">
+                        {p.stock_disponible.toFixed(p.unidad === 'kg' ? 1 : 0)} {p.unidad}
+                      </span>
+                    </div>
                   </button>
-                </div>
-              )}
-            </div>
+                );
+              })
+            )}
           </div>
         </div>
       )}

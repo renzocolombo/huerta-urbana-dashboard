@@ -16,7 +16,7 @@ import {
   getAdminPinSession, setAdminPinSession, clearAdminPinSession
 } from '../utils/mercaderiaApi';
 import { BalanzaSystelSession, soportaWebSerial, useBalanzaSystel } from '../utils/balanzaSystel';
-import { getCategoriaPrincipal } from '../data/productUtils';
+import { getCategoriaPrincipal, getEanMapping } from '../data/productUtils';
 import PedidoMinimoCard from './PedidoMinimoCard';
 
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -461,10 +461,11 @@ export default function Productos() {
 
               <button
                 onClick={() => setModalSalida(true)}
+                title="Egreso de mercadería por merma o corrección de stock"
                 className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 text-xs font-bold flex items-center gap-1 cursor-pointer"
               >
                 <Minus size={14} />
-                <span>− Salida</span>
+                <span>− Merma</span>
               </button>
 
               <button
@@ -1514,9 +1515,28 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
                 <Search size={14} className="absolute left-3 top-2.5 text-gray-500" />
                 <input
                   type="text"
-                  placeholder="Escribí el nombre (ej. banana, tomate)..."
+                  placeholder="Escribí el nombre o escaneá código EAN..."
                   value={busqueda}
                   onChange={(e) => setBusqueda(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const code = (busqueda || '').trim();
+                      if (!code) return;
+                      const eanMap = getEanMapping();
+                      const eanInfo = eanMap[code.toUpperCase()];
+                      if (eanInfo && eanInfo.nombre) {
+                        const match = productosExistentes.find(p => norm(p.producto) === norm(eanInfo.nombre));
+                        if (match) {
+                          handleSeleccionarProducto(match);
+                          return;
+                        }
+                      }
+                      if (productosFiltrados.length === 1) {
+                        handleSeleccionarProducto(productosFiltrados[0]);
+                      }
+                    }
+                  }}
                   autoFocus
                   className="w-full bg-black border border-gray-700 focus:border-amber-400 rounded-xl pl-9 pr-3 py-2 text-xs text-white outline-none"
                 />

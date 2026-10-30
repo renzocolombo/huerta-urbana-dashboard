@@ -14,7 +14,6 @@ const NAV_ITEMS = [
   { id: 'agenda',      label: 'Agenda entregas',        icon: MapPin },
   { id: 'productos',   label: 'Productos',              icon: Package },
   { id: 'hogar',       label: 'Hogar',                  icon: Home },
-  { id: 'hogar_admin', label: 'Hogar - administración', icon: ShieldCheck, adminOnly: true },
   { id: 'stock',       label: 'Control stock (viejo)',  icon: Scale },
   { id: 'faltantes',   label: 'Faltantes',              icon: AlertTriangle },
   { id: 'clientes',    label: 'Clientes',               icon: Users },

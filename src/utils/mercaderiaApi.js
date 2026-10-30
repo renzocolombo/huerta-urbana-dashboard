@@ -210,6 +210,13 @@ export async function apiVerificarHogarPin(pin) {
   });
 }
 
+export async function apiVerificarAdminPin(pin) {
+  return llamarAppsScript('verificarAdminPin', {
+    pin: String(pin).trim(),
+    admin_pin: String(pin).trim(),
+  });
+}
+
 export async function apiHogarCargar({ monto, modo = 'sumar', nota = '', admin_pin }) {
   return llamarAppsScript('hogarCargar', {
     monto: Number(monto),

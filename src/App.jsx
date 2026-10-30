@@ -15,8 +15,7 @@ import Finanzas from './components/Finanzas';
 import ControlStock from './components/ControlStock';
 import Faltantes from './components/Faltantes';
 import Productos from './components/Productos';
-import Hogar from './components/Hogar';
-import HogarAdmin from './components/HogarAdmin';
+import HogarHub from './components/HogarHub';
 import Reportes from './components/Reportes';
 import IAFlotante from './components/IAFlotante';
 import { useGoogleSheets } from './context/GoogleSheetsContext';
@@ -27,8 +26,7 @@ const SECCIONES = {
   agenda:      { label: 'Agenda entregas',        componente: AgendaEntregas },
   finanzas:    { label: 'Finanzas',              componente: Finanzas },
   productos:   { label: 'Productos',              componente: Productos },
-  hogar:       { label: 'Hogar',                  componente: Hogar },
-  hogar_admin: { label: 'Hogar - administración', componente: HogarAdmin },
+  hogar:       { label: 'Hogar',                  componente: HogarHub },
   stock:       { label: 'Control stock (viejo)',  componente: ControlStock },
   faltantes:   { label: 'Faltantes',              componente: Faltantes },
   clientes:    { label: 'Clientes',               componente: Clientes },
@@ -72,7 +70,7 @@ export default function App() {
 
   // Si se accede directamente mediante link del hogar (#hogar), no requiere login del dashboard
   if (esRutaHogarDirecta) {
-    return <Hogar standalone={true} />;
+    return <HogarHub standalone={true} />;
   }
 
   // Si no está logueado, mostrar pantalla de login
