@@ -11,7 +11,7 @@ import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { 
   apiGetStockKg, apiGetPreciosSugeridos, apiCrearProducto,
   apiSetMargen, apiPublicarPrecios, apiGetPreciosWeb, apiGetConfig, apiSetConfig,
-  apiCrearIngreso, apiIngresoAlmacen, apiGetAlmacen, apiGetIngresos, apiGetProveedores,
+  apiCrearIngreso, apiIngresoAlmacen, apiActualizarPrecioAlmacen, apiGetAlmacen, apiGetIngresos, apiGetProveedores,
   apiRegistrarSalidas, apiGetMovimientos,
   getAdminPinSession, setAdminPinSession, clearAdminPinSession
 } from '../utils/mercaderiaApi';
@@ -70,6 +70,12 @@ export default function Productos() {
   // Estados de edición de margen inline
   const [margenesEditados, setMargenesEditados] = useState({});
   const [guardandoMargen, setGuardandoMargen] = useState({});
+
+  // Estados de edición de precios de Almacén (Apps Script v22)
+  const [edicionAlmacen, setEdicionAlmacen] = useState({}); // { [prodNombre]: { precio: string, margen: string, modificado: boolean } }
+  const [guardandoPrecioAlmacen, setGuardandoPrecioAlmacen] = useState({});
+  const [avisoPrecioCambiado, setAvisoPrecioCambiado] = useState(null);
+  const [errorPrecioAlmacen, setErrorPrecioAlmacen] = useState(null);
 
   // Cargar datos principales (Stock en kg + Precios sugeridos + PreciosWeb)
   const cargarDatos = async () => {
@@ -333,7 +339,7 @@ export default function Productos() {
         const precioVenta = alm.precio_venta;
         const margen = alm.margen_pct !== undefined 
           ? alm.margen_pct 
-          : (costo > 0 && precioVenta > 0 ? Math.round(((precioVenta - costo) / costo) * 100) : 70);
+          : (costo > 0 && precioVenta > 0 ? Math.round(((precioVenta - costo) / costo) * 100) : 30);
 
         const existing = mapa.get(k);
         if (existing) {
@@ -427,6 +433,95 @@ export default function Productos() {
       alert(`Error al guardar margen: ${e.message}`);
     } finally {
       setGuardandoMargen(prev => ({ ...prev, [prodNombre]: false }));
+    }
+  };
+
+  // Edición interactiva en vivo de Precio de Venta o Margen de Almacén (Apps Script v22)
+  const handleCambioPrecioAlmacen = (prod, campo, valor) => {
+    const costo = Number(prod.costo_unitario || prod.costo_kg_ultimo || 0);
+    const prodKey = prod.producto;
+    const actual = edicionAlmacen[prodKey] || {
+      precio: String(prod.precio_venta || prod.precio_sugerido || ''),
+      margen: String(prod.margen_pct !== undefined ? prod.margen_pct : 30),
+      modificado: false
+    };
+
+    if (campo === 'precio') {
+      const pNum = parseFloat(valor);
+      let nuevoMargen = actual.margen;
+      if (!isNaN(pNum) && costo > 0) {
+        nuevoMargen = String(Math.round(((pNum - costo) / costo) * 100));
+      }
+      setEdicionAlmacen(prev => ({
+        ...prev,
+        [prodKey]: {
+          precio: valor,
+          margen: nuevoMargen,
+          modificado: true
+        }
+      }));
+    } else if (campo === 'margen') {
+      const mNum = parseFloat(valor);
+      let nuevoPrecio = actual.precio;
+      if (!isNaN(mNum) && costo > 0) {
+        nuevoPrecio = String(Math.round(costo * (1 + mNum / 100)));
+      }
+      setEdicionAlmacen(prev => ({
+        ...prev,
+        [prodKey]: {
+          precio: nuevoPrecio,
+          margen: valor,
+          modificado: true
+        }
+      }));
+    }
+  };
+
+  // Guardar precio de venta de almacén en el servidor (Apps Script v22)
+  const handleGuardarPrecioAlmacen = async (prod) => {
+    const prodKey = prod.producto;
+    const ed = edicionAlmacen[prodKey];
+    if (!ed || !ed.modificado) return;
+
+    const precioNum = parseFloat(ed.precio);
+    const margenNum = parseFloat(ed.margen);
+
+    if (isNaN(precioNum) || precioNum <= 0) {
+      alert('Ingresá un precio de venta mayor a 0 para el producto de almacén.');
+      return;
+    }
+
+    setGuardandoPrecioAlmacen(prev => ({ ...prev, [prodKey]: true }));
+    setErrorPrecioAlmacen(null);
+    try {
+      const payload = {
+        ean: prod.codigo_ean || undefined,
+        nombre: prod.producto,
+        marca: prod.marca || undefined,
+        precio_venta: Math.round(precioNum),
+        margen_pct: !isNaN(margenNum) ? Math.round(margenNum) : undefined
+      };
+      const res = await apiActualizarPrecioAlmacen(payload);
+      if (res && res.ok) {
+        setAvisoPrecioCambiado('Precio cambiado: falta Publicar para que se vea en la web');
+        setEdicionAlmacen(prev => {
+          const next = { ...prev };
+          delete next[prodKey];
+          return next;
+        });
+        // Recargar desde el servidor (nunca modificar Almacén localmente)
+        await cargarDatos();
+      } else {
+        const errorMsg = res?.error || 'No se pudo actualizar el precio en el servidor';
+        setErrorPrecioAlmacen(errorMsg);
+        alert(errorMsg);
+      }
+    } catch (e) {
+      const msg = e.message || 'Error de red al actualizar precio de almacén';
+      setErrorPrecioAlmacen(msg);
+      alert(msg);
+    } finally {
+      setGuardandoPrecioAlmacen(prev => ({ ...prev, [prodKey]: false }));
     }
   };
 
@@ -602,6 +697,33 @@ export default function Productos() {
           {/* Tarjeta: Pedido Mínimo de Compra en PreciosWeb */}
           <PedidoMinimoCard />
 
+          {/* Aviso: Precio de almacén cambiado sin publicar */}
+          {avisoPrecioCambiado && (
+            <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/40 text-amber-200 flex items-center justify-between gap-3 animate-in fade-in">
+              <div className="flex items-center gap-2 text-xs font-bold">
+                <AlertTriangle size={16} className="text-amber-400 flex-shrink-0" />
+                <span>{avisoPrecioCambiado}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalPublicar(true)}
+                  className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-black text-xs transition-all cursor-pointer whitespace-nowrap shadow"
+                >
+                  Publicar ahora
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAvisoPrecioCambiado(null)}
+                  className="text-gray-400 hover:text-white p-1 rounded-lg"
+                  title="Cerrar aviso"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Barra de Filtros y Botones de Acción */}
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-[#121212] border border-gray-800 p-3.5 rounded-2xl">
             {/* Buscador */}
@@ -729,11 +851,19 @@ export default function Productos() {
                     </tr>
                   ) : (
                     productosFiltrados.map((p, idx) => {
-                      const margenVal = margenesEditados[p.producto] !== undefined
-                        ? margenesEditados[p.producto]
-                        : p.margen_pct;
+                      const ed = edicionAlmacen[p.producto];
+                      const margenVal = p.es_almacen
+                        ? (ed?.margen !== undefined ? ed.margen : (p.margen_pct !== undefined ? p.margen_pct : 30))
+                        : (margenesEditados[p.producto] !== undefined ? margenesEditados[p.producto] : p.margen_pct);
 
-                      const sug = calcularPrecioSugerido(p.costo_kg_ultimo, margenVal);
+                      let sug = 0;
+                      if (p.es_almacen) {
+                        sug = ed?.precio !== undefined
+                          ? Number(ed.precio)
+                          : Number(p.precio_venta || p.precio_sugerido || 0);
+                      } else {
+                        sug = calcularPrecioSugerido(p.costo_kg_ultimo, margenVal);
+                      }
                       const pub = Number(p.precio_publicado || 0);
                       const dif = sug - pub;
                       const esSinStock = p.disponible === false;
@@ -845,35 +975,96 @@ export default function Productos() {
 
                           {/* 5. Margen % editable */}
                           <td className="py-3 px-3 text-center">
-                            <div className="inline-flex items-center justify-center gap-0.5 bg-black/60 border border-gray-800 focus-within:border-green-500 rounded-lg px-1.5 py-0.5">
-                              <input
-                                type="number"
-                                className="w-11 bg-transparent text-right font-mono text-xs text-white outline-none"
-                                value={margenVal !== undefined ? margenVal : ''}
-                                onChange={(e) => setMargenesEditados({ ...margenesEditados, [p.producto]: e.target.value })}
-                                onBlur={(e) => handleGuardarMargen(p.producto, e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    handleGuardarMargen(p.producto, e.target.value);
-                                  }
-                                }}
-                              />
-                              <span className="text-[10px] text-gray-500">%</span>
-                              {guardandoMargen[p.producto] && (
-                                <RefreshCw size={10} className="animate-spin text-green-400 ml-0.5" />
-                              )}
-                            </div>
+                            {p.es_almacen ? (
+                              <div className="inline-flex items-center justify-center gap-0.5 bg-black/60 border border-gray-800 focus-within:border-amber-400 rounded-lg px-1.5 py-0.5">
+                                <input
+                                  type="number"
+                                  className="w-11 bg-transparent text-right font-mono text-xs text-amber-300 outline-none"
+                                  value={margenVal !== undefined ? margenVal : ''}
+                                  onChange={(e) => handleCambioPrecioAlmacen(p, 'margen', e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      handleGuardarPrecioAlmacen(p);
+                                    }
+                                  }}
+                                />
+                                <span className="text-[10px] text-gray-500">%</span>
+                              </div>
+                            ) : (
+                              <div className="inline-flex items-center justify-center gap-0.5 bg-black/60 border border-gray-800 focus-within:border-green-500 rounded-lg px-1.5 py-0.5">
+                                <input
+                                  type="number"
+                                  className="w-11 bg-transparent text-right font-mono text-xs text-white outline-none"
+                                  value={margenVal !== undefined ? margenVal : ''}
+                                  onChange={(e) => setMargenesEditados({ ...margenesEditados, [p.producto]: e.target.value })}
+                                  onBlur={(e) => handleGuardarMargen(p.producto, e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      handleGuardarMargen(p.producto, e.target.value);
+                                    }
+                                  }}
+                                />
+                                <span className="text-[10px] text-gray-500">%</span>
+                                {guardandoMargen[p.producto] && (
+                                  <RefreshCw size={10} className="animate-spin text-green-400 ml-0.5" />
+                                )}
+                              </div>
+                            )}
                           </td>
 
                           {/* 6. Precio sugerido con subtítulo explicativo */}
                           <td className="py-3 px-3 text-right">
-                            <div className="font-mono font-black text-amber-300 text-sm">
-                              {sug > 0 ? $$(sug) : '—'}
-                            </div>
-                            <div className="text-[9px] text-gray-500 font-mono">
-                              {p.es_almacen ? 'precio hoja Almacén' : textoCuenta}
-                            </div>
+                            {p.es_almacen ? (
+                              <div className="flex flex-col items-end gap-1">
+                                <div className="inline-flex items-center gap-1 bg-black/70 border border-gray-700 focus-within:border-amber-400 rounded-lg px-2 py-0.5">
+                                  <span className="text-gray-500 text-xs font-bold">$</span>
+                                  <input
+                                    type="number"
+                                    step="1"
+                                    placeholder="0"
+                                    value={ed?.precio !== undefined ? ed.precio : (p.precio_venta || sug || '')}
+                                    onChange={(e) => handleCambioPrecioAlmacen(p, 'precio', e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        handleGuardarPrecioAlmacen(p);
+                                      }
+                                    }}
+                                    className="w-16 bg-transparent text-right font-mono text-xs font-bold text-amber-300 outline-none"
+                                  />
+                                  {guardandoPrecioAlmacen[p.producto] ? (
+                                    <RefreshCw size={11} className="animate-spin text-amber-400 ml-0.5" />
+                                  ) : ed?.modificado ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleGuardarPrecioAlmacen(p)}
+                                      title="Guardar precio de venta en Almacén"
+                                      className="p-0.5 rounded bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-black transition-all cursor-pointer"
+                                    >
+                                      <Check size={11} />
+                                    </button>
+                                  ) : null}
+                                </div>
+                                <div className="text-[9px] text-gray-500 font-mono">
+                                  {ed?.modificado ? (
+                                    <span className="text-amber-400 font-semibold">modificado (Enter)</span>
+                                  ) : (
+                                    'precio hoja Almacén'
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="font-mono font-black text-amber-300 text-sm">
+                                  {sug > 0 ? $$(sug) : '—'}
+                                </div>
+                                <div className="text-[9px] text-gray-500 font-mono">
+                                  {textoCuenta}
+                                </div>
+                              </>
+                            )}
                           </td>
 
                           {/* 7. Precio publicado */}
@@ -1053,7 +1244,19 @@ function ModalCompra({
   const [marca, setMarca] = useState('');
   const [subcategoria, setSubcategoria] = useState('Almacén');
   const [unidades, setUnidades] = useState('');
-  const [margenPct, setMargenPct] = useState('70');
+  const [margenManualModificado, setMargenManualModificado] = useState(false);
+  const [margenPct, setMargenPct] = useState(() => {
+    if (productoInicial) {
+      const q = norm(productoInicial);
+      const m1 = (productosExistentes || []).find(p => norm(p.producto || p.nombre) === q);
+      const m2 = (productosCostos || []).find(p => norm(p.nombre) === q);
+      const match = m1 || m2;
+      if (match && (match.categoriaPrincipal === 'Almacén' || match.categoria === 'Almacén' || norm(match.subcategoria).includes('almacen'))) {
+        return '30';
+      }
+    }
+    return '70';
+  });
   const [precioVenta, setPrecioVenta] = useState('');
   const [precioVentaManualModificado, setPrecioVentaManualModificado] = useState(false);
   const [eanMatch, setEanMatch] = useState(null); // { nombre, marca, subcategoria, stockActual, costoActual, precioVenta }
@@ -1181,14 +1384,22 @@ function ModalCompra({
     }
   }, [productosCostos, stockData]);
 
-  // Cálculos en vivo para Almacén (Apps Script v21)
+  // Sincronizar margen por defecto (30 en Almacén, 70 en Verduras/pesables) si no fue modificado a mano
+  useEffect(() => {
+    if (!margenManualModificado) {
+      setMargenPct(esAlmacen ? '30' : '70');
+    }
+  }, [esAlmacen, margenManualModificado]);
+
+  // Cálculos en vivo para Almacén (Apps Script v22)
   const costoTotalNum = parseFloat(costoTotal) || 0;
   const unidadesNum = parseInt(unidades, 10) || 0;
   const costoPorPaquete = (costoTotalNum > 0 && unidadesNum > 0)
     ? Number((costoTotalNum / unidadesNum).toFixed(2))
     : 0;
 
-  const margenNum = margenPct !== '' && !isNaN(parseFloat(margenPct)) ? Number(margenPct) : 70;
+  const margenDefecto = esAlmacen ? 30 : 70;
+  const margenNum = margenPct !== '' && !isNaN(parseFloat(margenPct)) ? Number(margenPct) : margenDefecto;
   const precioVentaSugerido = costoPorPaquete > 0
     ? Math.round(costoPorPaquete * (1 + margenNum / 100))
     : 0;
@@ -1593,6 +1804,7 @@ function ModalCompra({
                       value={margenPct}
                       onChange={(e) => {
                         setMargenPct(e.target.value);
+                        setMargenManualModificado(true);
                         setPrecioVentaManualModificado(false);
                       }}
                       className="w-14 bg-black border border-gray-700 rounded-lg px-1.5 py-0.5 text-xs font-mono font-bold text-white text-center outline-none focus:border-green-500"

@@ -127,7 +127,7 @@ it('apiIngresoAlmacen funciona con campos opcionales omitidos (proveedor, marca,
     assert.strictEqual(res.ok, true);
     assert.strictEqual(interceptedPayload.proveedor, undefined, 'Proveedor omitido no debe viajar como clave vacía');
     assert.strictEqual(interceptedPayload.marca, undefined, 'Marca omitida no debe viajar');
-    assert.strictEqual(interceptedPayload.margen_pct, 70, 'Margen por defecto debe ser 70%');
+    assert.strictEqual(interceptedPayload.margen_pct, 30, 'Margen por defecto debe ser 30% en v22');
     assert.strictEqual(interceptedPayload.categoria, 'Almacén');
     assert.strictEqual(interceptedPayload.unidades, 10);
     assert.strictEqual(interceptedPayload.total_pagado, 12000);

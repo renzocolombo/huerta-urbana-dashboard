@@ -180,7 +180,7 @@ export async function apiIngresoAlmacen({
   total_pagado,
   proveedor,
   precio_venta,
-  margen_pct = 70,
+  margen_pct = 30,
   op_id
 }) {
   return llamarAppsScript('ingresoAlmacen', {
@@ -197,13 +197,43 @@ export async function apiIngresoAlmacen({
       : {}),
     ...(margen_pct !== undefined && margen_pct !== null && margen_pct !== ''
       ? { margen_pct: Number(margen_pct) }
-      : { margen_pct: 70 }),
+      : { margen_pct: 30 }),
     ...(op_id ? { op_id: String(op_id).trim() } : {}),
   });
 }
 
 export async function apiGetAlmacen() {
   return llamarAppsScript('getAlmacen');
+}
+
+/**
+ * Actualiza el precio de venta de un producto de Almacén (Apps Script v22).
+ * Escribe SOLO el precio de venta (nunca stock, costo ni código).
+ * @param {Object} params
+ * @param {string} [params.ean] - Código de barras (preferido si existe)
+ * @param {string} [params.nombre] - Nombre del producto si no tiene EAN
+ * @param {string} [params.marca] - Marca del producto
+ * @param {number} [params.precio_venta] - Precio de venta final
+ * @param {number} [params.margen_pct] - Margen porcentual alternativo
+ */
+export async function apiActualizarPrecioAlmacen({
+  ean,
+  nombre,
+  marca,
+  precio_venta,
+  margen_pct
+}) {
+  return llamarAppsScript('actualizarPrecioAlmacen', {
+    ...(ean ? { ean: String(ean).trim().toUpperCase() } : {}),
+    ...(nombre ? { nombre: String(nombre).trim() } : {}),
+    ...(marca ? { marca: String(marca).trim() } : {}),
+    ...(precio_venta !== undefined && precio_venta !== null && precio_venta !== ''
+      ? { precio_venta: Math.round(Number(precio_venta)) }
+      : {}),
+    ...(margen_pct !== undefined && margen_pct !== null && margen_pct !== ''
+      ? { margen_pct: Math.round(Number(margen_pct)) }
+      : {})
+  });
 }
 
 // ── 3. SALIDAS (MERMA, AJUSTE, CASA) ───────────────────────────────────────
