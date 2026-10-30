@@ -1375,10 +1375,14 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
       let notaFinal = '';
 
       if (tipoSalida === 'MERMA') {
-        payloadItems = itemsSalida.map(it => ({
-          producto: it.producto,
-          kg: Number(it.kg) || 0
-        }));
+        payloadItems = itemsSalida.map(it => {
+          const esKg = (it.unidad || 'kg').toLowerCase() === 'kg';
+          return {
+            producto: it.producto,
+            ...(esKg ? { kg: Number(it.kg) || 0 } : { unidades: Number(it.kg) || 0 }),
+            unidad: it.unidad || (esKg ? 'kg' : 'un')
+          };
+        });
         notaFinal = notaPersonalizada.trim() ? `${motivoRapido} - ${notaPersonalizada.trim()}` : motivoRapido;
       } else {
         // AJUSTE: diferencia calculada (stock_real - stock_actual)

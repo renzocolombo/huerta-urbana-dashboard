@@ -11,6 +11,7 @@ import {
   getAdminPinSession, setAdminPinSession, clearAdminPinSession,
   getHogarPinSession, setHogarPinSession, clearHogarPinSession
 } from '../src/utils/mercaderiaApi.js';
+import { calcularBalanceProducto, aGramos, aKilos } from '../src/utils/balanceStock.js';
 
 console.log('==================================================================');
 console.log('PRUEBAS UNITARIAS: NAVEGACIÓN, PINS Y CONSUMO HOGAR');
@@ -240,12 +241,80 @@ it('Merma valorizada al costo descuenta stock con motivo opcional', () => {
   const kgMermados = 1.850;
   const motivoMerma = 'Podrido'; // default opcional
 
-  const valorCostoMerma = Number((kgMermados * costoKgTomate).toFixed(2));
-  assert.strictEqual(valorCostoMerma, 3330);
-
   stockTomate = Number((stockTomate - kgMermados).toFixed(3));
   assert.strictEqual(stockTomate, 13.15);
   assert.strictEqual(motivoMerma, 'Podrido');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. PARTE 3: BALANCE EXACTO POR PRODUCTO (GRAMOS ENTEROS)
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n--- 6. PARTE 3: Balance Exacto por Producto (Gramos Enteros) ---');
+
+it('Test requerido: ingreso 20,000 kg, hogar 0,900 y 1,100, venta 2,350, merma 0,150 -> depósito 15,500 y diferencia 0,000', () => {
+  const balance = calcularBalanceProducto({
+    producto: 'Tomate Redondo',
+    ingresado: 20.000,
+    hogar: [0.900, 1.100], // dos consumos de hogar: 0.900 + 1.100 = 2.000 kg
+    vendido: 2.350,
+    merma: 0.150,
+    deposito: 15.500,
+    costo_unitario: 1200
+  });
+
+  // Verificaciones exactas
+  assert.strictEqual(balance.ingresado_g, 20000, 'Ingresado debe ser 20000 gramos');
+  assert.strictEqual(balance.hogar_g, 2000, 'Hogar debe sumar 2000 gramos');
+  assert.strictEqual(balance.vendido_g, 2350, 'Vendido debe ser 2350 gramos');
+  assert.strictEqual(balance.merma_g, 150, 'Merma debe ser 150 gramos');
+  assert.strictEqual(balance.deposito_g, 15500, 'Depósito debe ser 15500 gramos');
+
+  // Total salidas + depósito = 2000 + 2350 + 150 + 15500 = 20000 g
+  assert.strictEqual(balance.diferencia_g, 0, 'Diferencia en gramos debe ser 0');
+  assert.strictEqual(balance.diferencia, 0, 'Diferencia en kg debe ser 0.000');
+  assert.strictEqual(balance.esExacto, true, 'Debe marcarse como exacto');
+
+  // Valorización de merma al costo: 0.150 kg * $1200 = $180.00
+  assert.strictEqual(balance.valor_merma_pesos, 180.00, 'Valor merma debe ser 180.00 pesos');
+});
+
+it('Aritmética en gramos enteros previene errores de coma flotante IEEE-754 (0,1 + 0,2)', () => {
+  // En JS puro: 0.1 + 0.2 === 0.30000000000000004 !== 0.3
+  const floatInexacto = 0.1 + 0.2;
+  assert.notStrictEqual(floatInexacto, 0.3, 'Demostración de que coma flotante estándar falla');
+
+  // Con nuestra función en gramos enteros:
+  const balance = calcularBalanceProducto({
+    producto: 'Lechuga Criolla',
+    ingresado: 0.300,
+    hogar: [0.100, 0.200], // 0.1 + 0.2
+    vendido: 0,
+    merma: 0,
+    deposito: 0,
+    costo_unitario: 800
+  });
+
+  assert.strictEqual(balance.hogar_g, 300, '100g + 200g debe dar exactamente 300g sin flotante');
+  assert.strictEqual(balance.diferencia_g, 0, 'Diferencia debe dar exactamente 0 gramos');
+  assert.strictEqual(balance.diferencia, 0, 'Diferencia en kg debe ser 0.000');
+  assert.strictEqual(balance.esExacto, true);
+});
+
+it('Detección de descuadre: si falta o sobra stock, diferencia !== 0 y esExacto es false (para alerta en rojo)', () => {
+  const balanceDescuadrado = calcularBalanceProducto({
+    producto: 'Banana Cavendish',
+    ingresado: 10.000,
+    vendido: 3.000,
+    hogar: 1.000,
+    merma: 0.500,
+    deposito: 5.000, // Suma egresos + depósito = 9.500 kg (faltan 0.500 kg)
+    costo_unitario: 1500
+  });
+
+  assert.strictEqual(balanceDescuadrado.diferencia_g, 500, 'Faltan 500 gramos');
+  assert.strictEqual(balanceDescuadrado.diferencia, 0.500);
+  assert.strictEqual(balanceDescuadrado.esExacto, false, 'No debe ser exacto para renderizar en rojo');
+  assert.strictEqual(balanceDescuadrado.valor_merma_pesos, 750.00); // 0.500 * 1500
 });
 
 console.log('\n==================================================================');

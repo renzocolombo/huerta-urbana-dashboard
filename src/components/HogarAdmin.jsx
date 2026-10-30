@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react';
 import { 
   ShieldCheck, DollarSign, Key, Lock, Plus, RefreshCw, 
-  AlertCircle, AlertTriangle, CheckCircle2, History, X, Check, ArrowLeft
+  AlertCircle, AlertTriangle, CheckCircle2, History, X, Check, ArrowLeft,
+  Scale
 } from 'lucide-react';
 import { 
   apiGetHogar, apiHogarCargar, apiSetHogarPin, apiSetAdminPin, apiGetConfig,
+  apiGetStockKg, apiGetMovimientos, apiGetIngresos,
   getAdminPinSession, setAdminPinSession, clearAdminPinSession
 } from '../utils/mercaderiaApi';
+import { calcularBalanceProducto } from '../utils/balanceStock';
 
 const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
 
@@ -16,20 +19,27 @@ export default function HogarAdmin({ onVolverEleccion }) {
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState(null);
 
+  // Sub-pestaña de auditoría
+  const [subTabAdmin, setSubTabAdmin] = useState('movimientos'); // 'movimientos' | 'balance'
+  const [balances, setBalances] = useState([]);
+
   // Modales
   const [modalCargar, setModalCargar] = useState(false);
   const [modalPinHogar, setModalPinHogar] = useState(false);
   const [modalPinAdmin, setModalPinAdmin] = useState(false);
   const [modalPedirAdminPin, setModalPedirAdminPin] = useState(null); // { onConfirm: (pin) => void, error: string }
 
-  // Cargar datos de cuenta Hogar y configuración de PINs
+  // Cargar datos de cuenta Hogar, configuración y balances
   const cargarTodo = async () => {
     setCargando(true);
     setError(null);
     try {
-      const [resHogar, resConfig] = await Promise.all([
+      const [resHogar, resConfig, resStock, resMov, resIngresos] = await Promise.all([
         apiGetHogar(),
-        apiGetConfig()
+        apiGetConfig(),
+        apiGetStockKg().catch(() => null),
+        apiGetMovimientos({ limite: 500 }).catch(() => null),
+        apiGetIngresos(null, 500).catch(() => null)
       ]);
 
       if (resHogar && resHogar.ok) {
@@ -37,6 +47,38 @@ export default function HogarAdmin({ onVolverEleccion }) {
       }
       if (resConfig && resConfig.ok) {
         setConfig(resConfig);
+      }
+
+      if (resStock && resStock.ok && Array.isArray(resStock.productos)) {
+        const ingresos = (resIngresos && resIngresos.ok && Array.isArray(resIngresos.ingresos)) ? resIngresos.ingresos : [];
+        const movimientos = (resMov && resMov.ok && Array.isArray(resMov.movimientos)) ? resMov.movimientos : [];
+
+        const listaBalances = resStock.productos.map(p => {
+          const prodNombre = p.producto;
+          const costoUnit = Number(p.costo_kg_ultimo || p.costo || 0);
+
+          const ings = ingresos.filter(ing => (ing.producto || '').toLowerCase().trim() === prodNombre.toLowerCase().trim());
+          const totalIngresadoKg = ings.reduce((acc, it) => acc + (Number(it.kg_netos || it.kg) || 0), 0);
+
+          const movs = movimientos.filter(m => (m.producto || '').toLowerCase().trim() === prodNombre.toLowerCase().trim());
+          const mermasKg = movs.filter(m => m.tipo === 'MERMA').reduce((acc, it) => acc + (Number(it.kg) || 0), 0);
+          const hogarKg = movs.filter(m => m.tipo === 'CASA').reduce((acc, it) => acc + (Number(it.kg) || 0), 0);
+
+          const depositoKg = Number(p.en_deposito || 0);
+          const vendidoKg = Number(p.comprometido || 0);
+
+          return calcularBalanceProducto({
+            producto: prodNombre,
+            ingresado: totalIngresadoKg,
+            vendido: vendidoKg,
+            hogar: hogarKg,
+            merma: mermasKg,
+            deposito: depositoKg,
+            costo_unitario: costoUnit
+          });
+        });
+
+        setBalances(listaBalances);
       }
     } catch (e) {
       setError(e.message || 'Error cargando datos de administración.');
@@ -204,61 +246,141 @@ export default function HogarAdmin({ onVolverEleccion }) {
         </div>
       </div>
 
-      {/* Historial Completo de Cargas y Consumos */}
+      {/* Pestañas de Auditoría: Movimientos y Balance Exacto de Stock */}
       <div className="bg-[#121212] border border-gray-800 rounded-3xl overflow-hidden shadow-xl p-6 space-y-4">
-        <div className="flex items-center justify-between border-b border-gray-800 pb-3">
-          <h2 className="text-sm font-black uppercase text-white flex items-center gap-2">
-            <History size={16} className="text-amber-400" /> Historial Completo de Movimientos del Hogar
-          </h2>
-          <span className="text-xs text-gray-500 font-mono">
-            {datosHogar?.movimientos?.length || 0} registros
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-800 pb-3">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSubTabAdmin('movimientos')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                subTabAdmin === 'movimientos' ? 'bg-amber-400 text-black shadow' : 'text-gray-400 hover:text-white bg-black/40 border border-gray-800'
+              }`}
+            >
+              <History size={14} />
+              <span>Movimientos Hogar ({datosHogar?.movimientos?.length || 0})</span>
+            </button>
+            <button
+              onClick={() => setSubTabAdmin('balance')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                subTabAdmin === 'balance' ? 'bg-amber-400 text-black shadow' : 'text-gray-400 hover:text-white bg-black/40 border border-gray-800'
+              }`}
+            >
+              <Scale size={14} />
+              <span>Balance Exacto por Producto ({balances.length})</span>
+            </button>
+          </div>
+
+          <span className="text-[11px] text-gray-500 font-mono">
+            {subTabAdmin === 'movimientos' 
+              ? `${datosHogar?.movimientos?.length || 0} registros` 
+              : 'Auditoría en gramos enteros (0,000 kg)'}
           </span>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr className="bg-black/60 border-b border-gray-800 text-gray-400 font-bold uppercase text-[10px] tracking-wider">
-                <th className="py-3 px-4">Fecha</th>
-                <th className="py-3 px-3">Tipo</th>
-                <th className="py-3 px-3 text-right">Monto</th>
-                <th className="py-3 px-3 text-right">Saldo Resultante</th>
-                <th className="py-3 px-4">Detalle / Nota</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-800/60 font-medium">
-              {(!datosHogar?.movimientos || datosHogar.movimientos.length === 0) ? (
-                <tr>
-                  <td colSpan={5} className="py-12 text-center text-gray-500">
-                    No hay movimientos registrados en el hogar aún.
-                  </td>
+        {/* ── SUB-VISTA A: HISTORIAL DE MOVIMIENTOS HOGAR ───────────────── */}
+        {subTabAdmin === 'movimientos' && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-black/60 border-b border-gray-800 text-gray-400 font-bold uppercase text-[10px] tracking-wider">
+                  <th className="py-3 px-4">Fecha</th>
+                  <th className="py-3 px-3">Tipo</th>
+                  <th className="py-3 px-3 text-right">Monto</th>
+                  <th className="py-3 px-3 text-right">Saldo Resultante</th>
+                  <th className="py-3 px-4">Detalle / Nota</th>
                 </tr>
-              ) : (
-                datosHogar.movimientos.map((m, idx) => (
-                  <tr key={idx} className="hover:bg-white/[0.02]">
-                    <td className="py-3 px-4 text-gray-400 font-mono text-[11px]">{m.fecha || '—'}</td>
-                    <td className="py-3 px-3">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        m.tipo === 'CARGA' ? 'bg-green-500/10 text-green-400' : 'bg-amber-500/10 text-amber-400'
-                      }`}>
-                        {m.tipo}
-                      </span>
+              </thead>
+              <tbody className="divide-y divide-gray-800/60 font-medium">
+                {(!datosHogar?.movimientos || datosHogar.movimientos.length === 0) ? (
+                  <tr>
+                    <td colSpan={5} className="py-12 text-center text-gray-500">
+                      No hay movimientos registrados en el hogar aún.
                     </td>
-                    <td className="py-3 px-3 text-right font-mono font-bold">
-                      <span className={m.tipo === 'CARGA' ? 'text-green-400' : 'text-amber-400'}>
-                        {m.tipo === 'CARGA' ? `+${$$(m.monto)}` : `-${$$(m.monto)}`}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 text-right font-mono font-bold text-gray-200">
-                      {$$(m.saldo_resultante)}
-                    </td>
-                    <td className="py-3 px-4 text-gray-400 text-xs">{m.detalle || m.nota || '—'}</td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ) : (
+                  datosHogar.movimientos.map((m, idx) => (
+                    <tr key={idx} className="hover:bg-white/[0.02]">
+                      <td className="py-3 px-4 text-gray-400 font-mono text-[11px]">{m.fecha || '—'}</td>
+                      <td className="py-3 px-3">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          m.tipo === 'CARGA' ? 'bg-green-500/10 text-green-400' : 'bg-amber-500/10 text-amber-400'
+                        }`}>
+                          {m.tipo}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 text-right font-mono font-bold">
+                        <span className={m.tipo === 'CARGA' ? 'text-green-400' : 'text-amber-400'}>
+                          {m.tipo === 'CARGA' ? `+${$$(m.monto)}` : `-${$$(m.monto)}`}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 text-right font-mono font-bold text-gray-200">
+                        {$$(m.saldo_resultante)}
+                      </td>
+                      <td className="py-3 px-4 text-gray-400 text-xs">{m.detalle || m.nota || '—'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* ── SUB-VISTA B: PARTE 3 - BALANCE EXACTO POR PRODUCTO (SOLO LECTURA) ── */}
+        {subTabAdmin === 'balance' && (
+          <div className="space-y-3">
+            <p className="text-[11px] text-gray-400">
+              Cálculo en gramos enteros: <span className="font-mono text-gray-300">Diferencia = Ingresado - (Vendido + Hogar + Merma + Depósito)</span>. La diferencia exacta esperada es <strong className="text-green-400 font-mono">0,000 kg</strong>. Si hay descuadre aparece en <strong className="text-red-400 font-mono">rojo</strong>.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-black/60 border-b border-gray-800 text-gray-400 font-bold uppercase text-[10px] tracking-wider">
+                    <th className="py-3 px-4">Producto</th>
+                    <th className="py-3 px-3 text-right">Ingresado</th>
+                    <th className="py-3 px-3 text-right">Vendido</th>
+                    <th className="py-3 px-3 text-right">Hogar</th>
+                    <th className="py-3 px-3 text-right">Merma</th>
+                    <th className="py-3 px-3 text-right">Depósito</th>
+                    <th className="py-3 px-3 text-right">Diferencia</th>
+                    <th className="py-3 px-4 text-right">Valor Merma ($)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800/60 font-medium">
+                  {balances.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-12 text-center text-gray-500">
+                        No hay productos registrados con stock en el sistema aún.
+                      </td>
+                    </tr>
+                  ) : (
+                    balances.map((b, idx) => (
+                      <tr key={idx} className="hover:bg-white/[0.02]">
+                        <td className="py-3 px-4 font-bold text-white">{b.producto}</td>
+                        <td className="py-3 px-3 text-right font-mono text-gray-300">{b.ingresado.toFixed(3)} kg</td>
+                        <td className="py-3 px-3 text-right font-mono text-blue-400">{b.vendido.toFixed(3)} kg</td>
+                        <td className="py-3 px-3 text-right font-mono text-green-400">{b.hogar.toFixed(3)} kg</td>
+                        <td className="py-3 px-3 text-right font-mono text-amber-400">{b.merma.toFixed(3)} kg</td>
+                        <td className="py-3 px-3 text-right font-mono text-gray-200">{b.deposito.toFixed(3)} kg</td>
+                        <td className="py-3 px-3 text-right">
+                          <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold ${
+                            b.esExacto 
+                              ? 'bg-green-500/10 text-green-400 border border-green-500/20' 
+                              : 'bg-red-500/10 text-red-400 border border-red-500/30 font-black animate-pulse'
+                          }`}>
+                            {b.diferencia > 0 ? `+${b.diferencia.toFixed(3)}` : b.diferencia.toFixed(3)} kg
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono font-bold text-amber-300">
+                          {$$(b.valor_merma_pesos)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── MODAL CARGAR SALDO ───────────────────────────────────────── */}

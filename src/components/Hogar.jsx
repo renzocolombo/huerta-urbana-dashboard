@@ -242,9 +242,11 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
     setMensajeError(null);
     setMensajeExito(null);
 
+    const esKg = (productoActivo.unidad || 'kg').toLowerCase() === 'kg';
     const itemsPayload = [{
       producto: productoActivo.producto,
-      kg: Number(cantidadFinal)
+      ...(esKg ? { kg: Number(cantidadFinal) } : { unidades: Number(cantidadFinal) }),
+      unidad: productoActivo.unidad || (esKg ? 'kg' : 'un')
     }];
 
     try {

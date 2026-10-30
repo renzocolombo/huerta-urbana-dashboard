@@ -181,7 +181,9 @@ export async function apiRegistrarSalidas({ tipo, items, nota, admin_pin, pin })
     tipo,
     items: (items || []).map(it => ({
       producto: String(it.producto).trim(),
-      kg: Number(it.kg),
+      ...(it.kg !== undefined && it.kg !== null ? { kg: Number(it.kg) } : {}),
+      ...(it.unidades !== undefined && it.unidades !== null ? { unidades: Number(it.unidades) } : {}),
+      ...(it.unidad ? { unidad: String(it.unidad).trim() } : {}),
     })),
     ...(nota ? { nota: String(nota).trim() } : {}),
     ...(admin_pin ? { admin_pin: String(admin_pin).trim() } : {}),
