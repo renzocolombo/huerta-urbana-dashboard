@@ -2452,6 +2452,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
           pedidos={PEDIDOS}
           hoyYMD={hoyYMD}
           onCambio={cargarFeriados}
+          preparaciones={preparaciones}
         />
       ) : vistaActual === 'reembolsos' ? (
         /* ═══════ VISTA REEMBOLSOS: DEVOLUCIONES Y REEMBOLSOS ═══════ */

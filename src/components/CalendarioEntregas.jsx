@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  ChevronLeft, ChevronRight, Loader2, AlertTriangle, RefreshCw, CalendarDays,
+  ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, AlertTriangle, RefreshCw, CalendarDays,
   X, Download, Sun, Sunset, Clock, Package, CheckCircle, TrendingUp, TrendingDown, Minus
 } from 'lucide-react';
 import { apiGetCalendario, apiSetDiaCalendario, apiSembrarFeriados } from '../utils/mercaderiaApi';
@@ -8,6 +8,7 @@ import {
   mapaCalendario, estadoDelDia, accionesDelDia, semanasDelMes, ESTADOS_DIA,
   metricasDia, metricasMes, turnoDePedido,
 } from '../utils/agendaCalendario';
+import { calcularDetalleYTotalesDia } from '../utils/calendarioTotales';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -27,7 +28,7 @@ function fmtLargo(ymd) {
   return `${d}/${m}/${y}`;
 }
 
-export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedidos: pedidosProp }) {
+export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedidos: pedidosProp, preparaciones = {} }) {
   const [anio, setAnio] = useState(() => Number(hoyYMD.slice(0, 4)));
   const [mes, setMes] = useState(() => Number(hoyYMD.slice(5, 7)));
   const [dias, setDias] = useState([]);
@@ -39,7 +40,15 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
   const [guardando, setGuardando] = useState(false);
   const [aviso, setAviso] = useState(null); // { tipo: 'ok' | 'error', texto }
   const [sembrando, setSembrando] = useState(false);
+  const [turnosAbiertos, setTurnosAbiertos] = useState({});
   const enVuelo = useRef(false);
+
+  const toggleTurno = (nombre) => {
+    setTurnosAbiertos((prev) => ({
+      ...prev,
+      [nombre]: !prev[nombre],
+    }));
+  };
 
   // Obtener pedidos de props o de contexto
   let sheetsCtx = null;
@@ -58,6 +67,12 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
 
   // Metricas del dia seleccionado
   const diaMetricas = useMemo(() => seleccionado ? metricasDia(todosLosPedidos, seleccionado) : null, [todosLosPedidos, seleccionado]);
+
+  // Detalle y totales por turno y del día seleccionado (con cálculo exacto/estimado)
+  const diaTotales = useMemo(() => {
+    if (!seleccionado) return null;
+    return calcularDetalleYTotalesDia(todosLosPedidos, seleccionado, preparaciones);
+  }, [todosLosPedidos, seleccionado, preparaciones]);
 
   const aplicarResultado = useCallback((r) => {
     if (!r.ok || !Array.isArray(r.dias)) {
@@ -90,7 +105,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
     let m = mes + delta, a = anio;
     if (m < 1) { m = 12; a -= 1; }
     if (m > 12) { m = 1; a += 1; }
-    setMes(m); setAnio(a); setSeleccionado(null); setConfirmando(null);
+    setMes(m); setAnio(a); setSeleccionado(null); setConfirmando(null); setTurnosAbiertos({});
   };
 
   const elegirDia = (ymd) => {
@@ -98,11 +113,12 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
     setMotivo(mapa[ymd]?.motivo || '');
     setConfirmando(null);
     setAviso(null);
+    setTurnosAbiertos({});
   };
 
   const aplicar = async (accion) => {
     if (!seleccionado || enVuelo.current) return;
-    const n = diaMetricas?.total ?? (conteo[seleccionado] || 0);
+    const n = diaTotales?.totalPedidos ?? (diaMetricas?.total ?? (conteo[seleccionado] || 0));
     if (accion === 'cerrar' && n > 0 && confirmando !== 'cerrar') {
       setConfirmando('cerrar');
       return;
@@ -149,7 +165,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
 
   const acciones = seleccionado ? accionesDelDia(seleccionado, mapa, hoyYMD) : [];
   const estadoSel = seleccionado ? estadoDelDia(seleccionado, mapa) : null;
-  const nSel = diaMetricas?.total ?? (seleccionado ? (conteo[seleccionado] || 0) : 0);
+  const nSel = diaTotales?.totalPedidos ?? (diaMetricas?.total ?? (seleccionado ? (conteo[seleccionado] || 0) : 0));
   const listaVacia = !cargando && !error && dias.length === 0;
 
   const mesAnteriorIdx = (mes === 1 ? 12 : mes - 1) - 1;
@@ -383,103 +399,523 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                 </button>
               </div>
 
-              {/* Resumen de conteos del dia (excluye pedidos cancelados) */}
+              {/* Resumen de conteos del día con botones interactivos por turno */}
               <div className="bg-[#1f2937]/50 border border-gray-800 rounded-xl p-3 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs uppercase font-bold text-gray-400">Total del día:</span>
-                  <span className="text-sm font-black text-white">{diaMetricas?.total ?? nSel} {diaMetricas?.total === 1 ? 'pedido' : 'pedidos'}</span>
+                  <span className="text-sm font-black text-white">
+                    {diaTotales?.totalPedidos ?? nSel} {(diaTotales?.totalPedidos ?? nSel) === 1 ? 'pedido' : 'pedidos'}
+                  </span>
                 </div>
 
-                {/* Desglose por turnos: Mañana, Tarde, Sin turno (los tres suman el total) */}
+                {/* Desglose rápido por turnos interactivos (toque para abrir/cerrar) */}
                 <div className="grid grid-cols-3 gap-1.5 pt-1">
-                  <div className="bg-amber-500/10 border border-amber-500/25 rounded-lg p-2 text-center">
+                  <button
+                    type="button"
+                    onClick={() => toggleTurno('Mañana')}
+                    className={`p-2 rounded-lg text-center border transition-all cursor-pointer ${
+                      turnosAbiertos['Mañana']
+                        ? 'bg-amber-500/25 border-amber-500/50 ring-1 ring-amber-400/50'
+                        : 'bg-amber-500/10 border-amber-500/25 hover:bg-amber-500/15'
+                    }`}
+                    title="Tocar para ver detalle del turno Mañana"
+                  >
                     <span className="text-[10px] font-bold text-amber-300 flex items-center justify-center gap-1">
                       <Sun size={11} /> Mañana
                     </span>
-                    <span className="text-sm font-black text-white mt-0.5 block">{diaMetricas?.manana || 0}</span>
-                  </div>
-                  <div className="bg-indigo-500/10 border border-indigo-500/25 rounded-lg p-2 text-center">
+                    <span className="text-sm font-black text-white mt-0.5 block">
+                      {diaTotales?.turnos.Mañana.cantidad ?? (diaMetricas?.manana || 0)}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => toggleTurno('Tarde')}
+                    className={`p-2 rounded-lg text-center border transition-all cursor-pointer ${
+                      turnosAbiertos['Tarde']
+                        ? 'bg-indigo-500/25 border-indigo-500/50 ring-1 ring-indigo-400/50'
+                        : 'bg-indigo-500/10 border-indigo-500/25 hover:bg-indigo-500/15'
+                    }`}
+                    title="Tocar para ver detalle del turno Tarde"
+                  >
                     <span className="text-[10px] font-bold text-indigo-300 flex items-center justify-center gap-1">
                       <Sunset size={11} /> Tarde
                     </span>
-                    <span className="text-sm font-black text-white mt-0.5 block">{diaMetricas?.tarde || 0}</span>
-                  </div>
-                  <div className="bg-gray-700/30 border border-gray-600/40 rounded-lg p-2 text-center">
+                    <span className="text-sm font-black text-white mt-0.5 block">
+                      {diaTotales?.turnos.Tarde.cantidad ?? (diaMetricas?.tarde || 0)}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => toggleTurno('Sin turno')}
+                    className={`p-2 rounded-lg text-center border transition-all cursor-pointer ${
+                      turnosAbiertos['Sin turno']
+                        ? 'bg-gray-700/50 border-gray-500 ring-1 ring-gray-400/50'
+                        : 'bg-gray-700/30 border-gray-600/40 hover:bg-gray-700/40'
+                    }`}
+                    title="Tocar para ver detalle sin turno asignado"
+                  >
                     <span className="text-[10px] font-bold text-gray-300 flex items-center justify-center gap-1">
                       <Clock size={11} /> Sin turno
                     </span>
-                    <span className="text-sm font-black text-white mt-0.5 block">{diaMetricas?.sinTurno || 0}</span>
+                    <span className="text-sm font-black text-white mt-0.5 block">
+                      {diaTotales?.turnos['Sin turno'].cantidad ?? (diaMetricas?.sinTurno || 0)}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Renglones expandibles de Turnos con detalle y pie de turno */}
+              <div className="space-y-2.5">
+                <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
+                  Turnos de entrega:
+                </span>
+
+                {/* ── TURNO MAÑANA ── */}
+                <div id="cal-turno-manana-contenedor" className="border border-white/5 rounded-xl overflow-hidden bg-[#1f2937]/30">
+                  <button
+                    id="cal-turno-manana-btn"
+                    type="button"
+                    onClick={() => toggleTurno('Mañana')}
+                    className="w-full p-2.5 sm:p-3 flex items-center justify-between text-left hover:bg-white/5 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-6 h-6 rounded-lg bg-amber-500/15 flex items-center justify-center shrink-0">
+                        <Sun size={13} className="text-amber-400" />
+                      </div>
+                      <span className="font-bold text-xs sm:text-sm text-white">Mañana</span>
+                      <span className="text-[11px] text-amber-300/90 font-medium truncate">
+                        ({diaTotales?.turnos.Mañana.cantidad || 0} {diaTotales?.turnos.Mañana.cantidad === 1 ? 'pedido' : 'pedidos'})
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="text-right">
+                        <span className="text-xs font-bold text-amber-300 block">
+                          ${(diaTotales?.turnos.Mañana.total || 0).toLocaleString('es-AR')}
+                          {diaTotales?.turnos.Mañana.tieneEstimados && (
+                            <span className="text-[10px] text-amber-400 font-semibold ml-1">est.</span>
+                          )}
+                        </span>
+                      </div>
+                      <ChevronDown
+                        size={15}
+                        className={`text-gray-400 transition-transform duration-200 ${
+                          turnosAbiertos['Mañana'] ? 'rotate-180' : ''
+                        }`}
+                      />
+                    </div>
+                  </button>
+
+                  {turnosAbiertos['Mañana'] && (
+                    <div id="cal-turno-manana-detalle" className="p-2.5 sm:p-3 pt-0 border-t border-white/5 space-y-2">
+                      {(!diaTotales || diaTotales.turnos.Mañana.pedidos.length === 0) ? (
+                        <p className="text-xs text-gray-500 italic py-2">Sin pedidos para el turno Mañana.</p>
+                      ) : (
+                        <div className="space-y-1.5 max-h-60 overflow-y-auto pr-0.5">
+                          {diaTotales.turnos.Mañana.pedidos.map((it) => (
+                            <div
+                              key={it.numero_pedido}
+                              className="bg-black/40 border border-white/5 rounded-xl p-2.5 space-y-1.5"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-mono text-xs font-black text-green-400">
+                                  {it.numero_pedido}
+                                </span>
+                                <div className="text-right">
+                                  <span className="font-bold text-xs text-emerald-400">
+                                    ${it.monto.toLocaleString('es-AR')}
+                                  </span>
+                                  {it.esEstimado && (
+                                    <span
+                                      className="text-[10px] text-amber-400 font-semibold ml-1"
+                                      title={it.motivoEstimado || 'Estimado, se ajusta al pesar'}
+                                    >
+                                      est.
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between gap-2 text-xs">
+                                <span className="text-white font-medium truncate max-w-[60%]">
+                                  {it.nombre}
+                                </span>
+                                <span className="text-gray-400 text-[11px] truncate text-right">
+                                  {it.localidad}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${it.estEnt.color}`}
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full ${it.estEnt.dot}`} />
+                                  <span>{it.estEnt.label}</span>
+                                </span>
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${it.estPag.color}`}
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full ${it.estPag.dot}`} />
+                                  <span>{it.estPag.shortLabel || it.estPag.label}</span>
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Pie del turno Mañana (Requisito 3) */}
+                      <div
+                        id="cal-turno-manana-pie"
+                        className="pt-2 border-t border-gray-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs"
+                      >
+                        <span className="text-gray-400 font-medium">
+                          {diaTotales?.turnos.Mañana.cantidad || 0}{' '}
+                          {diaTotales?.turnos.Mañana.cantidad === 1 ? 'pedido' : 'pedidos'}
+                        </span>
+                        <div className="text-right font-bold text-white">
+                          <span>Total Mañana: </span>
+                          <span className="text-emerald-300 font-black">
+                            ${(diaTotales?.turnos.Mañana.total || 0).toLocaleString('es-AR')}
+                          </span>
+                          {diaTotales?.turnos.Mañana.tieneEstimados && (
+                            <span className="text-[10px] text-amber-400 font-medium block sm:inline sm:ml-1">
+                              (incluye {diaTotales.turnos.Mañana.estimadosCount}{' '}
+                              {diaTotales.turnos.Mañana.estimadosCount === 1 ? 'estimado' : 'estimados'})
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* ── TURNO TARDE ── */}
+                <div id="cal-turno-tarde-contenedor" className="border border-white/5 rounded-xl overflow-hidden bg-[#1f2937]/30">
+                  <button
+                    id="cal-turno-tarde-btn"
+                    type="button"
+                    onClick={() => toggleTurno('Tarde')}
+                    className="w-full p-2.5 sm:p-3 flex items-center justify-between text-left hover:bg-white/5 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-6 h-6 rounded-lg bg-indigo-500/15 flex items-center justify-center shrink-0">
+                        <Sunset size={13} className="text-indigo-400" />
+                      </div>
+                      <span className="font-bold text-xs sm:text-sm text-white">Tarde</span>
+                      <span className="text-[11px] text-indigo-300/90 font-medium truncate">
+                        ({diaTotales?.turnos.Tarde.cantidad || 0} {diaTotales?.turnos.Tarde.cantidad === 1 ? 'pedido' : 'pedidos'})
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="text-right">
+                        <span className="text-xs font-bold text-indigo-300 block">
+                          ${(diaTotales?.turnos.Tarde.total || 0).toLocaleString('es-AR')}
+                          {diaTotales?.turnos.Tarde.tieneEstimados && (
+                            <span className="text-[10px] text-amber-400 font-semibold ml-1">est.</span>
+                          )}
+                        </span>
+                      </div>
+                      <ChevronDown
+                        size={15}
+                        className={`text-gray-400 transition-transform duration-200 ${
+                          turnosAbiertos['Tarde'] ? 'rotate-180' : ''
+                        }`}
+                      />
+                    </div>
+                  </button>
+
+                  {turnosAbiertos['Tarde'] && (
+                    <div id="cal-turno-tarde-detalle" className="p-2.5 sm:p-3 pt-0 border-t border-white/5 space-y-2">
+                      {(!diaTotales || diaTotales.turnos.Tarde.pedidos.length === 0) ? (
+                        <p className="text-xs text-gray-500 italic py-2">Sin pedidos para el turno Tarde.</p>
+                      ) : (
+                        <div className="space-y-1.5 max-h-60 overflow-y-auto pr-0.5">
+                          {diaTotales.turnos.Tarde.pedidos.map((it) => (
+                            <div
+                              key={it.numero_pedido}
+                              className="bg-black/40 border border-white/5 rounded-xl p-2.5 space-y-1.5"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-mono text-xs font-black text-green-400">
+                                  {it.numero_pedido}
+                                </span>
+                                <div className="text-right">
+                                  <span className="font-bold text-xs text-emerald-400">
+                                    ${it.monto.toLocaleString('es-AR')}
+                                  </span>
+                                  {it.esEstimado && (
+                                    <span
+                                      className="text-[10px] text-amber-400 font-semibold ml-1"
+                                      title={it.motivoEstimado || 'Estimado, se ajusta al pesar'}
+                                    >
+                                      est.
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between gap-2 text-xs">
+                                <span className="text-white font-medium truncate max-w-[60%]">
+                                  {it.nombre}
+                                </span>
+                                <span className="text-gray-400 text-[11px] truncate text-right">
+                                  {it.localidad}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${it.estEnt.color}`}
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full ${it.estEnt.dot}`} />
+                                  <span>{it.estEnt.label}</span>
+                                </span>
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${it.estPag.color}`}
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full ${it.estPag.dot}`} />
+                                  <span>{it.estPag.shortLabel || it.estPag.label}</span>
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Pie del turno Tarde (Requisito 3) */}
+                      <div
+                        id="cal-turno-tarde-pie"
+                        className="pt-2 border-t border-gray-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs"
+                      >
+                        <span className="text-gray-400 font-medium">
+                          {diaTotales?.turnos.Tarde.cantidad || 0}{' '}
+                          {diaTotales?.turnos.Tarde.cantidad === 1 ? 'pedido' : 'pedidos'}
+                        </span>
+                        <div className="text-right font-bold text-white">
+                          <span>Total Tarde: </span>
+                          <span className="text-emerald-300 font-black">
+                            ${(diaTotales?.turnos.Tarde.total || 0).toLocaleString('es-AR')}
+                          </span>
+                          {diaTotales?.turnos.Tarde.tieneEstimados && (
+                            <span className="text-[10px] text-amber-400 font-medium block sm:inline sm:ml-1">
+                              (incluye {diaTotales.turnos.Tarde.estimadosCount}{' '}
+                              {diaTotales.turnos.Tarde.estimadosCount === 1 ? 'estimado' : 'estimados'})
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* ── TURNO SIN TURNO (si hay pedidos o se abre) ── */}
+                {((diaTotales?.turnos['Sin turno'].cantidad || 0) > 0 || turnosAbiertos['Sin turno']) && (
+                  <div id="cal-turno-sinturno-contenedor" className="border border-white/5 rounded-xl overflow-hidden bg-[#1f2937]/30">
+                    <button
+                      id="cal-turno-sinturno-btn"
+                      type="button"
+                      onClick={() => toggleTurno('Sin turno')}
+                      className="w-full p-2.5 sm:p-3 flex items-center justify-between text-left hover:bg-white/5 transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-6 h-6 rounded-lg bg-gray-700/30 flex items-center justify-center shrink-0">
+                          <Clock size={13} className="text-gray-400" />
+                        </div>
+                        <span className="font-bold text-xs sm:text-sm text-white">Sin turno</span>
+                        <span className="text-[11px] text-gray-400 font-medium truncate">
+                          ({diaTotales?.turnos['Sin turno'].cantidad || 0} {diaTotales?.turnos['Sin turno'].cantidad === 1 ? 'pedido' : 'pedidos'})
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="text-right">
+                          <span className="text-xs font-bold text-gray-300 block">
+                            ${(diaTotales?.turnos['Sin turno'].total || 0).toLocaleString('es-AR')}
+                            {diaTotales?.turnos['Sin turno'].tieneEstimados && (
+                              <span className="text-[10px] text-amber-400 font-semibold ml-1">est.</span>
+                            )}
+                          </span>
+                        </div>
+                        <ChevronDown
+                          size={15}
+                          className={`text-gray-400 transition-transform duration-200 ${
+                            turnosAbiertos['Sin turno'] ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </div>
+                    </button>
+
+                    {turnosAbiertos['Sin turno'] && (
+                      <div id="cal-turno-sinturno-detalle" className="p-2.5 sm:p-3 pt-0 border-t border-white/5 space-y-2">
+                        {(!diaTotales || diaTotales.turnos['Sin turno'].pedidos.length === 0) ? (
+                          <p className="text-xs text-gray-500 italic py-2">Sin pedidos sin turno asignado.</p>
+                        ) : (
+                          <div className="space-y-1.5 max-h-60 overflow-y-auto pr-0.5">
+                            {diaTotales.turnos['Sin turno'].pedidos.map((it) => (
+                              <div
+                                key={it.numero_pedido}
+                                className="bg-black/40 border border-white/5 rounded-xl p-2.5 space-y-1.5"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-mono text-xs font-black text-green-400">
+                                    {it.numero_pedido}
+                                  </span>
+                                  <div className="text-right">
+                                    <span className="font-bold text-xs text-emerald-400">
+                                      ${it.monto.toLocaleString('es-AR')}
+                                    </span>
+                                    {it.esEstimado && (
+                                      <span
+                                        className="text-[10px] text-amber-400 font-semibold ml-1"
+                                        title={it.motivoEstimado || 'Estimado, se ajusta al pesar'}
+                                      >
+                                        est.
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center justify-between gap-2 text-xs">
+                                  <span className="text-white font-medium truncate max-w-[60%]">
+                                    {it.nombre}
+                                  </span>
+                                  <span className="text-gray-400 text-[11px] truncate text-right">
+                                    {it.localidad}
+                                  </span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                                  <span
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${it.estEnt.color}`}
+                                  >
+                                    <span className={`w-1.5 h-1.5 rounded-full ${it.estEnt.dot}`} />
+                                    <span>{it.estEnt.label}</span>
+                                  </span>
+                                  <span
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${it.estPag.color}`}
+                                  >
+                                    <span className={`w-1.5 h-1.5 rounded-full ${it.estPag.dot}`} />
+                                    <span>{it.estPag.shortLabel || it.estPag.label}</span>
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Pie del turno Sin turno (Requisito 3) */}
+                        <div
+                          id="cal-turno-sinturno-pie"
+                          className="pt-2 border-t border-gray-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs"
+                        >
+                          <span className="text-gray-400 font-medium">
+                            {diaTotales?.turnos['Sin turno'].cantidad || 0}{' '}
+                            {diaTotales?.turnos['Sin turno'].cantidad === 1 ? 'pedido' : 'pedidos'}
+                          </span>
+                          <div className="text-right font-bold text-white">
+                            <span>Total Sin turno: </span>
+                            <span className="text-emerald-300 font-black">
+                              ${(diaTotales?.turnos['Sin turno'].total || 0).toLocaleString('es-AR')}
+                            </span>
+                            {diaTotales?.turnos['Sin turno'].tieneEstimados && (
+                              <span className="text-[10px] text-amber-400 font-medium block sm:inline sm:ml-1">
+                                (incluye {diaTotales.turnos['Sin turno'].estimadosCount}{' '}
+                                {diaTotales.turnos['Sin turno'].estimadosCount === 1 ? 'estimado' : 'estimados'})
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* ═══════ REQUISITO 4: PIE DE LA TARJETA DEL DÍA (TOTAL DEL DÍA) ═══════ */}
+              <div id="cal-pie-total-dia" className="bg-[#1f2937]/70 border border-emerald-500/25 rounded-2xl p-3.5 space-y-2.5">
+                <div className="flex items-start justify-between gap-2 border-b border-white/10 pb-2.5">
+                  <div>
+                    <span className="text-[11px] uppercase font-black text-gray-300 tracking-wider block">
+                      Total del día
+                    </span>
+                    <span className="text-xs text-gray-400 font-medium">
+                      {diaTotales?.totalPedidos || 0} {(diaTotales?.totalPedidos || 0) === 1 ? 'pedido' : 'pedidos'}
+                      {(diaTotales?.totalPedidos || 0) > 0 && (
+                        <>
+                          {' '}({diaTotales?.turnos.Mañana.cantidad || 0} mañ. + {diaTotales?.turnos.Tarde.cantidad || 0} tarde
+                          {(diaTotales?.turnos['Sin turno'].cantidad || 0) > 0 ? ` + ${diaTotales.turnos['Sin turno'].cantidad} s/t` : ''})
+                        </>
+                      )}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span id="cal-total-dia-monto" className="text-base sm:text-lg font-black text-emerald-400 block leading-tight">
+                      ${(diaTotales?.totalMonto || 0).toLocaleString('es-AR')}
+                      {diaTotales?.tieneEstimados && (
+                        <span className="text-[10px] text-amber-400 font-semibold ml-1">est.</span>
+                      )}
+                    </span>
+                    {diaTotales?.tieneEstimados && (
+                      <span className="text-[10px] text-amber-400 font-medium block">
+                        incluye {diaTotales.totalEstimadosCount}{' '}
+                        {diaTotales.totalEstimadosCount === 1 ? 'estimado' : 'estimados'}
+                      </span>
+                    )}
                   </div>
                 </div>
 
-                {/* Cancelados mostrados aparte */}
-                {diaMetricas?.cancelados > 0 && (
-                  <div className="pt-2 border-t border-gray-800 flex items-center justify-between text-xs">
-                    <span className="text-red-400 font-bold flex items-center gap-1">
-                      <AlertTriangle size={12} /> Cancelados:
+                {/* Desglose: Ya cobrado vs Pendiente de cobro */}
+                <div className="grid grid-cols-2 gap-2 text-xs pt-0.5">
+                  {/* Ya cobrado */}
+                  <div id="cal-desglose-cobrado" className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-2.5">
+                    <span className="text-[10px] uppercase font-black text-emerald-400 flex items-center gap-1 tracking-wide">
+                      <CheckCircle size={11} className="shrink-0" /> Ya cobrado ({diaTotales?.desglose.cobrado.cantidad || 0})
                     </span>
-                    <span className="text-xs font-black text-red-300 bg-red-500/15 border border-red-500/30 px-2 py-0.5 rounded-md">
-                      {diaMetricas.cancelados}
+                    <span className="text-sm font-black text-emerald-300 mt-1 block">
+                      ${(diaTotales?.desglose.cobrado.monto || 0).toLocaleString('es-AR')}
+                      {diaTotales?.desglose.cobrado.tieneEstimados && (
+                        <span className="text-[9px] text-amber-400 font-semibold ml-1">est.</span>
+                      )}
                     </span>
+                    {diaTotales?.desglose.cobrado.tieneEstimados && (
+                      <span className="text-[9px] text-amber-400/90 block leading-tight mt-0.5">
+                        incluye {diaTotales.desglose.cobrado.estimadosCount} est.
+                      </span>
+                    )}
                   </div>
-                )}
+
+                  {/* Pendiente de cobro */}
+                  <div id="cal-desglose-pendiente" className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-2.5">
+                    <span className="text-[10px] uppercase font-black text-amber-400 flex items-center gap-1 tracking-wide">
+                      <Clock size={11} className="shrink-0" /> Pendiente ({diaTotales?.desglose.pendiente.cantidad || 0})
+                    </span>
+                    <span className="text-sm font-black text-amber-300 mt-1 block">
+                      ${(diaTotales?.desglose.pendiente.monto || 0).toLocaleString('es-AR')}
+                      {diaTotales?.desglose.pendiente.tieneEstimados && (
+                        <span className="text-[9px] text-amber-400 font-semibold ml-1">est.</span>
+                      )}
+                    </span>
+                    {diaTotales?.desglose.pendiente.tieneEstimados && (
+                      <span className="text-[9px] text-amber-400/90 block leading-tight mt-0.5">
+                        incluye {diaTotales.desglose.pendiente.estimadosCount} est.
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
 
-              {/* Lista de pedidos del dia con su turno */}
-              <div className="space-y-2">
-                <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
-                  Pedidos ({diaMetricas?.pedidosActivos.length || 0}):
-                </span>
-
-                {(!diaMetricas || diaMetricas.pedidosActivos.length === 0) ? (
-                  <p className="text-xs text-gray-500 italic py-1">Sin pedidos programados este día.</p>
-                ) : (
-                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                    {diaMetricas.pedidosActivos.map((p) => {
-                      const turno = turnoDePedido(p);
-                      return (
-                        <div key={p.numero_pedido || p.id} className="bg-black/30 border border-white/5 rounded-xl p-2.5 space-y-1">
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="font-mono text-xs font-black text-green-400">{p.numero_pedido}</span>
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
-                              turno === 'Mañana'
-                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                                : turno === 'Tarde'
-                                ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
-                                : 'bg-gray-700/40 text-gray-300 border border-gray-600/40'
-                            }`}>
-                              {turno}
-                            </span>
-                          </div>
-                          <p className="text-xs text-white font-medium truncate">{p.nombre || 'Sin nombre'}</p>
-                          <div className="flex items-center justify-between text-[11px] text-gray-400">
-                            <span className="truncate max-w-[170px]">{p.localidad || p.direccion || '—'}</span>
-                            <span className="font-bold text-gray-300">{p.total ? `$${Number(p.total).toLocaleString('es-AR')}` : ''}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
+              {/* Sublista de cancelados si los hay */}
+              {(diaTotales?.pedidosCancelados.length || diaMetricas?.cancelados || 0) > 0 && (
+                <div className="pt-2 border-t border-gray-800 space-y-1.5">
+                  <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider block">
+                    Cancelados ({diaTotales?.pedidosCancelados.length ?? diaMetricas?.cancelados}):
+                  </span>
+                  <div className="space-y-1 max-h-28 overflow-y-auto pr-1 opacity-75">
+                    {(diaTotales?.pedidosCancelados || diaMetricas?.pedidosCancelados || []).map((p) => (
+                      <div key={p.numero_pedido || p.id} className="bg-red-500/5 border border-red-500/20 rounded-lg p-2 text-xs flex items-center justify-between text-gray-400">
+                        <span className="font-mono font-bold text-red-300">{p.numero_pedido}</span>
+                        <span className="truncate max-w-[130px] text-[11px]">{p.nombre}</span>
+                        <span className="text-[10px] font-bold uppercase text-red-400">Cancelado</span>
+                      </div>
+                    ))}
                   </div>
-                )}
-
-                {/* Sublista de cancelados si los hay */}
-                {diaMetricas?.pedidosCancelados.length > 0 && (
-                  <div className="pt-2 border-t border-gray-800 space-y-1.5">
-                    <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider block">
-                      Cancelados ({diaMetricas.pedidosCancelados.length}):
-                    </span>
-                    <div className="space-y-1 max-h-28 overflow-y-auto pr-1 opacity-75">
-                      {diaMetricas.pedidosCancelados.map((p) => (
-                        <div key={p.numero_pedido || p.id} className="bg-red-500/5 border border-red-500/20 rounded-lg p-2 text-xs flex items-center justify-between text-gray-400">
-                          <span className="font-mono font-bold text-red-300">{p.numero_pedido}</span>
-                          <span className="truncate max-w-[130px] text-[11px]">{p.nombre}</span>
-                          <span className="text-[10px] font-bold uppercase text-red-400">Cancelado</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+                </div>
+              )}
 
               {/* Controles de cambio de estado del dia */}
               <div className="pt-3 border-t border-white/5 space-y-2">
