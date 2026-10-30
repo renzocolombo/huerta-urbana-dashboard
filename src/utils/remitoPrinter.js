@@ -194,6 +194,39 @@ export function estaPedidoArmado(pedido, preparacion) {
 }
 
 /**
+ * Calcula el total exacto de un pedido a partir de su detalle_json o de la preparación actual.
+ * Ignora los ítems marcados con sin_stock: true.
+ */
+export function calcularTotalDetalle(pedido, preparacion, opciones = {}) {
+  let detalleItems = null;
+  const raw = pedido?.detalle_json || preparacion?.detalle_json;
+  if (raw) {
+    try {
+      detalleItems = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : null);
+    } catch (e) {}
+  }
+  if (Array.isArray(detalleItems) && detalleItems.length > 0) {
+    const sum = detalleItems.reduce((acc, it) => acc + (it.sin_stock ? 0 : (Number(it.subtotal) || 0)), 0);
+    return Math.round(sum);
+  }
+  if (preparacion && Array.isArray(preparacion.items)) {
+    let sum = 0;
+    preparacion.items.forEach(it => {
+      if (it.sin_stock) return;
+      const bolsas = it.bolsasAsignadas || [];
+      const esUnidad = it.esUnidad || it.slot === 'unidades';
+      const cantReal = esUnidad ? bolsas.length : Number(bolsas.reduce((s, b) => s + (Number(b.peso) || 0), 0).toFixed(3));
+      const precioUnit = (typeof opciones?.obtenerPrecioCongelado === 'function')
+        ? opciones.obtenerPrecioCongelado(it.nombre)
+        : Number(it.precioUnitario || it.precio_unitario || 0);
+      sum += Math.round(cantReal * precioUnit);
+    });
+    return Math.round(sum);
+  }
+  return Math.round(Number(pedido?.total) || 0);
+}
+
+/**
  * Concentra la lectura y normalización de las pesadas reales o solicitadas de un pedido.
  * Resuelve precios unitarios desde detalle_json, catálogo PreciosWeb o cálculo directo.
  * No inventa valores: si un precio no existe, devuelve null para mostrar '—'.
@@ -249,7 +282,9 @@ export function obtenerPesosReales(pedido, preparacion, opciones = {}) {
 
   if (Array.isArray(detalleItems) && detalleItems.length > 0) {
     tieneDetalleJson = true;
-    itemsProcesados = detalleItems.map(item => {
+    itemsProcesados = detalleItems
+      .filter(item => !item.sin_stock)
+      .map(item => {
       const nombre = String(item.producto || item.nombre || '').trim();
       const unidadRaw = (item.unidad || '').toLowerCase().trim();
       const unidad = unidadRaw === 'kg' ? 'kg' : (unidadRaw === 'atado' ? 'atado' : 'un');
@@ -297,7 +332,7 @@ export function obtenerPesosReales(pedido, preparacion, opciones = {}) {
     });
   } else {
     // ── CASO 2: Sin detalle_json (pedidos web pendientes de armado o pedidos históricos) ──
-    const itemsFuente = tienePrep ? prepItems : parsearProductosPedido(pedido?.producto, pedido?.cantidades);
+    const itemsFuente = tienePrep ? prepItems.filter(it => !it.sin_stock) : parsearProductosPedido(pedido?.producto, pedido?.cantidades);
     const itemsFallback = (!itemsFuente || itemsFuente.length === 0)
       ? [{ nombre: pedido?.producto || 'Productos Varios', cantidad: parsearCantidad(pedido?.cantidades).valor || 1, bolsasAsignadas: [] }]
       : itemsFuente;

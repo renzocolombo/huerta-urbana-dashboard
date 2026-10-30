@@ -84,13 +84,22 @@ export async function apiSetMargen(producto, margen_pct) {
 }
 
 export async function apiPublicarPrecios(payload) {
-  // Asegura: origen: 'mercaderia', solo nombre y precio por producto.
-  // Sin unidad, sin categoria, sin combos. monto_minimo y mensaje_minimo son opcionales.
+  // Asegura: origen: 'mercaderia', enviando nombre, precio y disponible por producto.
+  // Preserva campos adicionales si el flujo completo los incluye (categoria, unidad, activo, combos, etc.)
   const rawProductos = Array.isArray(payload) ? payload : (payload?.productos || []);
-  const productos = rawProductos.map(p => ({
-    nombre: p.nombre,
-    precio: Number(p.precio) || 0,
-  }));
+  const productos = rawProductos.map(p => {
+    const item = {
+      nombre: p.nombre || p.producto,
+      precio: Number(p.precio) || 0,
+      disponible: p.disponible !== false,
+    };
+    if (p.categoria !== undefined) item.categoria = p.categoria;
+    if (p.unidad !== undefined) item.unidad = p.unidad;
+    if (p.activo !== undefined) item.activo = p.activo;
+    if (p.subcategoria !== undefined) item.subcategoria = p.subcategoria;
+    if (p.marca !== undefined) item.marca = p.marca;
+    return item;
+  });
 
   const params = {
     origen: 'mercaderia',
@@ -103,6 +112,12 @@ export async function apiPublicarPrecios(payload) {
     }
     if (payload.mensaje_minimo !== undefined && payload.mensaje_minimo !== null) {
       params.mensaje_minimo = String(payload.mensaje_minimo);
+    }
+    if (Array.isArray(payload.combos)) {
+      params.combos = payload.combos;
+    }
+    if (payload.origen) {
+      params.origen = payload.origen;
     }
   }
 

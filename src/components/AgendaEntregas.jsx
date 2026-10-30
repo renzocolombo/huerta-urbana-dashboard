@@ -1349,6 +1349,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
       // Prioridad 1: Coincidencia exacta de nombre
       let matchedItemIdx = -1;
       for (let i = 0; i < prepActual.items.length; i++) {
+        if (prepActual.items[i].sin_stock) continue;
         const itemNorm = norm(prepActual.items[i].nombre);
         if (itemNorm === nombreNorm) {
           const asignadas = prepActual.items[i].bolsasAsignadas?.length || 0;
@@ -1362,6 +1363,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
       // Prioridad 2: Coincidencia parcial si no hubo exacta
       if (matchedItemIdx === -1) {
         for (let i = 0; i < prepActual.items.length; i++) {
+          if (prepActual.items[i].sin_stock) continue;
           const itemNorm = norm(prepActual.items[i].nombre);
           if (itemNorm.includes(nombreNorm) || nombreNorm.includes(itemNorm)) {
             const asignadas = prepActual.items[i].bolsasAsignadas?.length || 0;
@@ -1532,6 +1534,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     // Prioridad 1: Coincidencia exacta
     let matchedItemIdx = -1;
     for (let i = 0; i < prepActual.items.length; i++) {
+      if (prepActual.items[i].sin_stock) continue;
       const itemNorm = norm(prepActual.items[i].nombre);
       const prodNorm = matchedProd ? norm(matchedProd.nombre) : nombreEscaneado;
       if (itemNorm === prodNorm || itemNorm === nombreEscaneado) {
@@ -1543,6 +1546,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     // Prioridad 2: Coincidencia parcial si no hubo exacta
     if (matchedItemIdx === -1) {
       for (let i = 0; i < prepActual.items.length; i++) {
+        if (prepActual.items[i].sin_stock) continue;
         const itemNorm = norm(prepActual.items[i].nombre);
         const prodNorm = matchedProd ? norm(matchedProd.nombre) : nombreEscaneado;
         if (itemNorm.includes(prodNorm) || prodNorm.includes(itemNorm) ||
@@ -1620,13 +1624,16 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     try {
       // 1. Armar detalle_json con producto, cantidad_real, precio_unitario congelado y subtotal
       const detalle = prep.items.map(it => {
-        const bolsas = it.bolsasAsignadas || [];
+        const esSinStock = Boolean(it.sin_stock);
+        const bolsas = esSinStock ? [] : (it.bolsasAsignadas || []);
         const esUnidad = it.esUnidad || it.slot === 'unidades';
-        const cantReal = esUnidad 
-          ? bolsas.length 
-          : Number(bolsas.reduce((acc, b) => acc + (Number(b.peso) || 0), 0).toFixed(3));
+        const cantReal = esSinStock 
+          ? 0 
+          : (esUnidad 
+              ? bolsas.length 
+              : Number(bolsas.reduce((acc, b) => acc + (Number(b.peso) || 0), 0).toFixed(3)));
         const precioUnit = obtenerPrecioCongelado(it.nombre);
-        const subtotal = Math.round(cantReal * precioUnit);
+        const subtotal = esSinStock ? 0 : Math.round(cantReal * precioUnit);
         return {
           producto: it.nombre,
           nombre: it.nombre,
@@ -1635,9 +1642,19 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
           cantidad: cantReal,
           precio_unitario: precioUnit,
           precio_unit: precioUnit,
-          subtotal
+          subtotal,
+          sin_stock: esSinStock
         };
       });
+
+      // Si el pedido fue pagado online (estado_pago approved) y el total bajó:
+      // mostrar aviso al armador (sin inventar reembolso automático)
+      const esPagoOnlineApproved = String(pedido.estado_pago || '').toLowerCase() === 'approved';
+      const totalOriginal = Math.round(Number(pedido.total || 0));
+      const totalNuevo = Math.round(detalle.reduce((acc, it) => acc + (it.sin_stock ? 0 : (Number(it.subtotal) || 0)), 0));
+      if (esPagoOnlineApproved && totalNuevo < totalOriginal) {
+        alert(`Aviso al armador:\nEl pedido fue pagado online. El total bajó de $${totalOriginal.toLocaleString('es-AR')} a $${totalNuevo.toLocaleString('es-AR')}.\nQueda un saldo a favor de $${(totalOriginal - totalNuevo).toLocaleString('es-AR')} para el cliente.`);
+      }
 
       // 2. Guardar detalle_json congelado en el Sheet
       const resDetalle = await apiSetDetallePedido({ numero_pedido: numPedido, detalle_json: detalle });
@@ -1655,6 +1672,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
       await apiGuardarPreparacion({ numero_pedido: numPedido, preparacion: prepFinal });
 
       const itemsPesadas = prep.items.map(it => {
+        if (it.sin_stock) return { producto: it.nombre, cantidad_real: 0, sin_stock: true };
         const bolsas = it.bolsasAsignadas || [];
         let cant = 0;
         if (it.esUnidad || it.slot === 'unidades') cant = bolsas.length;
@@ -1974,6 +1992,38 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
         items[itemIdx] = { ...items[itemIdx], bolsasAsignadas: nuevasBolsas };
       }
       const todosCompletos = items.length > 0 && items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
+      const nuevaPrep = { ...prep, items, completado: todosCompletos };
+      sincronizarPesadasSheet(numPedido, nuevaPrep);
+      return { ...prev, [numPedido]: nuevaPrep };
+    });
+  }, [revertirStockBolsa, sincronizarPesadasSheet]);
+
+  // Quitar / Restaurar producto por falta de stock durante el armado
+  const marcarItemSinStock = useCallback((numPedido, itemIdx, sinStock = true) => {
+    setPreparaciones(prev => {
+      const prep = { ...prev[numPedido] };
+      if (!prep || !prep.items || !prep.items[itemIdx]) return prev;
+      const items = [...prep.items];
+      const it = items[itemIdx];
+
+      if (sinStock) {
+        // Revertir bolsas y stock asignado previamente a este producto
+        (it.bolsasAsignadas || []).forEach(bolsa => revertirStockBolsa(bolsa));
+        items[itemIdx] = {
+          ...it,
+          sin_stock: true,
+          bolsasAsignadas: []
+        };
+      } else {
+        // Deshacer (restaurar)
+        items[itemIdx] = {
+          ...it,
+          sin_stock: false
+        };
+      }
+
+      const itemsActivos = items.filter(i => !i.sin_stock);
+      const todosCompletos = itemsActivos.length > 0 && itemsActivos.every(i => (i.bolsasAsignadas?.length || 0) >= i.cantidad);
       const nuevaPrep = { ...prep, items, completado: todosCompletos };
       sincronizarPesadasSheet(numPedido, nuevaPrep);
       return { ...prev, [numPedido]: nuevaPrep };
@@ -4158,10 +4208,18 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
         const mp = modalPreparacion.pedido;
         const numPedido = mp.numero_pedido;
         const prep = preparaciones[numPedido];
-        const todosCompletos = prep?.completado || false;
         const items = prep?.items || [];
-        const todosChequeados = items.length > 0 && items.every((_, idx) => !!checksPorPedido[numPedido]?.[idx]);
-        const cantChequeados = items.filter((_, idx) => !!checksPorPedido[numPedido]?.[idx]).length;
+        const itemsActivos = items.filter(it => !it.sin_stock);
+        const todosCompletos = itemsActivos.length > 0 && itemsActivos.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
+        const todosChequeados = items.length > 0 && items.every((it, idx) => it.sin_stock || !!checksPorPedido[numPedido]?.[idx]);
+        const cantChequeados = items.filter((it, idx) => !it.sin_stock && !!checksPorPedido[numPedido]?.[idx]).length;
+
+        // Aviso si el pedido fue pagado online y el total bajó por productos quitados
+        const esPagoOnlineApproved = String(mp.estado_pago || '').toLowerCase() === 'approved';
+        const totalOriginal = Math.round(Number(mp.total || 0));
+        const totalActual = calcularTotalDetalle(mp, prep);
+        const bajóTotal = totalActual < totalOriginal;
+        const saldoAFavor = Math.max(0, totalOriginal - totalActual);
 
         // Feed de bolsas escaneadas en orden cronológico (todas las bolsas de todos los items)
         const feedBolsas = items
@@ -4190,7 +4248,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                 {/* Progreso */}
                 <div className="hidden sm:flex items-center gap-2 bg-black/40 border border-white/10 rounded-xl px-3 py-1.5">
                   <div className="flex gap-1">
-                    {items.map((item, i) => (
+                    {itemsActivos.map((item, i) => (
                       <div
                         key={i}
                         className={`w-2 h-2 rounded-full transition-all duration-300 ${
@@ -4202,7 +4260,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                     ))}
                   </div>
                   <span className="text-gray-400 text-xs font-mono">
-                    {items.filter(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad).length}/{items.length}
+                    {itemsActivos.filter(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad).length}/{itemsActivos.length}
                   </span>
                 </div>
                 <button
@@ -4214,6 +4272,19 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                 </button>
               </div>
             </div>
+
+            {/* Aviso para el armador si el pedido fue pagado online y el total bajó */}
+            {esPagoOnlineApproved && bajóTotal && (
+              <div className="mx-6 mt-3 px-4 py-2.5 rounded-2xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs flex items-center justify-between shrink-0 animate-in slide-in-from-top-1">
+                <span className="font-bold flex items-center gap-2">
+                  <AlertTriangle size={16} className="text-amber-400 shrink-0" />
+                  El total bajó de ${totalOriginal.toLocaleString('es-AR')} a ${totalActual.toLocaleString('es-AR')}: queda saldo a favor de ${saldoAFavor.toLocaleString('es-AR')} para el cliente.
+                </span>
+                <span className="text-[10px] text-amber-300/80 bg-amber-500/20 px-2 py-0.5 rounded-lg border border-amber-500/30 font-mono">
+                  Pago online aprobado
+                </span>
+              </div>
+            )}
 
             {/* ── INPUT DE ESCANEO Y AVISOS ── */}
             <div className="px-6 py-3 bg-[#0d1117] border-b border-white/5 shrink-0">
@@ -4263,23 +4334,16 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                 </div>
               )}
               {syncNotice && (
-                <div className={`flex items-center gap-2 max-w-2xl mx-auto mt-2 px-3 py-2 rounded-xl border animate-in slide-in-from-top-1 duration-200 ${
-                  syncNotice.tipo === 'retrying'
-                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
-                    : syncNotice.tipo === 'error'
-                    ? 'bg-red-500/15 border-red-500/40 text-red-300'
-                    : 'bg-green-500/15 border-green-500/30 text-green-300'
-                }`}>
-                  <AlertTriangle size={13} className={syncNotice.tipo === 'retrying' ? 'animate-pulse text-amber-400 shrink-0' : 'text-current shrink-0'} />
-                  <p className="text-xs font-bold">{syncNotice.mensaje}</p>
+                <div className="flex items-center gap-2 max-w-2xl mx-auto mt-2 px-3 py-2 bg-blue-500/10 border border-blue-500/20 rounded-xl animate-in slide-in-from-top-1 duration-200">
+                  <Clock size={13} className="text-blue-400 shrink-0" />
+                  <p className="text-blue-400 text-xs font-mono">{syncNotice}</p>
                 </div>
               )}
             </div>
 
-            {/* ── CUERPO 2 COLUMNAS ── */}
-            <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-0 overflow-hidden">
-
-              {/* ── COL IZQUIERDA: Lista de Control del Pedido (Requisito 6) ── */}
+            {/* ── CONTENIDO PRINCIPAL: DOS COLUMNAS O LISTA ── */}
+            <div className="flex-1 grid grid-cols-1 md:grid-cols-2 overflow-hidden min-h-0">
+              {/* COLUMNA 1: LISTA DE PRODUCTOS Y CHECKS */}
               <div className="flex flex-col border-r border-white/5 overflow-hidden">
                 <div className="px-5 py-3 border-b border-white/5 bg-[#111827]/50 shrink-0 flex items-center justify-between">
                   <div>
@@ -4289,10 +4353,10 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                   <button
                     type="button"
                     onClick={() => {
-                      const allChecked = items.every((_, i) => !!checksPorPedido[numPedido]?.[i]);
+                      const allChecked = items.every((it, i) => it.sin_stock || !!checksPorPedido[numPedido]?.[i]);
                       setChecksPorPedido(prev => {
                         const pedChecks = {};
-                        items.forEach((_, i) => { pedChecks[i] = !allChecked; });
+                        items.forEach((it, i) => { if (!it.sin_stock) pedChecks[i] = !allChecked; });
                         return { ...prev, [numPedido]: pedChecks };
                       });
                     }}
@@ -4307,20 +4371,23 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                     <div className="text-center text-gray-600 text-xs italic py-8">Sin productos en el pedido</div>
                   )}
                   {items.map((item, idx) => {
+                    const esSinStock = Boolean(item.sin_stock);
                     const bolsas = item.bolsasAsignadas || [];
-                    const completo = bolsas.length >= item.cantidad;
-                    const parcial = bolsas.length > 0 && !completo;
+                    const completo = !esSinStock && bolsas.length >= item.cantidad;
+                    const parcial = !esSinStock && bolsas.length > 0 && !completo;
                     const esUnidad = item.esUnidad || item.slot === 'unidades';
                     const pesoReal = bolsas.reduce((s, b) => s + (Number(b.peso) || 0), 0);
                     const pesoPedido = item.pesoSolicitado ? item.pesoSolicitado * item.cantidad : null;
                     const diff = (!esUnidad && pesoPedido && pesoReal > 0) ? Math.round((pesoReal - pesoPedido) * 1000) / 1000 : null;
-                    const isChecked = !!checksPorPedido[numPedido]?.[idx];
+                    const isChecked = esSinStock ? true : !!checksPorPedido[numPedido]?.[idx];
 
                     return (
                       <div
                         key={idx}
                         className={`rounded-2xl border p-4 transition-all duration-300 ${
-                          isChecked
+                          esSinStock
+                            ? 'bg-red-950/20 border-red-900/30 opacity-75'
+                            : isChecked
                             ? 'bg-green-500/10 border-green-500/40 shadow-[0_0_20px_rgba(34,197,94,0.08)]'
                             : completo
                             ? 'bg-green-500/5 border-green-500/20'
@@ -4332,26 +4399,37 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
                             {/* Checkbox de control individual */}
-                            <button
-                              type="button"
-                              onClick={() => toggleCheckItem(numPedido, idx)}
-                              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border transition-all cursor-pointer ${
-                                isChecked
-                                  ? 'bg-green-500 text-white border-green-400 shadow-[0_0_12px_rgba(34,197,94,0.5)]'
-                                  : 'bg-white/5 border-white/10 text-gray-500 hover:text-gray-300 hover:border-gray-500'
-                              }`}
-                              title={isChecked ? 'Controlado (clic para desmarcar)' : 'Marcar como controlado'}
-                            >
-                              {isChecked ? <Check size={18} /> : <Square size={16} />}
-                            </button>
+                            {!esSinStock ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleCheckItem(numPedido, idx)}
+                                className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border transition-all cursor-pointer ${
+                                  isChecked
+                                    ? 'bg-green-500 text-white border-green-400 shadow-[0_0_12px_rgba(34,197,94,0.5)]'
+                                    : 'bg-white/5 border-white/10 text-gray-500 hover:text-gray-300 hover:border-gray-500'
+                                }`}
+                                title={isChecked ? 'Controlado (clic para desmarcar)' : 'Marcar como controlado'}
+                              >
+                                {isChecked ? <Check size={18} /> : <Square size={16} />}
+                              </button>
+                            ) : (
+                              <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-red-500/10 border border-red-500/30 text-red-400" title="Producto quitado por falta de stock">
+                                <X size={18} />
+                              </div>
+                            )}
 
                             <div>
                               <div className="flex items-center gap-2">
                                 <p className={`text-sm font-bold uppercase tracking-wide transition-colors ${
-                                  isChecked ? 'text-green-300' : completo ? 'text-white' : 'text-gray-400'
+                                  esSinStock ? 'text-red-400 line-through' : isChecked ? 'text-green-300' : completo ? 'text-white' : 'text-gray-400'
                                 }`}>
                                   {item.nombre}
                                 </p>
+                                {esSinStock && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-red-600/30 text-red-300 border border-red-500/40">
+                                    Sin stock
+                                  </span>
+                                )}
                                 {item.esExtra && (
                                   <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center gap-1">
                                     <Sparkles size={9} /> Extra
@@ -4359,20 +4437,50 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                                 )}
                               </div>
                               <p className="text-[11px] text-gray-400 font-mono mt-0.5">
-                                Solicitado: <span className="text-gray-300 font-bold">{item.cantidad} {esUnidad ? (item.cantidad === 1 ? 'unidad' : 'unidades') : (item.cantidad === 1 ? 'bolsa' : 'bolsas')}</span>
-                                {(!esUnidad && pesoPedido) ? ` · ${pesoPedido.toFixed(3)} kg` : ''}
-                                {obtenerPrecioCongelado(item.nombre) <= 0 && (
-                                  <span className="ml-2 text-amber-400 font-sans font-semibold text-[10px] bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
-                                    ⚠️ Sin precio en catálogo
+                                {esSinStock ? (
+                                  <span className="text-red-400/90 font-medium font-sans">
+                                    🚫 Quitado por falta de stock (no se entrega ni se cobra)
                                   </span>
+                                ) : (
+                                  <>
+                                    Solicitado: <span className="text-gray-300 font-bold">{item.cantidad} {esUnidad ? (item.cantidad === 1 ? 'unidad' : 'unidades') : (item.cantidad === 1 ? 'bolsa' : 'bolsas')}</span>
+                                    {(!esUnidad && pesoPedido) ? ` · ${pesoPedido.toFixed(3)} kg` : ''}
+                                    {obtenerPrecioCongelado(item.nombre) <= 0 && (
+                                      <span className="ml-2 text-amber-400 font-sans font-semibold text-[10px] bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                                        ⚠️ Sin precio en catálogo
+                                      </span>
+                                    )}
+                                  </>
                                 )}
                               </p>
+                              {/* Botón Quitar por Sin Stock */}
+                              {!esSinStock && (
+                                <button
+                                  type="button"
+                                  onClick={() => marcarItemSinStock(numPedido, idx, true)}
+                                  className="mt-1 px-2 py-0.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/25 text-red-400 hover:text-red-300 text-[10px] font-bold transition-all cursor-pointer inline-flex items-center gap-1"
+                                  title="Quitar producto del pedido por falta de stock"
+                                >
+                                  <X size={11} />
+                                  <span>Quitar (sin stock)</span>
+                                </button>
+                              )}
                             </div>
                           </div>
 
-                          {/* Peso o cantidad armada + diferencia */}
+                          {/* Peso o cantidad armada + botón Deshacer si es sin_stock */}
                           <div className="text-right shrink-0">
-                            {(esUnidad ? bolsas.length > 0 : pesoReal > 0) ? (
+                            {esSinStock ? (
+                              <button
+                                type="button"
+                                onClick={() => marcarItemSinStock(numPedido, idx, false)}
+                                className="px-3 py-1.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs font-bold border border-gray-700 hover:border-gray-600 transition-all cursor-pointer flex items-center gap-1"
+                                title="Restaurar producto al pedido"
+                              >
+                                <RotateCcw size={12} />
+                                <span>Deshacer</span>
+                              </button>
+                            ) : (esUnidad ? bolsas.length > 0 : pesoReal > 0) ? (
                               <>
                                 <p className="text-green-400 font-mono text-sm font-bold">
                                   {esUnidad ? `${bolsas.length} ud${bolsas.length !== 1 ? 's' : ''}` : `${pesoReal.toFixed(3)} kg`}
@@ -4562,11 +4670,11 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                 <div className="text-xs">
                   {todosChequeados ? (
                     <span className="text-green-400 font-bold flex items-center gap-1.5">
-                      <CheckCircle size={15} /> Lista de control completa ({items.length}/{items.length})
+                      <CheckCircle size={15} /> Lista de control completa ({itemsActivos.length}/{itemsActivos.length})
                     </span>
                   ) : (
                     <span className="text-amber-400 font-semibold flex items-center gap-1.5">
-                      <AlertCircle size={15} /> Tildá la lista de control para habilitar ({cantChequeados}/{items.length})
+                      <AlertCircle size={15} /> Tildá la lista de control para habilitar ({cantChequeados}/{itemsActivos.length})
                     </span>
                   )}
                 </div>

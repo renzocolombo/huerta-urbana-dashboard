@@ -7,6 +7,7 @@ import {
   resolverPrecioUnitario
 } from '../src/utils/totalesPedido.js';
 import { apiLiberarCredito, apiGetEstadoCreditoPedidos } from '../src/utils/mercaderiaApi.js';
+import { obtenerPesosReales } from '../src/utils/remitoPrinter.js';
 
 console.log('==================================================================');
 console.log('PRUEBAS UNITARIAS FASE 2: CRÉDITO DE REFERIDOS Y MONTO AL COBRAR');
@@ -316,6 +317,78 @@ test('9.1 Agenda, Pedidos del día y Modal obtienen exactamente el mismo monto',
   assert.strictEqual(montoModal, 20000);
   assert.strictEqual(montoAgenda, montoPedidosDelDia);
   assert.strictEqual(montoAgenda, montoModal);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// 10. TEST DE INTEGRACIÓN: PEDIDO ARMADO CON ÍTEM SIN STOCK, CRÉDITO Y CUPÓN
+// ────────────────────────────────────────────────────────────────────────────
+test('10.1 Pedido armado con ítem sin_stock, crédito usado y cupón: monto exacto en Agenda y Pedidos del día', () => {
+  // Ítems:
+  // - Papa Cepillada: 2 kg x $3.000 = $6.000 (con stock)
+  // - Manzana Roja: 1 kg x $5.000 = $5.000 (con stock)
+  // - Palta Hass: 1 kg x $8.000 = $8.000 (sin_stock: true -> debe excluirse)
+  // Suma ítems con stock = $11.000
+  // Cupón 10% (BIENVENIDO10) = $1.100
+  // Crédito usado = $2.000
+  // Descuentos = $3.100
+  // Monto final = $11.000 - $3.100 = $7.900 (nunca 0)
+  const pedido = {
+    numero_pedido: 'HU-INTEG-01',
+    nombre: 'Cliente Integración',
+    total: 19000,
+    cupon_bienvenida_estado: 'BIENVENIDO10',
+    credito_usado: '2000',
+    detalle_json: JSON.stringify([
+      { producto: 'Papa Cepillada', cantidad_real: 2, precio_unitario: 3000, subtotal: 6000, sin_stock: false },
+      { producto: 'Manzana Roja', cantidad_real: 1, precio_unitario: 5000, subtotal: 5000 },
+      { producto: 'Palta Hass', cantidad_real: 1, precio_unitario: 8000, subtotal: 8000, sin_stock: true }
+    ])
+  };
+
+  const resultadoTotal = calcularTotalPedido(pedido);
+  assert.strictEqual(resultadoTotal.subtotalPesado, 11000, 'Subtotal debe excluir el ítem sin_stock');
+  assert.strictEqual(resultadoTotal.descuentos, 3100, 'Descuentos: $1.100 cupón + $2.000 crédito');
+  assert.strictEqual(resultadoTotal.monto, 7900, 'Monto a cobrar debe ser 11000 - 3100 = 7900');
+  assert.strictEqual(resultadoTotal.esEstimado, false, 'Pedido armado con precios válidos no es estimado');
+
+  // En AgendaEntregas:
+  // calcularTotalDetalle = (p, prep) => calcularTotalPedido(p, prep, { obtenerPrecioCongelado }).monto
+  const montoAgenda = calcularTotalPedido(pedido).monto;
+
+  // En PedidosDelDia:
+  // const infoCobro = calcularTotalPedido(p, prep);
+  const montoPedidosDelDia = calcularTotalPedido(pedido).monto;
+
+  // En helper compartido:
+  const montoHelper = obtenerMontoACobrar(pedido);
+
+  assert.strictEqual(montoAgenda, 7900);
+  assert.strictEqual(montoPedidosDelDia, 7900);
+  assert.strictEqual(montoHelper, 7900);
+  assert.strictEqual(montoAgenda, montoPedidosDelDia, 'Monto debe ser idéntico en Agenda y Pedidos del día');
+
+  // Remito también excluye sin_stock y calcula idéntico monto
+  const remitoData = obtenerPesosReales(pedido);
+  assert.strictEqual(remitoData.items.length, 2, 'Remito debe contener solo los 2 ítems con stock');
+  assert.strictEqual(remitoData.totalACobrar, 7900, 'Remito total a cobrar debe ser 7900');
+});
+
+test('10.2 Si descuentos cubren 100% de los ítems con stock, el monto es 0 legítimo', () => {
+  const pedido = {
+    numero_pedido: 'HU-INTEG-02',
+    total: 10000,
+    credito_usado: '15000', // mayor al subtotal con stock
+    detalle_json: JSON.stringify([
+      { producto: 'Papa Cepillada', cantidad_real: 2, precio_unitario: 3000, subtotal: 6000 },
+      { producto: 'Palta Hass', cantidad_real: 1, precio_unitario: 8000, subtotal: 8000, sin_stock: true }
+    ])
+  };
+
+  const calc = calcularTotalPedido(pedido);
+  assert.strictEqual(calc.subtotalPesado, 6000);
+  assert.strictEqual(calc.monto, 0, 'Debe ser 0 porque crédito cubre el total');
+  assert.strictEqual(calc.esEstimado, false, 'Es 0 legítimo, no estimado');
+  assert.strictEqual(obtenerMontoACobrar(pedido), 0);
 });
 
 console.log(`\n==================================================================`);
