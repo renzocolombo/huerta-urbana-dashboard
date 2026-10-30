@@ -10,7 +10,7 @@ import {
 } from '../utils/mercaderiaApi';
 import { useBalanzaSystel } from '../utils/balanzaSystel';
 import { getEanMapping, esCodigoEan } from '../data/productUtils';
-import { determinarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
+import { determinarTipoCaptura, analizarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
 
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
@@ -214,10 +214,13 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
   const saldoActual = Number(datosHogar?.saldo || 0);
 
   // Tipo de captura del producto activo según catálogo y EAN
-  const tipoCapturaActivo = useMemo(() => {
+  const analisisCapturaActivo = useMemo(() => {
     if (!productoActivo) return null;
-    return determinarTipoCaptura(productoActivo, productos);
+    return analizarTipoCaptura(productoActivo, productos);
   }, [productoActivo, productos]);
+
+  const tipoCapturaActivo = analisisCapturaActivo?.tipo || null;
+  const deducidoPorNombreActivo = Boolean(analisisCapturaActivo?.deducidoPorNombre);
 
   const esPesable = tipoCapturaActivo === TIPOS_CAPTURA.PESABLE;
   const esUnidadManual = tipoCapturaActivo === TIPOS_CAPTURA.UNIDAD_MANUAL;
@@ -257,16 +260,20 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
     setMensajeError(null);
     setMensajeExito(null);
 
-    // Formato exacto v19 del servidor: { producto, kg } para pesables, { producto, unidades, ean } para almacén/unidades
+    // Formato exacto v19 del servidor:
+    // - Almacén por unidad (con código de barras): { producto, unidades, ean }
+    // - Kilos o verduras por unidad o atado (choclo, perejil, etc.): { producto, kg }
     const itemsPayload = [{
       producto: productoActivo.producto,
-      ...(esPesable
-        ? { kg: Number(cantidadFinal) }
-        : {
+      ...(esAlmacenEan
+        ? {
             unidades: Math.round(Number(cantidadFinal)),
             ...((eanEscaneado || productoActivo.ean || productoActivo.barcode)
               ? { ean: String(eanEscaneado || productoActivo.ean || productoActivo.barcode).trim() }
               : {})
+          }
+        : {
+            kg: Number(cantidadFinal)
           }
       )
     }];
@@ -517,6 +524,14 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
                   ✕ Cancelar
                 </button>
               </div>
+
+              {/* Aviso si el tipo fue deducido por nombre */}
+              {deducidoPorNombreActivo && (
+                <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-bold flex items-center gap-2">
+                  <span>⚠️</span>
+                  <span>Tipo deducido por nombre: revisar la unidad en el catálogo</span>
+                </div>
+              )}
 
               {/* TIPO A: PESABLES (kg) -> Balanza Systel en vivo */}
               {esPesable ? (

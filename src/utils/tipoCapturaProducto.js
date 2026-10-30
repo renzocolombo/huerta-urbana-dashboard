@@ -30,31 +30,45 @@ const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u
  * @param {Object} [catalogoRef] - Diccionario opcional de productos para fallback de unidad/ean
  * @returns {'PESABLE'|'UNIDAD_MANUAL'|'ALMACEN_EAN'}
  */
-export function determinarTipoCaptura(item, catalogoRef = null) {
-  if (!item) return TIPOS_CAPTURA.PESABLE;
+// Lista de respaldo para detección de Tipo B por nombre (solo cuando el catálogo no especifica unidad de unidad/atado)
+export const PALABRAS_RESPALDO_NOMBRE_TIPO_B = [
+  'choclo', 'lechuga', 'perejil', 'rabanito', 'verdeo', 
+  'albahaca', 'rucula', 'ciboulette', 'radicheta', 'acelga', 
+  'espinaca', 'apio', 'puerro'
+];
+
+/**
+ * Analiza exhaustivamente el tipo de captura de un producto o ítem.
+ * Prioriza siempre la unidad del catálogo; la lista de nombres es solo respaldo.
+ * 
+ * @param {Object} item - Producto del catálogo o ítem del pedido
+ * @param {Object} [catalogoRef] - Diccionario opcional de productos para fallback de unidad/ean
+ * @returns {{ tipo: 'PESABLE'|'UNIDAD_MANUAL'|'ALMACEN_EAN', deducidoPorNombre: boolean, aviso: string | null }}
+ */
+export function analizarTipoCaptura(item, catalogoRef = null) {
+  if (!item) {
+    return { tipo: TIPOS_CAPTURA.PESABLE, deducidoPorNombre: false, aviso: null };
+  }
 
   const nombre = String(item.nombre || item.producto || '').trim();
   const nombreNorm = norm(nombre);
 
   // 1. TIPO C: ALMACÉN CON CÓDIGO DE BARRAS (EAN)
-  // Verificar si tiene EAN explícito en el objeto
   const eanDirecto = item.ean || item.barcode || item.codigo_barras;
   if (eanDirecto && String(eanDirecto).trim().length >= 7) {
-    return TIPOS_CAPTURA.ALMACEN_EAN;
+    return { tipo: TIPOS_CAPTURA.ALMACEN_EAN, deducidoPorNombre: false, aviso: null };
   }
 
-  // Verificar si está registrado en el mapa de códigos EAN de almacén
   try {
     const eanMap = getEanMapping();
     if (eanMap && typeof eanMap === 'object') {
       const matchEan = Object.values(eanMap).some(m => norm(m?.nombre) === nombreNorm);
       if (matchEan) {
-        return TIPOS_CAPTURA.ALMACEN_EAN;
+        return { tipo: TIPOS_CAPTURA.ALMACEN_EAN, deducidoPorNombre: false, aviso: null };
       }
     }
   } catch (e) {}
 
-  // Si se proveyó catálogo de apoyo, consultar si ese producto tiene EAN
   let unidadCatalogo = null;
   if (catalogoRef) {
     let prodCat = null;
@@ -70,49 +84,62 @@ export function determinarTipoCaptura(item, catalogoRef = null) {
     }
     if (prodCat) {
       if (prodCat.ean && String(prodCat.ean).trim().length >= 7) {
-        return TIPOS_CAPTURA.ALMACEN_EAN;
+        return { tipo: TIPOS_CAPTURA.ALMACEN_EAN, deducidoPorNombre: false, aviso: null };
       }
       unidadCatalogo = prodCat.unidad;
     }
   }
 
-  // 2. TIPO B: POR UNIDAD O POR ATADO SIN CÓDIGO DE BARRAS
-  // Resolver unidad del ítem o del catálogo
-  let unidad = String(item.unidad || unidadCatalogo || '').toLowerCase().trim();
+  // 2. TIPO B: POR UNIDAD O ATADO (PRIMERO: UNIDAD DEL CATÁLOGO)
+  const unidadPropia = String(item.unidad || unidadCatalogo || '').toLowerCase().trim();
 
-  // Detección por texto si no vino explícito en las propiedades
-  if (!unidad) {
-    if (/\b(atados?)\b/i.test(nombreNorm)) {
-      unidad = 'atado';
-    } else if (/\b(unidad|unidades|un|choclo|lechuga|perejil|albahaca|rucula|ciboulette|radicheta|verdeo|acelga|espinaca atado|apio|puerro)\b/i.test(nombreNorm) && !/\b(kg|kilos?)\b/i.test(nombreNorm)) {
-      // Verduras típicas vendidas por atado o unidad cuando no especifican kg
-      if (/\b(perejil|albahaca|rucula|ciboulette|radicheta|verdeo|acelga)\b/i.test(nombreNorm)) {
-        unidad = 'atado';
-      } else {
-        unidad = 'unidad';
-      }
+  const esUnidadOAtadoCatalogo = (
+    unidadPropia === 'atado' ||
+    unidadPropia === 'atados' ||
+    unidadPropia === 'unidad' ||
+    unidadPropia === 'unidades' ||
+    unidadPropia === 'un' ||
+    unidadPropia === 'u' ||
+    unidadPropia === 'paquete' ||
+    unidadPropia === 'paquetes' ||
+    unidadPropia === 'bandeja' ||
+    unidadPropia === 'bandejas' ||
+    unidadPropia === 'maple' ||
+    unidadPropia === 'docena'
+  );
+
+  if (esUnidadOAtadoCatalogo) {
+    return { tipo: TIPOS_CAPTURA.UNIDAD_MANUAL, deducidoPorNombre: false, aviso: null };
+  }
+
+  // 3. RESPALDO POR NOMBRE: solo si la unidad en catálogo no es kg explícito y coincide con la lista
+  const esKgExplicito = unidadPropia === 'kg' || unidadPropia === 'kilo' || unidadPropia === 'kilos';
+  
+  if (!esKgExplicito) {
+    const regexRespaldo = new RegExp(`\\b(${PALABRAS_RESPALDO_NOMBRE_TIPO_B.join('|')})\\b`, 'i');
+    if (regexRespaldo.test(nombreNorm)) {
+      return {
+        tipo: TIPOS_CAPTURA.UNIDAD_MANUAL,
+        deducidoPorNombre: true,
+        aviso: 'Tipo deducido por nombre: revisar la unidad en el catálogo'
+      };
     }
   }
 
-  const esUnidadOAtado = (
-    unidad === 'atado' ||
-    unidad === 'atados' ||
-    unidad === 'unidad' ||
-    unidad === 'unidades' ||
-    unidad === 'un' ||
-    unidad === 'u' ||
-    unidad === 'paquete' ||
-    unidad === 'bandeja' ||
-    unidad === 'maple' ||
-    unidad === 'docena'
-  );
+  // 4. TIPO A: PESABLES (por defecto todo lo que es 'kg' o verdura/fruta pesable)
+  return { tipo: TIPOS_CAPTURA.PESABLE, deducidoPorNombre: false, aviso: null };
+}
 
-  if (esUnidadOAtado) {
-    return TIPOS_CAPTURA.UNIDAD_MANUAL;
-  }
-
-  // 3. TIPO A: PESABLES (por defecto todo lo que es 'kg' o verdura/fruta pesable)
-  return TIPOS_CAPTURA.PESABLE;
+/**
+ * Determina el tipo de captura de un producto o ítem de pedido.
+ * Retorna directamente el string del tipo ('PESABLE'|'UNIDAD_MANUAL'|'ALMACEN_EAN').
+ * 
+ * @param {Object} item - Producto del catálogo o ítem del pedido
+ * @param {Object} [catalogoRef] - Diccionario opcional de productos para fallback de unidad/ean
+ * @returns {'PESABLE'|'UNIDAD_MANUAL'|'ALMACEN_EAN'}
+ */
+export function determinarTipoCaptura(item, catalogoRef = null) {
+  return analizarTipoCaptura(item, catalogoRef).tipo;
 }
 
 /**

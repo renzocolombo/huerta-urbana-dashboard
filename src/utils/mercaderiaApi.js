@@ -180,16 +180,26 @@ export async function apiRegistrarSalidas({ tipo, items, nota, admin_pin, pin })
   const payload = {
     tipo,
     items: (items || []).map(it => {
-      const p = { producto: String(it.producto).trim() };
+      const prod = String(it.producto).trim();
+      // 1. Almacén por unidad (con código de barras): solo { producto, unidades, ean }
       if (it.unidades !== undefined && it.unidades !== null) {
-        p.unidades = Math.round(Number(it.unidades));
-        if (it.ean) p.ean = String(it.ean).trim();
-      } else if (it.kg !== undefined && it.kg !== null) {
-        p.kg = Number(it.kg);
-      } else if (it.cantidad !== undefined && it.cantidad !== null) {
-        p.kg = Number(it.cantidad);
+        const itemAlmacen = {
+          producto: prod,
+          unidades: Math.round(Number(it.unidades)),
+        };
+        if (it.ean) {
+          itemAlmacen.ean = String(it.ean).trim();
+        }
+        return itemAlmacen;
       }
-      return p;
+      // 2. Kilos o verduras por unidad/atado (choclo, perejil, etc.): solo { producto, kg }
+      const valorKg = it.kg !== undefined && it.kg !== null 
+        ? Number(it.kg) 
+        : Number(it.cantidad || 0);
+      return {
+        producto: prod,
+        kg: valorKg,
+      };
     }),
     ...(nota ? { nota: String(nota).trim() } : {}),
     ...(admin_pin ? { admin_pin: String(admin_pin).trim() } : {}),

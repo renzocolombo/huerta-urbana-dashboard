@@ -9,7 +9,7 @@ import {
 import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido, estaPedidoArmado } from '../utils/remitoPrinter';
 import { getEanMapping, esCodigoEan } from '../data/productUtils';
 import { useBalanzaSystel } from '../utils/balanzaSystel';
-import { determinarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
+import { determinarTipoCaptura, analizarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
 import { syncProductWithSheet } from '../utils/stockSync';
 import { 
   apiReservarPedido, 
@@ -4598,7 +4598,8 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                   {items.map((item, idx) => {
                     const esSinStock = Boolean(item.sin_stock);
                     const bolsas = item.bolsasAsignadas || [];
-                    const tipoCaptura = determinarTipoCaptura(item, stockDataRef.current);
+                    const analisisCaptura = analizarTipoCaptura(item, stockDataRef.current);
+                    const tipoCaptura = analisisCaptura.tipo;
                     const scans = item.scans || bolsas.length;
 
                     const completo = !esSinStock && (
@@ -4674,6 +4675,11 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                                 {tipoCaptura === TIPOS_CAPTURA.ALMACEN_EAN && (
                                   <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-blue-500/20 text-blue-300 border border-blue-500/30">
                                     🏷️ Almacén EAN
+                                  </span>
+                                )}
+                                {analisisCaptura.deducidoPorNombre && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30" title="Tipo deducido por nombre: revisar la unidad en el catálogo">
+                                    ⚠️ Tipo deducido por nombre: revisar la unidad en el catálogo
                                   </span>
                                 )}
                               </div>

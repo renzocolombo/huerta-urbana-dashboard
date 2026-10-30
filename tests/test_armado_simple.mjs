@@ -12,9 +12,12 @@
 import assert from 'node:assert';
 import { 
   determinarTipoCaptura, 
+  analizarTipoCaptura,
+  PALABRAS_RESPALDO_NOMBRE_TIPO_B,
   TIPOS_CAPTURA, 
   etiquetaUnidad 
 } from '../src/utils/tipoCapturaProducto.js';
+import { PRODUCT_DATABASE } from '../src/data/productUtils.js';
 import { 
   calcularTotalPedido, 
   obtenerMontoACobrar 
@@ -308,121 +311,169 @@ it('Al estar todos completos, se genera detalle congelado con pesos y unidades r
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. HOGAR CON LOS TRES TIPOS
+// 4. CONTRATO SERVIDOR V19: SIMULACIONES DE PAYLOAD DE SALIDAS (HOGAR / MERMA)
 // ─────────────────────────────────────────────────────────────────────────────
-console.log('\n--- 4. Consumo en Hogar con los Tres Tipos ---');
+console.log('\n--- 4. Contrato Servidor v19: Simulaciones de Payload de Salidas ---');
 
-it('Hogar Tipo A (Pesable): Balanza Systel en vivo 1.150 kg -> genera payload exacto en kg', () => {
-  const prodPesable = { producto: 'Tomate Perita', unidad: 'kg', costo_unitario: 800 };
-  const tipo = determinarTipoCaptura(prodPesable);
-  assert.strictEqual(tipo, TIPOS_CAPTURA.PESABLE);
+// Helper para emular la normalización estricta de apiRegistrarSalidas
+function formatearSalidaApi(items) {
+  return items.map(it => {
+    const prod = String(it.producto).trim();
+    const esAlmacen = Boolean(it.ean) || it.tipoCaptura === TIPOS_CAPTURA.ALMACEN_EAN || (it.unidades !== undefined && it.unidades !== null && it.kg === undefined);
 
-  const lecturaVivo = 1.150;
-  const payloadItem = {
-    producto: prodPesable.producto,
-    cantidad: Number(lecturaVivo),
-    kg: Number(lecturaVivo),
-    unidad: prodPesable.unidad
-  };
+    if (esAlmacen && (it.unidades !== undefined && it.unidades !== null)) {
+      const itemAlmacen = {
+        producto: prod,
+        unidades: Math.round(Number(it.unidades)),
+      };
+      if (it.ean) {
+        itemAlmacen.ean = String(it.ean).trim();
+      }
+      return itemAlmacen;
+    }
 
-  assert.strictEqual(payloadItem.cantidad, 1.150);
-  assert.strictEqual(payloadItem.kg, 1.150);
-  assert.strictEqual(payloadItem.unidad, 'kg');
+    const valorKg = it.kg !== undefined && it.kg !== null
+      ? Number(it.kg)
+      : (it.cantidad !== undefined && it.cantidad !== null ? Number(it.cantidad) : Number(it.unidades || 0));
+
+    return {
+      producto: prod,
+      kg: valorKg,
+    };
+  });
+}
+
+it('Tomate 1,150 kg -> genera { producto, kg: 1.15 } sin unidades, cantidad ni unidad', () => {
+  const itemEntrada = { producto: 'Tomate', kg: 1.150, unidad: 'kg' };
+  const itemsFormateados = formatearSalidaApi([itemEntrada]);
+  const item = itemsFormateados[0];
+
+  assert.deepStrictEqual(item, { producto: 'Tomate', kg: 1.15 });
+  assert.strictEqual('unidades' in item, false, 'No debe tener campo unidades');
+  assert.strictEqual('cantidad' in item, false, 'No debe tener campo cantidad');
+  assert.strictEqual('unidad' in item, false, 'No debe tener campo unidad');
 });
 
-it('Hogar Tipo B (Unidad manual): Perejil 2 atados -> genera payload entero en unidades', () => {
-  const prodAtado = { producto: 'Perejil', unidad: 'atado', costo_unitario: 250 };
-  const tipo = determinarTipoCaptura(prodAtado);
-  assert.strictEqual(tipo, TIPOS_CAPTURA.UNIDAD_MANUAL);
+it('Choclo 3 unidades (Tipo B verdura) -> genera { producto, kg: 3 } sin unidades, cantidad ni unidad', () => {
+  const itemEntrada = { producto: 'Choclo', kg: 3, unidad: 'unidad' };
+  const itemsFormateados = formatearSalidaApi([itemEntrada]);
+  const item = itemsFormateados[0];
 
-  const cantidadIngresada = 2;
-  const payloadItem = {
-    producto: prodAtado.producto,
-    cantidad: cantidadIngresada,
-    unidades: cantidadIngresada,
-    unidad: prodAtado.unidad
-  };
-
-  assert.strictEqual(payloadItem.cantidad, 2);
-  assert.strictEqual(payloadItem.unidades, 2);
-  assert.strictEqual(payloadItem.unidad, 'atado');
+  assert.deepStrictEqual(item, { producto: 'Choclo', kg: 3 });
+  assert.strictEqual('unidades' in item, false, 'Para verduras por unidad la cantidad va en kg para la hoja Stock');
+  assert.strictEqual('cantidad' in item, false, 'No debe tener campo cantidad');
+  assert.strictEqual('unidad' in item, false, 'No debe tener campo unidad');
 });
 
-it('Hogar Tipo C (Almacén EAN): Lata Choclo 3 unidades escaneadas -> genera payload entero en unidades', () => {
-  const prodEan = { producto: 'Choclo Lata', unidad: 'un', ean: '7790580123456', costo_unitario: 600 };
-  const tipo = determinarTipoCaptura(prodEan);
-  assert.strictEqual(tipo, TIPOS_CAPTURA.ALMACEN_EAN);
+it('Perejil 2 atados (Tipo B verdura) -> genera { producto, kg: 2 } sin unidades, cantidad ni unidad', () => {
+  const itemEntrada = { producto: 'Perejil', kg: 2, unidad: 'atado' };
+  const itemsFormateados = formatearSalidaApi([itemEntrada]);
+  const item = itemsFormateados[0];
 
-  const unidadesEscaneadas = 3;
-  const payloadItem = {
-    producto: prodEan.producto,
-    cantidad: unidadesEscaneadas,
-    unidades: unidadesEscaneadas,
-    unidad: prodEan.unidad
-  };
+  assert.deepStrictEqual(item, { producto: 'Perejil', kg: 2 });
+  assert.strictEqual('unidades' in item, false, 'Para verduras por atado la cantidad va en kg');
+  assert.strictEqual('cantidad' in item, false, 'No debe tener campo cantidad');
+  assert.strictEqual('unidad' in item, false, 'No debe tener campo unidad');
+});
 
-  assert.strictEqual(payloadItem.cantidad, 3);
-  assert.strictEqual(payloadItem.unidades, 3);
-  assert.strictEqual(payloadItem.unidad, 'un');
+it('Lata con EAN (Almacén) -> genera { producto, unidades: 2, ean } sin kg', () => {
+  const itemEntrada = { producto: 'Lata Choclo', unidades: 2, ean: '7790580123456', unidad: 'un' };
+  const itemsFormateados = formatearSalidaApi([itemEntrada]);
+  const item = itemsFormateados[0];
+
+  assert.deepStrictEqual(item, { producto: 'Lata Choclo', unidades: 2, ean: '7790580123456' });
+  assert.strictEqual('kg' in item, false, 'Almacén por unidad no debe llevar kg');
+  assert.strictEqual('cantidad' in item, false, 'No debe tener campo cantidad');
+  assert.strictEqual('unidad' in item, false, 'No debe tener campo unidad');
+});
+
+it('Consumo mixto: combina pesables, verduras por unidad/atado y almacén EAN', () => {
+  const entradaMixta = [
+    { producto: 'Tomate', kg: 1.150 },
+    { producto: 'Choclo', kg: 3 },
+    { producto: 'Perejil', kg: 2 },
+    { producto: 'Lata Choclo', unidades: 2, ean: '7790580123456' }
+  ];
+
+  const payload = formatearSalidaApi(entradaMixta);
+
+  assert.strictEqual(payload.length, 4);
+  assert.deepStrictEqual(payload[0], { producto: 'Tomate', kg: 1.15 });
+  assert.deepStrictEqual(payload[1], { producto: 'Choclo', kg: 3 });
+  assert.deepStrictEqual(payload[2], { producto: 'Perejil', kg: 2 });
+  assert.deepStrictEqual(payload[3], { producto: 'Lata Choclo', unidades: 2, ean: '7790580123456' });
+});
+
+it('Regla Dura: NINGÚN item puede tener simultáneamente kg y unidades', () => {
+  const itemsSueltos = [
+    { producto: 'Tomate', kg: 1.15, unidades: 1 }, // Caller mandó ambos por error
+    { producto: 'Choclo', kg: 3, unidades: 3 },    // Caller mandó ambos por error
+    { producto: 'Lata Choclo', unidades: 2, kg: 2, ean: '7790580123456' } // Almacén con ambos
+  ];
+
+  const payload = formatearSalidaApi(itemsSueltos);
+
+  payload.forEach((it, idx) => {
+    const tieneKg = 'kg' in it;
+    const tieneUnidades = 'unidades' in it;
+    assert.strictEqual(tieneKg && tieneUnidades, false, `Item ${idx} (${it.producto}) no debe tener ambos campos`);
+    assert.strictEqual(tieneKg || tieneUnidades, true, `Item ${idx} (${it.producto}) debe tener exactamente uno de los dos campos`);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5. MERMA (MODALSALIDA) CON LOS TRES TIPOS
+// 5. DETECCIÓN DE TIPO B POR CATÁLOGO PRIMERO Y RESPALDO POR NOMBRE
 // ─────────────────────────────────────────────────────────────────────────────
-console.log('\n--- 5. ModalSalida (Merma) con los Tres Tipos ---');
+console.log('\n--- 5. Detección de Tipo B: Catálogo Primero vs Respaldo por Nombre ---');
 
-it('Merma Tipo A (Pesable): Balanza Systel peso neto 0.350 kg -> descuenta 0.350 kg de merma', () => {
-  const prod = { producto: 'Tomate', unidad: 'kg', en_deposito: 10.0, costo_kg_ultimo: 700 };
-  assert.strictEqual(determinarTipoCaptura(prod), TIPOS_CAPTURA.PESABLE);
+it('Usa primero la unidad del catálogo: unidad o atado da deducidoPorNombre = false', () => {
+  const itemConUnidad = { producto: 'Perejil de Campo', unidad: 'atado' };
+  const analisis = analizarTipoCaptura(itemConUnidad);
 
-  const pesoNeto = 0.350;
-  const itemSalida = {
-    producto: prod.producto,
-    unidad: prod.unidad,
-    tipoCaptura: TIPOS_CAPTURA.PESABLE,
-    cantidad: pesoNeto,
-    kg: pesoNeto,
-    stock_actual: prod.en_deposito,
-    stock_resultante: Number((prod.en_deposito - pesoNeto).toFixed(3))
-  };
-
-  assert.strictEqual(itemSalida.stock_resultante, 9.650);
+  assert.strictEqual(analisis.tipo, TIPOS_CAPTURA.UNIDAD_MANUAL);
+  assert.strictEqual(analisis.deducidoPorNombre, false, 'No debe ser deducido por nombre si el catálogo tiene unidad');
+  assert.strictEqual(analisis.aviso, null);
 });
 
-it('Merma Tipo B (Unidad manual): Choclo 2 unidades mermadas -> descuenta 2 unidades', () => {
-  const prod = { producto: 'Choclo', unidad: 'unidad', en_deposito: 20, costo_kg_ultimo: 400 };
-  assert.strictEqual(determinarTipoCaptura(prod), TIPOS_CAPTURA.UNIDAD_MANUAL);
+it('Usa lista de nombres solo como respaldo y emite el aviso visible correspondiente', () => {
+  const itemSinUnidad = { producto: 'Perejil de Campo', unidad: '' };
+  const analisis = analizarTipoCaptura(itemSinUnidad);
 
-  const cantManual = 2;
-  const itemSalida = {
-    producto: prod.producto,
-    unidad: prod.unidad,
-    tipoCaptura: TIPOS_CAPTURA.UNIDAD_MANUAL,
-    cantidad: cantManual,
-    unidades: cantManual,
-    stock_actual: prod.en_deposito,
-    stock_resultante: prod.en_deposito - cantManual
-  };
-
-  assert.strictEqual(itemSalida.stock_resultante, 18);
+  assert.strictEqual(analisis.tipo, TIPOS_CAPTURA.UNIDAD_MANUAL);
+  assert.strictEqual(analisis.deducidoPorNombre, true, 'Debe marcarse como deducido por nombre');
+  assert.strictEqual(analisis.aviso, 'Tipo deducido por nombre: revisar la unidad en el catálogo');
 });
 
-it('Merma Tipo C (Almacén EAN): Lata 1 unidad mermada -> descuenta 1 unidad', () => {
-  const prod = { producto: 'Lata Choclo', unidad: 'un', ean: '7790580123456', en_deposito: 15, costo_kg_ultimo: 500 };
-  assert.strictEqual(determinarTipoCaptura(prod), TIPOS_CAPTURA.ALMACEN_EAN);
+it('Si la unidad es explícitamente "kg", NO cae en respaldo de Tipo B aunque el nombre coincida', () => {
+  const lechugaPesable = { producto: 'Lechuga Pesada', unidad: 'kg' };
+  const analisis = analizarTipoCaptura(lechugaPesable);
 
-  const cantEan = 1;
-  const itemSalida = {
-    producto: prod.producto,
-    unidad: prod.unidad,
-    tipoCaptura: TIPOS_CAPTURA.ALMACEN_EAN,
-    cantidad: cantEan,
-    unidades: cantEan,
-    stock_actual: prod.en_deposito,
-    stock_resultante: prod.en_deposito - cantEan
-  };
+  assert.strictEqual(analisis.tipo, TIPOS_CAPTURA.PESABLE);
+  assert.strictEqual(analisis.deducidoPorNombre, false);
+  assert.strictEqual(analisis.aviso, null);
+});
 
-  assert.strictEqual(itemSalida.stock_resultante, 14);
+it('Evalúa cuántos productos de PRODUCT_DATABASE caerían en el respaldo por nombre si carecen de unidad', () => {
+  const todasLasVerduras = [
+    ...(PRODUCT_DATABASE['hoja verde'] || []),
+    ...(PRODUCT_DATABASE['duro'] || []),
+    ...(PRODUCT_DATABASE['blando'] || []),
+    ...(PRODUCT_DATABASE['otros'] || [])
+  ];
+
+  const caerianEnRespaldo = todasLasVerduras.filter(prod => {
+    const analisis = analizarTipoCaptura({ producto: prod, unidad: '' });
+    return analisis.deducidoPorNombre;
+  });
+
+  // Lista exacta sin datos sensibles
+  console.log(`    Total productos de catálogo que caerían en respaldo (sin unidad): ${caerianEnRespaldo.length}`);
+  console.log(`    Lista: ${caerianEnRespaldo.join(', ')}`);
+
+  assert.strictEqual(caerianEnRespaldo.length, 10, 'Deben ser exactamente 10 verduras de la base de catálogo');
+  caerianEnRespaldo.forEach(p => {
+    assert.strictEqual(PALABRAS_RESPALDO_NOMBRE_TIPO_B.some(w => p.includes(w)), true);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -437,3 +488,4 @@ if (passedTests === totalTests) {
 } else {
   process.exit(1);
 }
+

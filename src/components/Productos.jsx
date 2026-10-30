@@ -17,7 +17,7 @@ import {
 } from '../utils/mercaderiaApi';
 import { BalanzaSystelSession, soportaWebSerial, useBalanzaSystel } from '../utils/balanzaSystel';
 import { getCategoriaPrincipal, getEanMapping } from '../data/productUtils';
-import { determinarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
+import { determinarTipoCaptura, analizarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
 import PedidoMinimoCard from './PedidoMinimoCard';
 
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -1280,10 +1280,13 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
   };
 
   // Tipo de captura del producto seleccionado
-  const tipoCaptura = useMemo(() => {
+  const analisisCaptura = useMemo(() => {
     if (!productoSeleccionado) return null;
-    return determinarTipoCaptura(productoSeleccionado, productosExistentes);
+    return analizarTipoCaptura(productoSeleccionado, productosExistentes);
   }, [productoSeleccionado, productosExistentes]);
+
+  const tipoCaptura = analisisCaptura?.tipo || null;
+  const deducidoPorNombre = Boolean(analisisCaptura?.deducidoPorNombre);
 
   const esPesable = tipoCaptura === TIPOS_CAPTURA.PESABLE;
   const esUnidadManual = tipoCaptura === TIPOS_CAPTURA.UNIDAD_MANUAL;
@@ -1327,9 +1330,15 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
           unidad: productoSeleccionado.unidad || (esPesable ? 'kg' : 'un'),
           tipoCaptura: tipoCaptura,
           cantidad: cantidadTomada,
-          kg: cantidadTomada,
-          unidades: Math.round(cantidadTomada),
-          ean: eanEscaneado || productoSeleccionado.ean || productoSeleccionado.barcode || null,
+          ...(esAlmacenEan
+            ? {
+                unidades: Math.round(cantidadTomada),
+                ean: eanEscaneado || productoSeleccionado.ean || productoSeleccionado.barcode || null,
+              }
+            : {
+                kg: cantidadTomada,
+              }
+          ),
           costo_unitario: costoUnit,
           stock_actual: stockActual,
           stock_resultante: stockResultante,
@@ -1353,8 +1362,6 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
           tipoCaptura: tipoCaptura,
           cantidad: cantidadTomada,
           kg: cantidadTomada,
-          unidades: Math.round(cantidadTomada),
-          ean: eanEscaneado || productoSeleccionado.ean || productoSeleccionado.barcode || null,
           stock_real: stockReal,
           dif: dif,
           costo_unitario: costoUnit,
@@ -1398,25 +1405,27 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
       let notaFinal = '';
 
       if (tipoSalida === 'MERMA') {
-        // Formato exacto v19: { producto, kg } para pesables, { producto, unidades, ean } para almacén/unidades
+        // Formato exacto v19 del servidor:
+        // - Almacén por unidad (con código de barras): { producto, unidades, ean }
+        // - Kilos o verduras por unidad o atado (choclo, perejil, etc.): { producto, kg }
         payloadItems = itemsSalida.map(it => {
-          const pesable = it.tipoCaptura === TIPOS_CAPTURA.PESABLE || (it.unidad || 'kg').toLowerCase() === 'kg';
-          if (pesable) {
+          const esAlmacen = it.tipoCaptura === TIPOS_CAPTURA.ALMACEN_EAN || Boolean(it.ean);
+          if (esAlmacen) {
             return {
               producto: it.producto,
-              kg: Number(it.kg) || 0
+              unidades: Math.round(Number(it.unidades != null ? it.unidades : it.cantidad) || 0),
+              ...(it.ean ? { ean: String(it.ean).trim() } : {})
             };
           } else {
             return {
               producto: it.producto,
-              unidades: Math.round(Number(it.unidades != null ? it.unidades : (it.cantidad != null ? it.cantidad : it.kg)) || 0),
-              ...(it.ean ? { ean: String(it.ean).trim() } : {})
+              kg: Number(it.kg != null ? it.kg : (it.cantidad != null ? it.cantidad : 0)) || 0
             };
           }
         });
         notaFinal = notaPersonalizada.trim() ? `${motivoRapido} - ${notaPersonalizada.trim()}` : motivoRapido;
       } else {
-        // AJUSTE: diferencia calculada (stock_real - stock_actual)
+        // AJUSTE: diferencia calculada (stock_real - stock_actual) en kilos
         payloadItems = itemsSalida.map(it => ({
           producto: it.producto,
           kg: Number(it.dif != null ? it.dif : (Number(it.stock_real || 0) - Number(it.stock_actual || 0)).toFixed(3))
@@ -1663,6 +1672,14 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
                 ✕ Cambiar
               </button>
             </div>
+
+            {/* Aviso si el tipo fue deducido por nombre */}
+            {deducidoPorNombre && (
+              <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-bold flex items-center gap-2">
+                <span>⚠️</span>
+                <span>Tipo deducido por nombre: revisar la unidad en el catálogo</span>
+              </div>
+            )}
 
             {/* Para productos por peso (kg) que usan Balanza */}
             {esUnidadKg && !modoManual ? (
