@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   Package, ShoppingCart, Plus, Minus, Search, RefreshCw, 
   Settings, Check, X, AlertCircle, AlertTriangle, Scale,
@@ -811,9 +811,9 @@ export default function Productos() {
 // COMPONENTE: MODAL NUEVA COMPRA (PARTE 2)
 // ─────────────────────────────────────────────────────────────────────────────
 function ModalCompra({ 
-  productosExistentes, 
-  productoInicial, 
-  taraKg, 
+  productosExistentes = [], 
+  productoInicial = '', 
+  taraKg = 2.0, 
   onClose, 
   onSuccess,
   productosCostos = [],
@@ -882,7 +882,7 @@ function ModalCompra({
   const productoMatch = useMemo(() => {
     const q = norm(producto);
     if (!q) return null;
-    return productosExistentes.find(p => norm(p.producto || p.nombre) === q) || null;
+    return (productosExistentes || []).find(p => norm(p.producto || p.nombre) === q) || null;
   }, [producto, productosExistentes]);
 
   const productoCostosMatch = useMemo(() => {
