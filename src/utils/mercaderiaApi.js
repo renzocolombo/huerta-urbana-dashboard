@@ -165,6 +165,43 @@ export async function apiGetProveedores() {
   return llamarAppsScript('getProveedores');
 }
 
+/**
+ * Registra una compra/ingreso de mercadería de Almacén en la hoja Almacen (Apps Script v21).
+ * Crea el producto si no existe o suma al existente, vincula el EAN, stock += unidades,
+ * y calcula el costo unitario por promedio ponderado.
+ */
+export async function apiIngresoAlmacen({
+  nombre,
+  marca,
+  categoria = 'Almacén',
+  subcategoria = 'Almacén',
+  ean,
+  unidades,
+  total_pagado,
+  proveedor,
+  precio_venta,
+  margen_pct = 70,
+  op_id
+}) {
+  return llamarAppsScript('ingresoAlmacen', {
+    nombre: String(nombre || '').trim(),
+    ...(marca ? { marca: String(marca).trim() } : {}),
+    ...(categoria ? { categoria: String(categoria).trim() } : {}),
+    ...(subcategoria ? { subcategoria: String(subcategoria).trim() } : {}),
+    ean: String(ean || '').trim().toUpperCase(),
+    unidades: Math.round(Number(unidades) || 0),
+    total_pagado: Number(total_pagado) || 0,
+    ...(proveedor ? { proveedor: String(proveedor).trim() } : {}),
+    ...(precio_venta !== undefined && precio_venta !== null && precio_venta !== ''
+      ? { precio_venta: Number(precio_venta) }
+      : {}),
+    ...(margen_pct !== undefined && margen_pct !== null && margen_pct !== ''
+      ? { margen_pct: Number(margen_pct) }
+      : { margen_pct: 70 }),
+    ...(op_id ? { op_id: String(op_id).trim() } : {}),
+  });
+}
+
 // ── 3. SALIDAS (MERMA, AJUSTE, CASA) ───────────────────────────────────────
 
 /**

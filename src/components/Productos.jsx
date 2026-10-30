@@ -11,12 +11,13 @@ import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { 
   apiGetStockKg, apiGetPreciosSugeridos, apiCrearProducto,
   apiSetMargen, apiPublicarPrecios, apiGetPreciosWeb, apiGetConfig, apiSetConfig,
-  apiCrearIngreso, apiGetIngresos, apiGetProveedores,
+  apiCrearIngreso, apiIngresoAlmacen, apiGetIngresos, apiGetProveedores,
   apiRegistrarSalidas, apiGetMovimientos,
   getAdminPinSession, setAdminPinSession, clearAdminPinSession
 } from '../utils/mercaderiaApi';
 import { BalanzaSystelSession, soportaWebSerial, useBalanzaSystel } from '../utils/balanzaSystel';
 import { getCategoriaPrincipal, getEanMapping } from '../data/productUtils';
+import { leerCacheAlmacen } from '../utils/almacenCache';
 import { determinarTipoCaptura, analizarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
 import PedidoMinimoCard from './PedidoMinimoCard';
 
@@ -29,7 +30,12 @@ export default function Productos() {
   try {
     sheetsCtx = useGoogleSheets();
   } catch (_) {}
-  const { productosCostos = [] } = sheetsCtx || {};
+  const { 
+    productosCostos = [], 
+    stockData = {}, 
+    fetchControlStock, 
+    fetchPanelCostos 
+  } = sheetsCtx || {};
 
   // Pestañas internas
   const [subTab, setSubTab] = useState('tabla'); // 'tabla' | 'ingresos' | 'salidas'
@@ -730,6 +736,10 @@ export default function Productos() {
             setModalCompra(null);
             cargarDatos();
           }}
+          productosCostos={productosCostos}
+          stockData={stockData}
+          fetchControlStock={fetchControlStock}
+          fetchPanelCostos={fetchPanelCostos}
         />
       )}
 
@@ -800,18 +810,56 @@ export default function Productos() {
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENTE: MODAL NUEVA COMPRA (PARTE 2)
 // ─────────────────────────────────────────────────────────────────────────────
-function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, onSuccess }) {
+function ModalCompra({ 
+  productosExistentes, 
+  productoInicial, 
+  taraKg, 
+  onClose, 
+  onSuccess,
+  productosCostos = [],
+  stockData = {},
+  fetchControlStock,
+  fetchPanelCostos
+}) {
   const [producto, setProducto] = useState(productoInicial || '');
   const [proveedor, setProveedor] = useState('');
   const [proveedorTel, setProveedorTel] = useState('');
   const [proveedoresLista, setProveedoresLista] = useState([]);
   const [costoTotal, setCostoTotal] = useState('');
-  
-  // Si el producto no existe en el catálogo, se muestran campos inline
-  const [categoriaNueva, setCategoriaNueva] = useState('Verduras');
+
+  // Categoría principal del producto a ingresar
+  const [categoria, setCategoria] = useState(() => {
+    if (productoInicial) {
+      const q = norm(productoInicial);
+      const m1 = (productosExistentes || []).find(p => norm(p.producto || p.nombre) === q);
+      const m2 = (productosCostos || []).find(p => norm(p.nombre) === q);
+      const match = m1 || m2;
+      if (match && (match.categoriaPrincipal === 'Almacén' || match.categoria === 'Almacén' || norm(match.subcategoria).includes('almacen'))) {
+        return 'Almacén';
+      }
+      if (match && match.categoria) return match.categoria;
+    }
+    return 'Verduras';
+  });
+
   const [unidadNueva, setUnidadNueva] = useState('kg');
 
-  // Modo pesaje / cajones
+  // Campos específicos de Almacén (Apps Script v21)
+  const [ean, setEan] = useState('');
+  const [marca, setMarca] = useState('');
+  const [subcategoria, setSubcategoria] = useState('Almacén');
+  const [unidades, setUnidades] = useState('');
+  const [margenPct, setMargenPct] = useState('70');
+  const [precioVenta, setPrecioVenta] = useState('');
+  const [precioVentaManualModificado, setPrecioVentaManualModificado] = useState(false);
+  const [eanMatch, setEanMatch] = useState(null); // { nombre, marca, subcategoria, stockActual, costoActual, precioVenta }
+
+  // Refs para control de foco, Enter y deduplicación de operación
+  const eanInputRef = useRef(null);
+  const cantidadInputRef = useRef(null);
+  const opIdRef = useRef(null);
+
+  // Modo pesaje / cajones (para Verduras / Frutas)
   const [modoManual, setModoManual] = useState(false);
   const [cajones, setCajones] = useState([]);
   const [pesoManualCajon, setPesoManualCajon] = useState('');
@@ -830,15 +878,29 @@ function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, on
   const [mensajeExito, setMensajeExito] = useState(null);
   const [mensajeError, setMensajeError] = useState(null);
 
-  // Verificar si el producto escrito existe
+  // Verificar si el producto escrito existe en el catálogo tradicional
   const productoMatch = useMemo(() => {
     const q = norm(producto);
     if (!q) return null;
-    return productosExistentes.find(p => norm(p.producto) === q) || null;
+    return productosExistentes.find(p => norm(p.producto || p.nombre) === q) || null;
   }, [producto, productosExistentes]);
 
-  const esProductoNuevo = Boolean(producto.trim() && !productoMatch);
-  const unidadActiva = productoMatch ? productoMatch.unidad : unidadNueva;
+  const productoCostosMatch = useMemo(() => {
+    const q = norm(producto);
+    if (!q) return null;
+    return (productosCostos || []).find(p => norm(p.nombre) === q) || null;
+  }, [producto, productosCostos]);
+
+  // Determinar si es Almacén: por categoría elegida o por producto existente de almacén
+  const esAlmacen = useMemo(() => {
+    if (categoria === 'Almacén') return true;
+    if (productoMatch && (productoMatch.categoriaPrincipal === 'Almacén' || productoMatch.categoria === 'Almacén' || norm(productoMatch.subcategoria).includes('almacen'))) return true;
+    if (productoCostosMatch && (productoCostosMatch.categoriaPrincipal === 'Almacén' || productoCostosMatch.categoria === 'Almacén' || norm(productoCostosMatch.subcategoria).includes('almacen'))) return true;
+    return false;
+  }, [categoria, productoMatch, productoCostosMatch]);
+
+  const esProductoNuevo = Boolean(producto.trim() && !productoMatch && !productoCostosMatch && !eanMatch);
+  const unidadActiva = esAlmacen ? 'unidad' : (productoMatch ? productoMatch.unidad : unidadNueva);
 
   // Cargar lista de proveedores para autocompletar
   useEffect(() => {
@@ -853,6 +915,85 @@ function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, on
       }
     })();
   }, []);
+
+  // Foco automático en el input de EAN al montar si ya es Almacén
+  useEffect(() => {
+    if (esAlmacen) {
+      setTimeout(() => eanInputRef.current?.focus(), 80);
+    }
+  }, []);
+
+  // Cambio manual de categoría con foco automático
+  const handleCambiarCategoria = (nuevaCat) => {
+    setCategoria(nuevaCat);
+    if (nuevaCat === 'Almacén') {
+      setTimeout(() => eanInputRef.current?.focus(), 80);
+    }
+  };
+
+  // Autocompletar cuando se tipea o escanea un EAN existente en Almacén
+  const handleEanChange = useCallback((val) => {
+    setEan(val);
+    const clean = String(val || '').trim().toUpperCase();
+    if (!clean) {
+      setEanMatch(null);
+      return;
+    }
+
+    // Buscar en los cachés ya cargados
+    const mapEan = getEanMapping();
+    const eanInfo = mapEan[clean];
+    const pCosto = (productosCostos || []).find(p => String(p.ean || '').trim().toUpperCase() === clean);
+    const pStock = Object.values(stockData || {}).find(p => String(p.ean || '').trim().toUpperCase() === clean);
+    const cacheAlm = leerCacheAlmacen();
+
+    const nombreEncontrado = eanInfo?.nombre || pCosto?.nombre || pStock?.nombre || null;
+
+    if (nombreEncontrado) {
+      const k = norm(nombreEncontrado);
+      const cData = cacheAlm[k] || {};
+
+      const marcaEncontrada = eanInfo?.marca || pCosto?.marca || pStock?.marca || cData.marca || '';
+      const subcatEncontrada = eanInfo?.subcategoria || pCosto?.subcategoria || pStock?.subcategoria || cData.subcategoria || 'Almacén';
+      const stockActual = pCosto?.stock_unidades ?? pStock?.stock?.unidades ?? cData.stock ?? 0;
+      const costoActual = pCosto?.costo_unitario ?? pCosto?.precioCajon ?? cData.costoUnitario ?? 0;
+      const precioVentaActual = pCosto?.precio_venta ?? pCosto?.precioFinal ?? cData.precioMaxManual ?? null;
+
+      setEanMatch({
+        nombre: nombreEncontrado,
+        marca: marcaEncontrada,
+        subcategoria: subcatEncontrada,
+        stockActual: Number(stockActual) || 0,
+        costoActual: Number(costoActual) || 0,
+        precioVenta: precioVentaActual
+      });
+
+      setProducto(nombreEncontrado);
+      if (marcaEncontrada) setMarca(marcaEncontrada);
+      setCategoria('Almacén');
+      setSubcategoria(subcatEncontrada);
+    } else {
+      setEanMatch(null);
+    }
+  }, [productosCostos, stockData]);
+
+  // Cálculos en vivo para Almacén (Apps Script v21)
+  const costoTotalNum = parseFloat(costoTotal) || 0;
+  const unidadesNum = parseInt(unidades, 10) || 0;
+  const costoPorPaquete = (costoTotalNum > 0 && unidadesNum > 0)
+    ? Number((costoTotalNum / unidadesNum).toFixed(2))
+    : 0;
+
+  const margenNum = margenPct !== '' && !isNaN(parseFloat(margenPct)) ? Number(margenPct) : 70;
+  const precioVentaSugerido = costoPorPaquete > 0
+    ? Math.round(costoPorPaquete * (1 + margenNum / 100))
+    : 0;
+
+  useEffect(() => {
+    if (esAlmacen && !precioVentaManualModificado) {
+      setPrecioVenta(precioVentaSugerido > 0 ? String(precioVentaSugerido) : '');
+    }
+  }, [esAlmacen, precioVentaSugerido, precioVentaManualModificado]);
 
   const agregarCajonDesdeBalanza = () => {
     if (!balanzaPesoVivo || balanzaPesoVivo <= 0) {
@@ -875,8 +1016,9 @@ function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, on
     setPesoManualCajon('');
   };
 
-  // Cálculo de cantidad total neta
+  // Cálculo de cantidad total neta para pesables / cajones
   const cantidadTotalNeta = useMemo(() => {
+    if (esAlmacen) return unidadesNum;
     if (unidadActiva !== 'kg') {
       return parseFloat(kgNetosManual) || 0;
     }
@@ -885,16 +1027,15 @@ function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, on
     }
     const suma = cajones.reduce((acc, c) => acc + (Number(c) || 0), 0);
     return Number(suma.toFixed(3));
-  }, [unidadActiva, modoManual, kgNetosManual, cajones]);
+  }, [esAlmacen, unidadesNum, unidadActiva, modoManual, kgNetosManual, cajones]);
 
-  // Costo por unidad
+  // Costo por unidad para no-almacén
   const costoPorUnidad = useMemo(() => {
-    const c = parseFloat(costoTotal) || 0;
-    if (c <= 0 || cantidadTotalNeta <= 0) return 0;
-    return Number((c / cantidadTotalNeta).toFixed(2));
-  }, [costoTotal, cantidadTotalNeta]);
+    if (costoTotalNum <= 0 || cantidadTotalNeta <= 0) return 0;
+    return Number((costoTotalNum / cantidadTotalNeta).toFixed(2));
+  }, [costoTotalNum, cantidadTotalNeta]);
 
-  // Guardar Compra
+  // Guardar Compra / Ingreso
   const handleGuardar = async (e) => {
     e.preventDefault();
     setMensajeError(null);
@@ -905,12 +1046,91 @@ function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, on
       setMensajeError('Ingresá el nombre del producto.');
       return;
     }
+
+    // ── FLUJO ALMACÉN (APPS SCRIPT V21) ──────────────────────────────────────
+    if (esAlmacen) {
+      const cleanEan = String(ean || '').trim().toUpperCase();
+      if (!cleanEan) {
+        setMensajeError('Ingresá o escaneá el código de barras (EAN).');
+        return;
+      }
+
+      const uNum = parseInt(unidades, 10);
+      if (isNaN(uNum) || uNum <= 0) {
+        setMensajeError('La cantidad comprada debe ser un número entero mayor a 0 (paquetes/unidades).');
+        return;
+      }
+
+      if (costoTotalNum <= 0) {
+        setMensajeError('Ingresá un costo total pagado válido en pesos mayor a 0.');
+        return;
+      }
+
+      // op_id evita duplicar si se manda dos veces: genera uuid en primer intento y lo reutiliza en reintentos
+      if (!opIdRef.current) {
+        opIdRef.current = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+          ? crypto.randomUUID()
+          : 'op_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 9);
+      }
+      const currentOpId = opIdRef.current;
+
+      setGuardando(true);
+      try {
+        const pVentaFinal = precioVenta !== '' && !isNaN(parseFloat(precioVenta))
+          ? Number(precioVenta)
+          : (precioVentaSugerido > 0 ? precioVentaSugerido : undefined);
+
+        const res = await apiIngresoAlmacen({
+          nombre: prodLimpio,
+          marca: marca.trim() || undefined,
+          categoria: 'Almacén',
+          subcategoria: subcategoria.trim() || 'Almacén',
+          ean: cleanEan,
+          unidades: uNum,
+          total_pagado: costoTotalNum,
+          proveedor: proveedor.trim() || undefined,
+          precio_venta: pVentaFinal,
+          margen_pct: margenNum,
+          op_id: currentOpId
+        });
+
+        if (res && res.ok) {
+          // Éxito: limpiar op_id
+          opIdRef.current = null;
+
+          const stockNuevo = res.stock !== undefined ? res.stock : 'actualizado';
+          const costoUnidad = res.costo_unitario !== undefined ? res.costo_unitario : costoPorPaquete;
+          const precioFinal = res.precio_venta !== undefined ? res.precio_venta : (pVentaFinal || '—');
+
+          setMensajeExito(
+            `✅ Ingreso registrado: ${res.producto || prodLimpio} | Stock nuevo: ${stockNuevo} u. | Costo unitario: $${costoUnidad} | Precio venta: $${precioFinal}`
+          );
+
+          // Recargar el caché de almacén desde el servidor (nunca modificar el stock en pantalla)
+          if (typeof fetchControlStock === 'function') fetchControlStock().catch(() => {});
+          if (typeof fetchPanelCostos === 'function') fetchPanelCostos().catch(() => {});
+
+          setTimeout(() => {
+            onSuccess();
+          }, 2000);
+        } else {
+          // Si error: mostrar el texto legible del servidor y NO limpiar el formulario
+          setMensajeError(res?.error || 'No se pudo registrar el ingreso en Almacén.');
+        }
+      } catch (err) {
+        setMensajeError(err.message || 'Error de red al registrar el ingreso.');
+      } finally {
+        setGuardando(false);
+      }
+      return;
+    }
+
+    // ── FLUJO VERDURAS / FRUTAS (POR KG O UNIDAD MANUAL) ─────────────────────
     if (cantidadTotalNeta <= 0) {
       setMensajeError('La cantidad neta debe ser mayor a 0.');
       return;
     }
-    const cTotal = parseFloat(costoTotal);
-    if (isNaN(cTotal) || cTotal <= 0) {
+    if (costoTotalNum <= 0) {
       setMensajeError('Ingresá un costo total válido en pesos.');
       return;
     }
@@ -922,10 +1142,10 @@ function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, on
         proveedor: proveedor.trim() || 'Sin especificar',
         proveedor_tel: proveedorTel.trim() || undefined,
         kg_netos: cantidadTotalNeta,
-        costo_total: cTotal,
+        costo_total: costoTotalNum,
         cajones: (unidadActiva === 'kg' && cajones.length > 0) ? cajones : undefined,
-        categoria: esProductoNuevo ? categoriaNueva : undefined,
-        unidad: esProductoNuevo ? unidadNueva : undefined,
+        categoria: esProductoNuevo ? categoria : undefined,
+        unidad: esProductoNuevo ? unidadActiva : undefined,
       });
 
       if (res && res.ok) {
@@ -957,66 +1177,389 @@ function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, on
         </div>
 
         <form onSubmit={handleGuardar} className="space-y-4">
+          {/* Selector de Categoría Principal */}
+          <div>
+            <label className="block text-xs font-bold uppercase text-gray-400 mb-1.5">
+              Categoría *
+            </label>
+            <div className="grid grid-cols-4 gap-2">
+              {['Verduras', 'Frutas', 'Almacén', 'Otros'].map((cat) => {
+                const seleccionada = categoria === cat;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => handleCambiarCategoria(cat)}
+                    className={`py-2 px-2 sm:px-3 rounded-xl text-xs font-bold transition-all cursor-pointer text-center ${
+                      seleccionada
+                        ? 'bg-green-500 text-black shadow-md shadow-green-500/20'
+                        : 'bg-black/40 text-gray-400 hover:text-white border border-gray-800'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Producto */}
           <div>
-            <label className="block text-xs font-bold uppercase text-gray-400 mb-1">
-              Producto *
+            <label className="block text-xs font-bold uppercase text-gray-400 mb-1 flex items-center justify-between">
+              <span>Producto *</span>
+              {eanMatch && (
+                <span className="text-[10px] text-amber-400 font-bold flex items-center gap-1">
+                  <Lock size={11} /> Existente en Almacén (solo lectura)
+                </span>
+              )}
             </label>
             <input
               type="text"
-              placeholder="Ej: Tomate Redondo, Banana, Harina 0000..."
+              placeholder={esAlmacen ? "Ej: Harina 0000 Marolio, Fideos Matarazzo..." : "Ej: Tomate Redondo, Banana, Papa..."}
               value={producto}
               onChange={(e) => setProducto(e.target.value)}
-              className="w-full bg-black/60 border border-gray-700 focus:border-green-500 rounded-xl px-4 py-2.5 text-sm text-white font-bold outline-none"
+              readOnly={Boolean(eanMatch)}
+              className={`w-full bg-black/60 border rounded-xl px-4 py-2.5 text-sm font-bold outline-none transition-colors ${
+                eanMatch
+                  ? 'border-gray-800 text-gray-300 bg-gray-900/50 cursor-not-allowed'
+                  : 'border-gray-700 focus:border-green-500 text-white'
+              }`}
               required
             />
 
-            {/* Aviso y campos inline si el producto no existe */}
-            {esProductoNuevo && (
-              <div className="mt-2.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 space-y-2.5">
+            {/* Aviso de stock y costo actual para producto existente escaneado */}
+            {eanMatch && (
+              <div className="mt-2 p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs flex items-center justify-between">
+                <div>
+                  <span className="text-gray-400 block text-[10px] uppercase font-bold">Stock Actual en Almacén</span>
+                  <span className="text-amber-300 font-mono font-bold text-sm">{eanMatch.stockActual} unidades</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-gray-400 block text-[10px] uppercase font-bold">Costo Unitario Actual</span>
+                  <span className="text-amber-300 font-mono font-bold text-sm">$ {Number(eanMatch.costoActual || 0).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Campos inline para producto nuevo no almacén */}
+            {esProductoNuevo && !esAlmacen && (
+              <div className="mt-2.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 space-y-2">
                 <p className="text-xs font-bold flex items-center gap-1.5">
                   <AlertTriangle size={14} /> El producto no existe en el catálogo. Se creará automáticamente:
                 </p>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">Categoría</label>
-                    <select
-                      value={categoriaNueva}
-                      onChange={(e) => setCategoriaNueva(e.target.value)}
-                      className="w-full bg-black border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white outline-none"
-                    >
-                      <option value="Verduras">Verduras</option>
-                      <option value="Frutas">Frutas</option>
-                      <option value="Almacén">Almacén</option>
-                      <option value="Otros">Otros</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">Unidad</label>
-                    <select
-                      value={unidadNueva}
-                      onChange={(e) => setUnidadNueva(e.target.value)}
-                      className="w-full bg-black border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white outline-none"
-                    >
-                      <option value="kg">kg (peso)</option>
-                      <option value="un">un (unidad)</option>
-                      <option value="atado">atado</option>
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">Unidad</label>
+                  <select
+                    value={unidadNueva}
+                    onChange={(e) => setUnidadNueva(e.target.value)}
+                    className="w-full bg-black border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white outline-none"
+                  >
+                    <option value="kg">kg (peso)</option>
+                    <option value="un">un (unidad)</option>
+                    <option value="atado">atado</option>
+                  </select>
                 </div>
               </div>
             )}
           </div>
 
-          {/* Proveedor y Teléfono */}
+          {/* Marca y Subcategoría (Almacén nuevo) */}
+          {esAlmacen && !eanMatch && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold uppercase text-gray-400 mb-1">
+                  Marca (opcional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ej: Marolio, Arcor, La Serenísima..."
+                  value={marca}
+                  onChange={(e) => setMarca(e.target.value)}
+                  className="w-full bg-black/60 border border-gray-700 focus:border-green-500 rounded-xl px-3 py-2 text-xs text-white outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase text-gray-400 mb-1">
+                  Subcategoría (opcional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ej: Almacén, Conservas, Lácteos..."
+                  value={subcategoria}
+                  onChange={(e) => setSubcategoria(e.target.value)}
+                  className="w-full bg-black/60 border border-gray-700 focus:border-green-500 rounded-xl px-3 py-2 text-xs text-white outline-none"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Costo Total Pagado y (si es Almacén) Código de barras EAN */}
+          <div className={`grid ${esAlmacen ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'} gap-3`}>
+            <div>
+              <label className="block text-xs font-bold uppercase text-gray-400 mb-1">
+                Costo Total Pagado ($) *
+              </label>
+              <div className="relative">
+                <span className="absolute left-3.5 top-2 text-gray-500 font-bold">$</span>
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="0.00"
+                  value={costoTotal}
+                  onChange={(e) => setCostoTotal(e.target.value)}
+                  className="w-full bg-black/60 border border-gray-700 focus:border-green-500 rounded-xl pl-8 pr-4 py-2 text-sm font-mono font-bold text-white outline-none"
+                  required
+                />
+              </div>
+            </div>
+
+            {esAlmacen && (
+              <div>
+                <label className="block text-xs font-bold uppercase text-gray-400 mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-amber-300">
+                    <Barcode size={14} /> Código de barras (EAN) *
+                  </span>
+                  {eanMatch && (
+                    <span className="text-[10px] text-green-400 font-semibold truncate max-w-[150px]">
+                      ✓ {eanMatch.nombre}
+                    </span>
+                  )}
+                </label>
+                <input
+                  ref={eanInputRef}
+                  type="text"
+                  placeholder="Escanear o tipear EAN..."
+                  value={ean}
+                  onChange={(e) => handleEanChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      cantidadInputRef.current?.focus();
+                    }
+                  }}
+                  className="w-full bg-black/60 border border-amber-500/50 focus:border-amber-400 rounded-xl px-4 py-2 text-sm font-mono font-bold text-white outline-none"
+                  required={esAlmacen}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Sección de Cantidad: Almacén (Paquetes enteros) vs Pesables / Cajones */}
+          {esAlmacen ? (
+            <div className="bg-[#181818] border border-gray-800 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-300 flex items-center gap-1.5">
+                  <Package size={14} className="text-amber-400" /> Cantidad Comprada (Paquetes / Unidades) *
+                </span>
+                <span className="text-[11px] text-gray-500 font-semibold">Entero &gt; 0</span>
+              </div>
+
+              <div>
+                <input
+                  ref={cantidadInputRef}
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="Ej: 6, 12, 24..."
+                  value={unidades}
+                  onChange={(e) => setUnidades(e.target.value)}
+                  className="w-full bg-black border border-gray-700 focus:border-green-500 rounded-xl px-3.5 py-2 text-sm font-mono font-bold text-white outline-none"
+                  required={esAlmacen}
+                />
+              </div>
+
+              {/* Resumen en vivo de costos y márgenes */}
+              <div className="grid grid-cols-3 gap-2.5 pt-2 border-t border-gray-800 text-center">
+                <div className="bg-black/60 p-2.5 rounded-xl border border-gray-800">
+                  <span className="text-[10px] text-gray-400 uppercase font-bold block mb-0.5">Costo / Paquete</span>
+                  <span className="text-sm font-mono font-black text-amber-300">
+                    ${costoPorPaquete.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+
+                <div className="bg-black/60 p-2.5 rounded-xl border border-gray-800">
+                  <label className="text-[10px] text-gray-400 uppercase font-bold block mb-0.5">Margen %</label>
+                  <div className="flex items-center justify-center gap-1">
+                    <input
+                      type="number"
+                      step="1"
+                      min="0"
+                      max="500"
+                      value={margenPct}
+                      onChange={(e) => {
+                        setMargenPct(e.target.value);
+                        setPrecioVentaManualModificado(false);
+                      }}
+                      className="w-14 bg-black border border-gray-700 rounded-lg px-1.5 py-0.5 text-xs font-mono font-bold text-white text-center outline-none focus:border-green-500"
+                    />
+                    <span className="text-[11px] text-gray-400">%</span>
+                  </div>
+                </div>
+
+                <div className="bg-black/60 p-2.5 rounded-xl border border-gray-800">
+                  <span className="text-[10px] text-gray-400 uppercase font-bold block mb-0.5">Precio Sugerido</span>
+                  <span className="text-sm font-mono font-black text-green-400">
+                    ${precioVentaSugerido.toLocaleString('es-AR')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Campo Precio de Venta editable */}
+              <div className="pt-1">
+                <label className="block text-xs font-bold uppercase text-gray-400 mb-1 flex items-center justify-between">
+                  <span>Precio de Venta ($) *</span>
+                  <span className="text-[10px] text-gray-500">Editable antes de guardar</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-2 text-gray-500 font-bold">$</span>
+                  <input
+                    type="number"
+                    step="1"
+                    placeholder={precioVentaSugerido ? String(precioVentaSugerido) : '0'}
+                    value={precioVenta}
+                    onChange={(e) => {
+                      setPrecioVenta(e.target.value);
+                      setPrecioVentaManualModificado(true);
+                    }}
+                    className="w-full bg-black/60 border border-gray-700 focus:border-green-500 rounded-xl pl-8 pr-4 py-2 text-sm font-mono font-bold text-white outline-none"
+                    required={esAlmacen}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-[#181818] border border-gray-800 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-300 flex items-center gap-1.5">
+                  <Scale size={14} className="text-amber-400" /> Cantidad Comprada ({unidadActiva})
+                </span>
+                {unidadActiva === 'kg' && (
+                  <button
+                    type="button"
+                    onClick={() => setModoManual(!modoManual)}
+                    className="text-[11px] text-gray-400 hover:text-white underline font-semibold cursor-pointer"
+                  >
+                    {modoManual ? '← Pesar por cajón' : 'Escribir total directo'}
+                  </button>
+                )}
+              </div>
+
+              {unidadActiva !== 'kg' || modoManual ? (
+                <div>
+                  <input
+                    type="number"
+                    step={unidadActiva === 'kg' ? '0.001' : '1'}
+                    placeholder={`Cantidad en ${unidadActiva}...`}
+                    value={kgNetosManual}
+                    onChange={(e) => setKgNetosManual(e.target.value)}
+                    className="w-full bg-black border border-gray-700 focus:border-green-500 rounded-xl px-3.5 py-2 text-sm font-mono font-bold text-white outline-none"
+                  />
+                </div>
+              ) : (
+                <>
+                  {/* Balanza Systel */}
+                  <div className="flex items-center justify-between gap-2 bg-black/40 border border-gray-800 p-2.5 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={toggleBalanza}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                        balanzaConectada
+                          ? 'bg-red-500/10 text-red-400 border border-red-500/30'
+                          : 'bg-green-500/10 text-green-400 border border-green-500/30'
+                      }`}
+                    >
+                      <Scale size={13} />
+                      {balanzaConectando ? 'Conectando...' : balanzaConectada ? 'Desconectar Balanza' : 'Conectar Balanza Systel'}
+                    </button>
+
+                    {balanzaConectada && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono font-bold text-amber-300">
+                          {balanzaPesoVivo !== null ? `${balanzaPesoVivo.toFixed(3)} kg` : '0.000 kg'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={agregarCajonDesdeBalanza}
+                          className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-black text-xs font-black rounded-lg cursor-pointer"
+                        >
+                          Pesar Cajón (-{taraKg}kg tara)
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Input manual de cajón */}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      step="0.001"
+                      placeholder="Peso neto de cajón (kg)..."
+                      value={pesoManualCajon}
+                      onChange={(e) => setPesoManualCajon(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          agregarCajonManual();
+                        }
+                      }}
+                      className="flex-1 bg-black/60 border border-gray-700 focus:border-green-500 rounded-xl px-3 py-1.5 text-xs font-mono text-white outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={agregarCajonManual}
+                      className="bg-gray-800 hover:bg-gray-700 text-white font-bold text-xs px-3 py-1.5 rounded-xl cursor-pointer"
+                    >
+                      + Cajón
+                    </button>
+                  </div>
+
+                  {/* Lista de cajones */}
+                  {cajones.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                      {cajones.map((peso, idx) => (
+                        <span key={idx} className="bg-black border border-gray-800 px-2 py-0.5 rounded text-[11px] font-mono text-amber-300 flex items-center gap-1.5">
+                          #{idx + 1}: {peso}kg
+                          <button type="button" onClick={() => setCajones(cajones.filter((_, i) => i !== idx))} className="text-gray-500 hover:text-red-400">
+                            <X size={11} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Resumen en vivo para pesables */}
+          {!esAlmacen && (
+            <div className="bg-black/50 border border-gray-800/80 rounded-2xl p-3 flex items-center justify-around text-center">
+              <div>
+                <span className="text-[10px] text-gray-500 uppercase block">Cantidad Neta</span>
+                <span className="text-lg font-mono font-black text-white">
+                  {cantidadTotalNeta} <span className="text-xs text-gray-400">{unidadActiva}</span>
+                </span>
+              </div>
+              <div className="h-8 w-px bg-gray-800" />
+              <div>
+                <span className="text-[10px] text-gray-500 uppercase block">Costo / {unidadActiva}</span>
+                <span className="text-lg font-mono font-black text-green-400">
+                  ${costoPorUnidad}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Proveedor y Teléfono (opcionales) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold uppercase text-gray-400 mb-1">
-                Proveedor
+                Proveedor (opcional)
               </label>
               <input
                 type="text"
-                placeholder="Ej: Mercado Central, Don Pedro..."
+                placeholder="Ej: Distribuidora Central, Don Pedro..."
                 value={proveedor}
                 onChange={(e) => {
                   setProveedor(e.target.value);
@@ -1037,145 +1580,6 @@ function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, on
                 onChange={(e) => setProveedorTel(e.target.value)}
                 className="w-full bg-black/60 border border-gray-700 focus:border-green-500 rounded-xl px-3 py-2 text-xs text-white outline-none"
               />
-            </div>
-          </div>
-
-          {/* Costo Total */}
-          <div>
-            <label className="block text-xs font-bold uppercase text-gray-400 mb-1">
-              Costo Total Pagado ($) *
-            </label>
-            <div className="relative">
-              <span className="absolute left-3.5 top-2 text-gray-500 font-bold">$</span>
-              <input
-                type="number"
-                step="any"
-                placeholder="0.00"
-                value={costoTotal}
-                onChange={(e) => setCostoTotal(e.target.value)}
-                className="w-full bg-black/60 border border-gray-700 focus:border-green-500 rounded-xl pl-8 pr-4 py-2 text-sm font-mono font-bold text-white outline-none"
-                required
-              />
-            </div>
-          </div>
-
-          {/* Sección de Cantidad (Pesaje o Unidades) */}
-          <div className="bg-[#181818] border border-gray-800 rounded-2xl p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-wider text-gray-300 flex items-center gap-1.5">
-                <Scale size={14} className="text-amber-400" /> Cantidad Comprada ({unidadActiva})
-              </span>
-              {unidadActiva === 'kg' && (
-                <button
-                  type="button"
-                  onClick={() => setModoManual(!modoManual)}
-                  className="text-[11px] text-gray-400 hover:text-white underline font-semibold cursor-pointer"
-                >
-                  {modoManual ? '← Pesar por cajón' : 'Escribir total directo'}
-                </button>
-              )}
-            </div>
-
-            {unidadActiva !== 'kg' || modoManual ? (
-              <div>
-                <input
-                  type="number"
-                  step={unidadActiva === 'kg' ? '0.001' : '1'}
-                  placeholder={`Cantidad en ${unidadActiva}...`}
-                  value={kgNetosManual}
-                  onChange={(e) => setKgNetosManual(e.target.value)}
-                  className="w-full bg-black border border-gray-700 focus:border-green-500 rounded-xl px-3.5 py-2 text-sm font-mono font-bold text-white outline-none"
-                />
-              </div>
-            ) : (
-              <>
-                {/* Balanza Systel */}
-                <div className="flex items-center justify-between gap-2 bg-black/40 border border-gray-800 p-2.5 rounded-xl">
-                  <button
-                    type="button"
-                    onClick={toggleBalanza}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                      balanzaConectada
-                        ? 'bg-red-500/10 text-red-400 border border-red-500/30'
-                        : 'bg-green-500/10 text-green-400 border border-green-500/30'
-                    }`}
-                  >
-                    <Scale size={13} />
-                    {balanzaConectando ? 'Conectando...' : balanzaConectada ? 'Desconectar Balanza' : 'Conectar Balanza Systel'}
-                  </button>
-
-                  {balanzaConectada && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono font-bold text-amber-300">
-                        {balanzaPesoVivo !== null ? `${balanzaPesoVivo.toFixed(3)} kg` : '0.000 kg'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={agregarCajonDesdeBalanza}
-                        className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-black text-xs font-black rounded-lg cursor-pointer"
-                      >
-                        Pesar Cajón (-{taraKg}kg tara)
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Input manual de cajón */}
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    step="0.001"
-                    placeholder="Peso neto de cajón (kg)..."
-                    value={pesoManualCajon}
-                    onChange={(e) => setPesoManualCajon(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        agregarCajonManual();
-                      }
-                    }}
-                    className="flex-1 bg-black/60 border border-gray-700 focus:border-green-500 rounded-xl px-3 py-1.5 text-xs font-mono text-white outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={agregarCajonManual}
-                    className="bg-gray-800 hover:bg-gray-700 text-white font-bold text-xs px-3 py-1.5 rounded-xl cursor-pointer"
-                  >
-                    + Cajón
-                  </button>
-                </div>
-
-                {/* Lista de cajones */}
-                {cajones.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-                    {cajones.map((peso, idx) => (
-                      <span key={idx} className="bg-black border border-gray-800 px-2 py-0.5 rounded text-[11px] font-mono text-amber-300 flex items-center gap-1.5">
-                        #{idx + 1}: {peso}kg
-                        <button type="button" onClick={() => setCajones(cajones.filter((_, i) => i !== idx))} className="text-gray-500 hover:text-red-400">
-                          <X size={11} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Resumen en vivo */}
-          <div className="bg-black/50 border border-gray-800/80 rounded-2xl p-3 flex items-center justify-around text-center">
-            <div>
-              <span className="text-[10px] text-gray-500 uppercase block">Cantidad Neta</span>
-              <span className="text-lg font-mono font-black text-white">
-                {cantidadTotalNeta} <span className="text-xs text-gray-400">{unidadActiva}</span>
-              </span>
-            </div>
-            <div className="h-8 w-px bg-gray-800" />
-            <div>
-              <span className="text-[10px] text-gray-500 uppercase block">Costo / {unidadActiva}</span>
-              <span className="text-lg font-mono font-black text-green-400">
-                ${costoPorUnidad}
-              </span>
             </div>
           </div>
 
@@ -1204,7 +1608,7 @@ function ModalCompra({ productosExistentes, productoInicial, taraKg, onClose, on
             ) : (
               <>
                 <Check size={16} />
-                <span>{esProductoNuevo ? 'Guardar compra y crear producto' : 'Registrar Compra'}</span>
+                <span>{esAlmacen ? 'Registrar Ingreso en Almacén' : (esProductoNuevo ? 'Guardar compra y crear producto' : 'Registrar Compra')}</span>
               </>
             )}
           </button>
