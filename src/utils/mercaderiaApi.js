@@ -373,6 +373,30 @@ export async function apiGetNoEntregasBatch({ pedidos = [] }) {
   });
 }
 
+// ── 7B. CRÉDITO Y REFERIDOS (Apps Script v16) ──────────────────────────────
+
+export async function apiLiberarCredito(params) {
+  const num = typeof params === 'object' && params !== null
+    ? (params.numero_pedido || params.pedido)
+    : params;
+  return llamarAppsScript('liberarCredito', {
+    numero_pedido: String(num || '').trim(),
+  });
+}
+
+export async function apiGetEstadoCreditoPedidos(params = {}) {
+  const rawList = Array.isArray(params)
+    ? params
+    : (params?.pedidos || []);
+  const lista = rawList
+    .map(p => (typeof p === 'object' && p !== null ? (p.numero_pedido || p.id) : p))
+    .filter(Boolean)
+    .map(p => String(p).trim());
+  return llamarAppsScript('getEstadoCreditoPedidos', {
+    pedidos: lista,
+  });
+}
+
 // ── 8. REEMBOLSOS ────────────────────────────────────────────────────────────
 
 export async function apiRegistrarReembolso({ numero_pedido, estado, monto, medio, referencia, nota }) {
