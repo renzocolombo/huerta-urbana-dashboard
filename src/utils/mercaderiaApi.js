@@ -180,14 +180,16 @@ export async function apiRegistrarSalidas({ tipo, items, nota, admin_pin, pin })
   const payload = {
     tipo,
     items: (items || []).map(it => {
-      const cant = it.cantidad != null ? Number(it.cantidad) : (it.unidades != null ? Number(it.unidades) : (it.kg != null ? Number(it.kg) : 0));
-      return {
-        producto: String(it.producto).trim(),
-        cantidad: cant,
-        ...(it.kg !== undefined && it.kg !== null ? { kg: Number(it.kg) } : {}),
-        ...(it.unidades !== undefined && it.unidades !== null ? { unidades: Number(it.unidades) } : {}),
-        ...(it.unidad ? { unidad: String(it.unidad).trim() } : {}),
-      };
+      const p = { producto: String(it.producto).trim() };
+      if (it.unidades !== undefined && it.unidades !== null) {
+        p.unidades = Math.round(Number(it.unidades));
+        if (it.ean) p.ean = String(it.ean).trim();
+      } else if (it.kg !== undefined && it.kg !== null) {
+        p.kg = Number(it.kg);
+      } else if (it.cantidad !== undefined && it.cantidad !== null) {
+        p.kg = Number(it.cantidad);
+      }
+      return p;
     }),
     ...(nota ? { nota: String(nota).trim() } : {}),
     ...(admin_pin ? { admin_pin: String(admin_pin).trim() } : {}),

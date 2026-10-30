@@ -39,6 +39,7 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
 
   // Producto activo para consumo directo (mínimo de pasos)
   const [productoActivo, setProductoActivo] = useState(null);
+  const [eanEscaneado, setEanEscaneado] = useState(null);
   const [pesoManual, setPesoManual] = useState('');
   const [unidadesManual, setUnidadesManual] = useState(1);
   const [descontarTara, setDescontarTara] = useState(false);
@@ -143,10 +144,11 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
   };
 
   // Selección de producto
-  const seleccionarProducto = (prod, pesoPredefinido = null) => {
+  const seleccionarProducto = (prod, pesoPredefinido = null, eanCodigo = null) => {
     setMensajeExito(null);
     setMensajeError(null);
     setProductoActivo(prod);
+    setEanEscaneado(eanCodigo || prod.ean || prod.barcode || null);
     const esKg = (prod.unidad || 'kg').toLowerCase() === 'kg';
     if (esKg) {
       if (pesoPredefinido !== null && pesoPredefinido > 0) {
@@ -177,7 +179,7 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
         // Buscar producto por PLU o nombre
         const encontrado = productos.find(p => norm(p.producto).includes(norm(plu)));
         if (encontrado) {
-          seleccionarProducto(encontrado, pesoKg);
+          seleccionarProducto(encontrado, pesoKg, null);
           return;
         }
       }
@@ -198,8 +200,9 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
         const tipoMatch = determinarTipoCaptura(prodMatch, productos);
         if (productoActivo && prodMatch.producto === productoActivo.producto && tipoMatch === TIPOS_CAPTURA.ALMACEN_EAN) {
           setUnidadesManual(prev => (parseInt(prev, 10) || 1) + 1);
+          setEanEscaneado(code);
         } else {
-          seleccionarProducto(prodMatch);
+          seleccionarProducto(prodMatch, null, code);
         }
       } else {
         setMensajeError(`No se encontró ningún producto para el código "${code}".`);
@@ -254,11 +257,18 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
     setMensajeError(null);
     setMensajeExito(null);
 
+    // Formato exacto v19 del servidor: { producto, kg } para pesables, { producto, unidades, ean } para almacén/unidades
     const itemsPayload = [{
       producto: productoActivo.producto,
-      cantidad: Number(cantidadFinal),
-      ...(esPesable ? { kg: Number(cantidadFinal) } : { unidades: Math.round(Number(cantidadFinal)) }),
-      unidad: productoActivo.unidad || (esPesable ? 'kg' : 'un')
+      ...(esPesable
+        ? { kg: Number(cantidadFinal) }
+        : {
+            unidades: Math.round(Number(cantidadFinal)),
+            ...((eanEscaneado || productoActivo.ean || productoActivo.barcode)
+              ? { ean: String(eanEscaneado || productoActivo.ean || productoActivo.barcode).trim() }
+              : {})
+          }
+      )
     }];
 
     try {
@@ -275,28 +285,20 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
           `¡Consumo confirmado! Se descontaron ${cantidadFinal} ${etiquetaUnidad(productoActivo.unidad, cantidadFinal)} de ${productoActivo.producto} (${$$(subtotalConsumo)}). Nuevo saldo disponible: ${$$(nuevoSaldo)}`
         );
 
-        // Descontar del stock local para feedback inmediato
-        setProductos(prev => prev.map(p => {
-          if (p.producto === productoActivo.producto) {
-            return {
-              ...p,
-              stock_disponible: Math.max(0, Number((p.stock_disponible - cantidadFinal).toFixed(3)))
-            };
-          }
-          return p;
-        }));
-
-        // Limpiar selección para el próximo producto
+        // Limpiar selección para el próximo producto (sin descuento duplicado local)
         setProductoActivo(null);
+        setEanEscaneado(null);
         setPesoManual('');
         setUnidadesManual(1);
 
-        // Recargar información en segundo plano
+        // Recargar información y stock desde el servidor
         cargarInfoHogar();
+        cargarProductosDisponibles();
       } else {
         if (res?.error && res.error.toLowerCase().includes('pin')) {
           handleSalir();
         }
+        // Mostrar mensaje exacto de error del servidor
         setMensajeError(res?.error || 'No se pudo registrar el consumo.');
       }
     } catch (err) {

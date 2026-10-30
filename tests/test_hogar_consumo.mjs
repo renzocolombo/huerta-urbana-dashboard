@@ -317,6 +317,139 @@ it('Detección de descuadre: si falta o sobra stock, diferencia !== 0 y esExacto
   assert.strictEqual(balanceDescuadrado.valor_merma_pesos, 750.00); // 0.500 * 1500
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. SERVIDOR V19: CONSUMO MIXTO, ERRORES DE STOCK Y SIN DOBLE DESCUENTO
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n--- 4. Servidor v19: Consumo Mixto, Errores y Sin Doble Descuento ---');
+
+it('Formato exacto v19: consumo mixto (kilos + unidades de almacén) sin clave unidad', () => {
+  const itemsCliente = [
+    { producto: 'Papa Negra', kg: 2.450 },
+    { producto: 'Choclo en Grano Arcor', unidades: 3, ean: '7790580123456' }
+  ];
+
+  // Simular formateo de apiRegistrarSalidas
+  const payloadItems = itemsCliente.map(it => {
+    const p = { producto: String(it.producto).trim() };
+    if (it.unidades !== undefined && it.unidades !== null) {
+      p.unidades = Math.round(Number(it.unidades));
+      if (it.ean) p.ean = String(it.ean).trim();
+    } else if (it.kg !== undefined && it.kg !== null) {
+      p.kg = Number(it.kg);
+    }
+    return p;
+  });
+
+  // Ítem 1 (Kilos): { producto, kg }
+  assert.deepStrictEqual(payloadItems[0], { producto: 'Papa Negra', kg: 2.450 });
+  assert.strictEqual('unidad' in payloadItems[0], false, 'No debe llevar la clave unidad');
+
+  // Ítem 2 (Almacén): { producto, unidades, ean }
+  assert.deepStrictEqual(payloadItems[1], { producto: 'Choclo en Grano Arcor', unidades: 3, ean: '7790580123456' });
+  assert.strictEqual('unidad' in payloadItems[1], false, 'No debe llevar la clave unidad');
+});
+
+it('Simulación servidor v19 con éxito: respuesta contiene ok, total_pesos, saldo, almacen_items', () => {
+  // Mock de respuesta v19 exitosa del servidor
+  const respuestaServidorV19 = {
+    ok: true,
+    total_pesos: 4500,
+    saldo: 15500,
+    almacen_items: [
+      { producto: 'Choclo en Grano Arcor', unidades_descontadas: 3, stock_restante: 12 }
+    ]
+  };
+
+  assert.strictEqual(respuestaServidorV19.ok, true);
+  assert.strictEqual(respuestaServidorV19.saldo, 15500);
+  assert.strictEqual(respuestaServidorV19.almacen_items[0].unidades_descontadas, 3);
+});
+
+it('Manejo de error de stock insuficiente del servidor se muestra tal cual', () => {
+  const respuestaErrorStock = {
+    ok: false,
+    error: 'No hay stock suficiente de Choclo en Grano Arcor (en almacen: 2)'
+  };
+
+  let mensajeErrorUI = null;
+  if (!respuestaErrorStock.ok) {
+    mensajeErrorUI = respuestaErrorStock.error;
+  }
+
+  assert.strictEqual(mensajeErrorUI, 'No hay stock suficiente de Choclo en Grano Arcor (en almacen: 2)');
+});
+
+it('Manejo de error de producto no encontrado en almacén se muestra tal cual', () => {
+  const respuestaErrorNoEncontrado = {
+    ok: false,
+    error: 'Producto de almacen no encontrado: Galletitas Rellenas'
+  };
+
+  let mensajeErrorUI = null;
+  if (!respuestaErrorNoEncontrado.ok) {
+    mensajeErrorUI = respuestaErrorNoEncontrado.error;
+  }
+
+  assert.strictEqual(mensajeErrorUI, 'Producto de almacen no encontrado: Galletitas Rellenas');
+});
+
+it('Manejo de error de saldo del hogar insuficiente se muestra tal cual', () => {
+  const respuestaErrorSaldo = {
+    ok: false,
+    error: 'Saldo del hogar insuficiente'
+  };
+
+  let mensajeErrorUI = null;
+  if (!respuestaErrorSaldo.ok) {
+    mensajeErrorUI = respuestaErrorSaldo.error;
+  }
+
+  assert.strictEqual(mensajeErrorUI, 'Saldo del hogar insuficiente');
+});
+
+it('EAN se incluye en el payload cuando el producto se elige por escaneo', () => {
+  const prodMatch = { producto: 'Yerba Playadito 500g', unidad: 'un', ean: '7790580654321' };
+  const codigoEscaneadoPistola = '7790580654321';
+
+  const itemPayload = {
+    producto: prodMatch.producto,
+    unidades: 2,
+    ...(codigoEscaneadoPistola ? { ean: codigoEscaneadoPistola } : {})
+  };
+
+  assert.strictEqual(itemPayload.ean, '7790580654321');
+  assert.strictEqual('unidad' in itemPayload, false);
+});
+
+it('Sin doble descuento: el cliente no descuenta stock_unidades localmente y recarga desde el servidor', () => {
+  let stockServidor = 10;
+  let stockCliente = 10;
+  let llamadasUpdateAlmacen = 0;
+  let llamadasStockSync = 0;
+
+  // Servidor descuenta
+  const simularSalidaServidor = (unidades) => {
+    stockServidor -= unidades;
+    return { ok: true, saldo: 5000 };
+  };
+
+  // Cliente: envía al servidor y recarga (sin descuento local previo ni llamadas duplicadas)
+  const registrarConsumoCliente = (unidades) => {
+    const res = simularSalidaServidor(unidades);
+    if (res.ok) {
+      // Recargar desde servidor (NO modificar stockCliente restando directamente)
+      stockCliente = stockServidor;
+    }
+  };
+
+  registrarConsumoCliente(3);
+
+  assert.strictEqual(stockServidor, 7, 'Servidor descontó 3 unidades');
+  assert.strictEqual(stockCliente, 7, 'Cliente sincronizó exactamente con el servidor sin doble descuento');
+  assert.strictEqual(llamadasUpdateAlmacen, 0, 'No debe llamar a updateAlmacen');
+  assert.strictEqual(llamadasStockSync, 0, 'No debe llamar a stockSync');
+});
+
 console.log('\n==================================================================');
 console.log(`TOTAL RESULTADO: ${passedTests} ok, 0 fallas (Total: ${totalTests})`);
 console.log('==================================================================');

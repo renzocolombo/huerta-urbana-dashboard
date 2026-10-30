@@ -1224,6 +1224,7 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
 
   // Producto activo seleccionado para pesar o ingresar
   const [productoSeleccionado, setProductoSeleccionado] = useState(null);
+  const [eanEscaneado, setEanEscaneado] = useState(null);
   const [busqueda, setBusqueda] = useState('');
   const [chipCat, setChipCat] = useState('Todos');
 
@@ -1264,8 +1265,9 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
   }, [productosExistentes, chipCat, busqueda]);
 
   // Selección de producto para pesar o ingresar
-  const handleSeleccionarProducto = (p) => {
+  const handleSeleccionarProducto = (p, eanCode = null) => {
     setProductoSeleccionado(p);
+    setEanEscaneado(eanCode || p.ean || p.barcode || null);
     const tipo = determinarTipoCaptura(p, productosExistentes);
     if (tipo === TIPOS_CAPTURA.PESABLE) {
       setModoManual(false);
@@ -1327,6 +1329,7 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
           cantidad: cantidadTomada,
           kg: cantidadTomada,
           unidades: Math.round(cantidadTomada),
+          ean: eanEscaneado || productoSeleccionado.ean || productoSeleccionado.barcode || null,
           costo_unitario: costoUnit,
           stock_actual: stockActual,
           stock_resultante: stockResultante,
@@ -1351,6 +1354,7 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
           cantidad: cantidadTomada,
           kg: cantidadTomada,
           unidades: Math.round(cantidadTomada),
+          ean: eanEscaneado || productoSeleccionado.ean || productoSeleccionado.barcode || null,
           stock_real: stockReal,
           dif: dif,
           costo_unitario: costoUnit,
@@ -1365,6 +1369,7 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
 
     // Limpiar para pesar el siguiente producto
     setProductoSeleccionado(null);
+    setEanEscaneado(null);
     setCantidadManual('');
     setBusqueda('');
   };
@@ -1393,14 +1398,21 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
       let notaFinal = '';
 
       if (tipoSalida === 'MERMA') {
+        // Formato exacto v19: { producto, kg } para pesables, { producto, unidades, ean } para almacén/unidades
         payloadItems = itemsSalida.map(it => {
           const pesable = it.tipoCaptura === TIPOS_CAPTURA.PESABLE || (it.unidad || 'kg').toLowerCase() === 'kg';
-          return {
-            producto: it.producto,
-            cantidad: Number(it.cantidad != null ? it.cantidad : it.kg) || 0,
-            ...(pesable ? { kg: Number(it.kg) || 0 } : { unidades: Math.round(Number(it.cantidad || it.kg) || 0) }),
-            unidad: it.unidad || (pesable ? 'kg' : 'un')
-          };
+          if (pesable) {
+            return {
+              producto: it.producto,
+              kg: Number(it.kg) || 0
+            };
+          } else {
+            return {
+              producto: it.producto,
+              unidades: Math.round(Number(it.unidades != null ? it.unidades : (it.cantidad != null ? it.cantidad : it.kg)) || 0),
+              ...(it.ean ? { ean: String(it.ean).trim() } : {})
+            };
+          }
         });
         notaFinal = notaPersonalizada.trim() ? `${motivoRapido} - ${notaPersonalizada.trim()}` : motivoRapido;
       } else {
@@ -1560,15 +1572,16 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
                         const tipo = determinarTipoCaptura(match, productosExistentes);
                         if (productoSeleccionado && match.producto === productoSeleccionado.producto && tipo === TIPOS_CAPTURA.ALMACEN_EAN) {
                           setCantidadManual(prev => String((parseInt(prev, 10) || 1) + 1));
+                          setEanEscaneado(code);
                           setBusqueda('');
                           return;
                         }
-                        handleSeleccionarProducto(match);
+                        handleSeleccionarProducto(match, code);
                         setBusqueda('');
                         return;
                       }
                       if (productosFiltrados.length === 1) {
-                        handleSeleccionarProducto(productosFiltrados[0]);
+                        handleSeleccionarProducto(productosFiltrados[0], code);
                         setBusqueda('');
                       }
                     }
