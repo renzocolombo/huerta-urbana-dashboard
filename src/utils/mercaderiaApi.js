@@ -202,6 +202,10 @@ export async function apiIngresoAlmacen({
   });
 }
 
+export async function apiGetAlmacen() {
+  return llamarAppsScript('getAlmacen');
+}
+
 // ── 3. SALIDAS (MERMA, AJUSTE, CASA) ───────────────────────────────────────
 
 /**

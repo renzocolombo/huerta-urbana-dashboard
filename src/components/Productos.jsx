@@ -11,14 +11,14 @@ import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { 
   apiGetStockKg, apiGetPreciosSugeridos, apiCrearProducto,
   apiSetMargen, apiPublicarPrecios, apiGetPreciosWeb, apiGetConfig, apiSetConfig,
-  apiCrearIngreso, apiIngresoAlmacen, apiGetIngresos, apiGetProveedores,
+  apiCrearIngreso, apiIngresoAlmacen, apiGetAlmacen, apiGetIngresos, apiGetProveedores,
   apiRegistrarSalidas, apiGetMovimientos,
   getAdminPinSession, setAdminPinSession, clearAdminPinSession
 } from '../utils/mercaderiaApi';
-import { BalanzaSystelSession, soportaWebSerial, useBalanzaSystel } from '../utils/balanzaSystel';
+import { BalanzaSystelSession, useBalanzaSystel } from '../utils/balanzaSystel';
 import { getCategoriaPrincipal, getEanMapping } from '../data/productUtils';
 import { leerCacheAlmacen } from '../utils/almacenCache';
-import { determinarTipoCaptura, analizarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
+import { determinarTipoCaptura, analizarTipoCaptura, TIPOS_CAPTURA } from '../utils/tipoCapturaProducto';
 import PedidoMinimoCard from './PedidoMinimoCard';
 
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -76,11 +76,12 @@ export default function Productos() {
     setCargando(true);
     setError(null);
     try {
-      const [resStock, resPrecios, resConfig, resWeb] = await Promise.all([
+      const [resStock, resPrecios, resConfig, resWeb, resAlmacen] = await Promise.all([
         apiGetStockKg(),
         apiGetPreciosSugeridos(),
         apiGetConfig(),
-        apiGetPreciosWeb().catch(() => null)
+        apiGetPreciosWeb().catch(() => null),
+        apiGetAlmacen().catch(() => null)
       ]);
 
       if (resConfig && resConfig.ok) {
@@ -167,6 +168,7 @@ export default function Productos() {
           categoria: cat,
           unidad: p.unidad || 'kg',
           costo_kg_ultimo: Number(p.costo_kg_ultimo || p.costo || 0),
+          costo_unitario: Number(p.costo_kg_ultimo || p.costo || 0),
           margen_pct: Number(p.margen_pct !== undefined ? p.margen_pct : 60),
           precio_sugerido: Number(p.precio_sugerido || 0),
           precio_publicado: Number(p.precio_publicado || 0),
@@ -191,6 +193,7 @@ export default function Productos() {
           categoria: cat,
           unidad: s.unidad || 'kg',
           costo_kg_ultimo: Number(s.costo_kg_ultimo || 0),
+          costo_unitario: Number(s.costo_kg_ultimo || 0),
           margen_pct: 60,
           precio_sugerido: 0,
           precio_publicado: 0,
@@ -202,11 +205,179 @@ export default function Productos() {
           categoria: s.categoria || existing.categoria || getCategoriaPrincipal(s.producto),
           unidad: s.unidad || existing.unidad || 'kg',
           costo_kg_ultimo: s.costo_kg_ultimo ? Number(s.costo_kg_ultimo) : existing.costo_kg_ultimo,
+          costo_unitario: s.costo_kg_ultimo ? Number(s.costo_kg_ultimo) : existing.costo_kg_ultimo,
           en_deposito: Number(s.en_deposito || 0),
           comprometido: Number(s.comprometido || 0),
           vendible: Number(s.vendible !== undefined ? s.vendible : ((Number(s.en_deposito) || 0) - (Number(s.comprometido) || 0))),
           ultimo_ingreso: s.ultimo_ingreso || existing.ultimo_ingreso || '—'
         });
+      });
+
+      // ── CARGA Y CRUCE DE PRODUCTOS DE LA HOJA ALMACEN ─────────────────────
+      const mapaRawAlmacen = new Map();
+
+      const procesarItemAlmacen = (item) => {
+        if (!item) return;
+        const nom = String(item.nombre || item.producto || '').trim();
+        // Regla: Filas con nombre vacío NO se muestran como productos
+        if (!nom) return;
+        const k = norm(nom);
+        const prev = mapaRawAlmacen.get(k) || {};
+
+        const stockUds = Number(
+          item.stock_unidades !== undefined ? item.stock_unidades :
+          (item.unidades !== undefined ? item.unidades :
+          (item.stock !== undefined ? item.stock : prev.stock_unidades || 0))
+        ) || 0;
+
+        const costo = Number(
+          item.costo_unitario !== undefined ? item.costo_unitario :
+          (item.costo !== undefined ? item.costo :
+          (item.precioCajon !== undefined ? item.precioCajon : prev.costo_unitario || 0))
+        ) || 0;
+
+        const precioVenta = Number(
+          item.precio_venta !== undefined ? item.precio_venta :
+          (item.precioFinal !== undefined ? item.precioFinal :
+          (item.precio !== undefined ? item.precio : prev.precio_venta || 0))
+        ) || 0;
+
+        const marca = String(item.marca || prev.marca || '').trim();
+        const cat = String(item.categoria || prev.categoria || 'Almacén').trim();
+        const subcat = String(item.subcategoria || prev.subcategoria || 'Almacén').trim();
+        const ean = String(item.codigo_ean || item.ean || prev.codigo_ean || '').trim().toUpperCase();
+        const margen = item.margen_pct !== undefined
+          ? Number(item.margen_pct)
+          : (item.margen !== undefined ? Number(item.margen) : prev.margen_pct);
+
+        mapaRawAlmacen.set(k, {
+          nombre: nom,
+          producto: nom,
+          marca,
+          categoria: cat,
+          subcategoria: subcat,
+          codigo_ean: ean,
+          costo_unitario: costo,
+          precio_venta: precioVenta,
+          stock_unidades: stockUds,
+          margen_pct: margen,
+        });
+      };
+
+      // 1. Endpoint getAlmacen del servidor (si responde)
+      const listaAlmacenServer = (resAlmacen && resAlmacen.ok)
+        ? (Array.isArray(resAlmacen.almacen) ? resAlmacen.almacen : (Array.isArray(resAlmacen.productos) ? resAlmacen.productos : []))
+        : [];
+      listaAlmacenServer.forEach(procesarItemAlmacen);
+
+      // 2. Filas de Almacen en stockData de Google Sheets
+      if (Array.isArray(stockData)) {
+        stockData.forEach(s => {
+          if (s && (s.categoriaPrincipal === 'Almacén' || s.tipo === 'otros' || norm(s.subcategoria).includes('almacen'))) {
+            procesarItemAlmacen(s);
+          }
+        });
+      }
+
+      // 3. Filas de Almacen en productosCostos
+      if (Array.isArray(productosCostos)) {
+        productosCostos.forEach(pc => {
+          if (pc && (pc.categoriaPrincipal === 'Almacén' || norm(pc.subcategoria).includes('almacen') || pc.categoria === 'otros')) {
+            procesarItemAlmacen(pc);
+          }
+        });
+      }
+
+      // 4. Cache local huerta_stock_units_cache_v1
+      const cacheAlmObj = leerCacheAlmacen();
+      Object.keys(cacheAlmObj || {}).forEach(k => {
+        const c = cacheAlmObj[k];
+        if (c && c.nombre) {
+          procesarItemAlmacen({
+            nombre: c.nombre,
+            marca: c.marca,
+            subcategoria: c.subcategoria,
+            codigo_ean: c.ean,
+            costo_unitario: c.costoUnitario,
+            precio_venta: c.precioMaxManual || c.precioFinal,
+            stock_unidades: c.stock,
+            margen_pct: c.margen
+          });
+        }
+      });
+
+      // 5. Cruzar con mapa de EAN local
+      try {
+        const eanMap = getEanMapping();
+        Object.keys(eanMap || {}).forEach(cEan => {
+          const info = eanMap[cEan];
+          if (info && info.nombre) {
+            procesarItemAlmacen({
+              nombre: info.nombre,
+              marca: info.marca,
+              subcategoria: info.subcategoria,
+              codigo_ean: cEan
+            });
+          }
+        });
+      } catch (_) {}
+
+      // Incorporar productos de Almacén a la lista principal
+      mapaRawAlmacen.forEach((alm, k) => {
+        // Regla: Los de stock 0 y los registros vacíos de la hoja NO se muestran como productos
+        if (!alm.nombre || !alm.nombre.trim()) return;
+        if (Number(alm.stock_unidades || 0) <= 0) return;
+
+        const pw = mapaWeb.get(k);
+        const costo = alm.costo_unitario;
+        const precioVenta = alm.precio_venta;
+        const margen = alm.margen_pct !== undefined 
+          ? alm.margen_pct 
+          : (costo > 0 && precioVenta > 0 ? Math.round(((precioVenta - costo) / costo) * 100) : 70);
+
+        const existing = mapa.get(k);
+        if (existing) {
+          existing.es_almacen = true;
+          existing.marca = alm.marca || existing.marca || '';
+          existing.codigo_ean = alm.codigo_ean || existing.codigo_ean || '';
+          existing.categoria = 'Almacén';
+          existing.subcategoria = alm.subcategoria || existing.subcategoria || 'Almacén';
+          existing.stock_unidades = alm.stock_unidades;
+          existing.en_deposito = alm.stock_unidades;
+          existing.costo_unitario = costo;
+          existing.costo_kg_ultimo = costo;
+          existing.precio_venta = precioVenta;
+          existing.precio_sugerido = precioVenta;
+          existing.precio_publicado = pw && pw.precio !== undefined ? Number(pw.precio) : (existing.precio_publicado || precioVenta);
+          existing.margen_pct = margen;
+          existing.disponible = alm.stock_unidades > 0;
+          existing.unidad = 'un';
+        } else {
+          mapa.set(k, {
+            producto: alm.nombre,
+            nombre: alm.nombre,
+            marca: alm.marca || '',
+            codigo_ean: alm.codigo_ean || '',
+            categoria: 'Almacén',
+            subcategoria: alm.subcategoria || 'Almacén',
+            unidad: 'un',
+            costo_unitario: costo,
+            costo_kg_ultimo: costo,
+            precio_venta: precioVenta,
+            precio_sugerido: precioVenta,
+            precio_publicado: pw && pw.precio !== undefined ? Number(pw.precio) : precioVenta,
+            margen_pct: margen,
+            disponible: alm.stock_unidades > 0,
+            sinStockAlmacenAuto: false,
+            es_almacen: true,
+            es_forzado: false,
+            stock_unidades: alm.stock_unidades,
+            en_deposito: alm.stock_unidades,
+            comprometido: 0,
+            vendible: alm.stock_unidades,
+            ultimo_ingreso: '—'
+          });
+        }
       });
 
       const combinados = Array.from(mapa.values()).sort((a, b) => a.producto.localeCompare(b.producto, 'es', { sensitivity: 'base' }));
@@ -318,28 +489,42 @@ export default function Productos() {
   // Lista de cambios para el modal de publicación
   const cambiosDePrecio = useMemo(() => {
     return productos.map(p => {
+      const esAlm = Boolean(p.es_almacen || p.categoria === 'Almacén' || norm(p.categoria).includes('almacen'));
       const margenActual = margenesEditados[p.producto] !== undefined ? margenesEditados[p.producto] : p.margen_pct;
-      const sugerido = calcularPrecioSugerido(p.costo_kg_ultimo, margenActual);
+      
+      let sugerido = 0;
+      const costoVal = esAlm ? Number(p.costo_unitario || p.costo_kg_ultimo || 0) : Number(p.costo_kg_ultimo || 0);
+
+      if (esAlm) {
+        if (margenesEditados[p.producto] !== undefined && costoVal > 0) {
+          sugerido = Math.round(costoVal * (1 + Number(margenActual) / 100));
+        } else {
+          sugerido = Number(p.precio_venta || p.precio_sugerido || 0);
+        }
+      } else {
+        sugerido = calcularPrecioSugerido(costoVal, margenActual);
+      }
+
       const publicado = Number(p.precio_publicado || 0);
       const diferencia = sugerido - publicado;
       const difPct = publicado > 0 ? ((diferencia / publicado) * 100).toFixed(1) : '100';
 
       return {
         producto: p.producto,
-        costo_kg_ultimo: p.costo_kg_ultimo,
+        costo_kg_ultimo: costoVal,
         margen_pct: margenActual,
         precio_sugerido: sugerido,
         precio_publicado: publicado,
         diferencia,
         difPct,
         disponible: p.disponible !== false,
-        es_almacen: p.es_almacen,
+        es_almacen: esAlm,
         sinStockAlmacenAuto: p.sinStockAlmacenAuto,
         es_forzado: p.es_forzado,
         cambia: (sugerido > 0 && sugerido !== publicado) || Boolean(p.disponible_cambio)
       };
     });
-  }, [productos, margenesEditados, config.redondeo]);
+  }, [productos, margenesEditados, config.redondeo, calcularPrecioSugerido]);
 
   const productosQueCambian = useMemo(() => cambiosDePrecio.filter(c => c.cambia), [cambiosDePrecio]);
 
@@ -568,6 +753,16 @@ export default function Productos() {
                           <td className="py-3 px-4 font-bold text-white text-sm">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span>{p.producto}</span>
+                              {p.marca && (
+                                <span className="text-[10px] text-gray-400 font-semibold px-1.5 py-0.5 rounded bg-gray-800/80 border border-gray-700/50">
+                                  {p.marca}
+                                </span>
+                              )}
+                              {p.codigo_ean && (
+                                <span className="font-mono text-[9px] text-amber-300 font-bold px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 flex items-center gap-1">
+                                  <Barcode size={10} /> {p.codigo_ean}
+                                </span>
+                              )}
                               {p.disponible === false && (
                                 <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-red-600/20 text-red-400 border border-red-500/40">
                                   Sin stock
@@ -578,9 +773,16 @@ export default function Productos() {
 
                           {/* 2. Categoría */}
                           <td className="py-3 px-3">
-                            <span className="px-2 py-0.5 rounded-md bg-gray-800/80 border border-gray-700/60 text-gray-300 text-[10px] font-semibold">
-                              {p.categoria || 'Sin categoría'}
-                            </span>
+                            <div className="flex flex-col gap-0.5">
+                              <span className="px-2 py-0.5 rounded-md bg-gray-800/80 border border-gray-700/60 text-gray-300 text-[10px] font-semibold w-fit">
+                                {p.categoria || 'Sin categoría'}
+                              </span>
+                              {p.subcategoria && p.subcategoria !== p.categoria && (
+                                <span className="text-[9px] text-gray-500 font-medium">
+                                  {p.subcategoria}
+                                </span>
+                              )}
+                            </div>
                           </td>
 
                           {/* 2b. Disponible Switch */}
@@ -624,16 +826,18 @@ export default function Productos() {
                           {/* 3. Stock con unidad */}
                           <td className="py-3 px-3 text-right font-mono font-bold">
                             <span className={esSinStock ? 'text-gray-500' : 'text-white'}>
-                              {p.unidad === 'kg' 
-                                ? `${Number(p.en_deposito || 0).toFixed(2)} kg` 
-                                : `${Math.round(Number(p.en_deposito || 0))} ${p.unidad}`}
+                              {p.es_almacen
+                                ? `${Math.round(Number(p.stock_unidades || p.en_deposito || 0))} un`
+                                : (p.unidad === 'kg' 
+                                    ? `${Number(p.en_deposito || 0).toFixed(2)} kg` 
+                                    : `${Math.round(Number(p.en_deposito || 0))} ${p.unidad}`)}
                             </span>
                           </td>
 
                           {/* 4. Costo por unidad */}
                           <td className="py-3 px-3 text-right font-mono text-gray-300">
-                            {p.costo_kg_ultimo > 0 ? (
-                              <span>$${p.costo_kg_ultimo.toFixed(0)} <span className="text-[10px] text-gray-500 font-normal">/{p.unidad}</span></span>
+                            {(p.costo_unitario > 0 || p.costo_kg_ultimo > 0) ? (
+                              <span>$${(p.costo_unitario || p.costo_kg_ultimo).toFixed(0)} <span className="text-[10px] text-gray-500 font-normal">/{p.unidad}</span></span>
                             ) : (
                               <span className="text-gray-600">—</span>
                             )}
@@ -668,7 +872,7 @@ export default function Productos() {
                               {sug > 0 ? $$(sug) : '—'}
                             </div>
                             <div className="text-[9px] text-gray-500 font-mono">
-                              {textoCuenta}
+                              {p.es_almacen ? 'precio hoja Almacén' : textoCuenta}
                             </div>
                           </td>
 
@@ -2554,29 +2758,93 @@ function ModalNuevoProducto({ onClose, onSuccess }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENTE: MODAL PUBLICAR PRECIOS (ANTES / DESPUÉS)
 // ─────────────────────────────────────────────────────────────────────────────
-function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, config, calcularPrecioSugerido, onClose, onSuccess }) {
+function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, config: _config, calcularPrecioSugerido, onClose, onSuccess }) {
   const [publicando, setPublicando] = useState(false);
   const [error, setError] = useState(null);
 
-  const totalProds = preciosList.length;
-  const cantDisponibles = preciosList.filter(p => p.disponible !== false).length;
-  const prodsSinStock = preciosList.filter(p => p.disponible === false);
+  // Clasificación de productos a publicar y validación de precios/costos
+  const { prodsParaPublicar, prodsSinPrecioOCosto, conteoPorCategoria, prodsSinStock } = useMemo(() => {
+    const listValidos = [];
+    const listSinPrecio = [];
+    const conteo = {};
+    const sinStockArr = [];
+
+    (preciosList || []).forEach(p => {
+      const esAlm = Boolean(p.es_almacen || p.categoria === 'Almacén' || norm(p.categoria).includes('almacen'));
+      
+      let nombreWeb = p.producto;
+      let precioFinal = 0;
+      let costoUnit = 0;
+      let disponible = true;
+      let cat = p.categoria || (esAlm ? 'Almacén' : 'Verduras');
+      let subcat = p.subcategoria || (esAlm ? 'Almacén' : '');
+      let unidad = esAlm ? 'un' : (p.unidad || 'kg');
+
+      if (esAlm) {
+        // Nombre con marca si corresponde (igual a como se mostrará en la web)
+        if (p.marca && p.marca.trim() && !p.producto.toLowerCase().includes(p.marca.toLowerCase())) {
+          nombreWeb = `${p.producto} (${p.marca.trim()})`;
+        } else {
+          nombreWeb = p.producto;
+        }
+        costoUnit = Number(p.costo_unitario || p.costo_kg_ultimo || 0);
+        precioFinal = Number(p.precio_venta || p.precio_sugerido || p.precio_publicado || 0);
+        disponible = Number(p.stock_unidades || 0) > 0;
+      } else {
+        const margenActual = margenesEditados[p.producto] !== undefined ? margenesEditados[p.producto] : p.margen_pct;
+        const sugerido = calcularPrecioSugerido(p.costo_kg_ultimo, margenActual);
+        costoUnit = Number(p.costo_kg_ultimo || 0);
+        precioFinal = sugerido > 0 ? sugerido : (Number(p.precio_publicado) || 0);
+        disponible = p.disponible !== false;
+      }
+
+      // Regla: Producto sin precio (0) o sin costo NO se publica y se lista como advertencia visible antes de publicar
+      if (precioFinal <= 0 || costoUnit <= 0) {
+        listSinPrecio.push({
+          producto: p.producto,
+          categoria: cat,
+          motivo: precioFinal <= 0 ? 'Sin precio ($0)' : 'Sin costo ($0)'
+        });
+        return;
+      }
+
+      if (!disponible) {
+        sinStockArr.push({
+          producto: nombreWeb,
+          categoria: cat,
+          esAlmacen: esAlm,
+          stock: p.stock_unidades
+        });
+      }
+
+      // Conteo por categoría
+      conteo[cat] = (conteo[cat] || 0) + 1;
+
+      listValidos.push({
+        nombre: nombreWeb,
+        precio: Math.round(precioFinal),
+        disponible,
+        categoria: cat,
+        ...(subcat ? { subcategoria: subcat } : {}),
+        unidad,
+        ...(p.marca ? { marca: p.marca } : {})
+      });
+    });
+
+    return {
+      prodsParaPublicar: listValidos,
+      prodsSinPrecioOCosto: listSinPrecio,
+      conteoPorCategoria: conteo,
+      prodsSinStock: sinStockArr
+    };
+  }, [preciosList, margenesEditados, calcularPrecioSugerido]);
+
+  const totalValidos = prodsParaPublicar.length;
+  const cantDisponibles = totalValidos - prodsSinStock.length;
 
   const handleConfirmar = async () => {
     setPublicando(true);
     setError(null);
-
-    // Contrato estricto: origen 'mercaderia', enviando nombre, precio y disponible
-    const prodsParaPublicar = preciosList.map(p => {
-      const margenActual = margenesEditados[p.producto] !== undefined ? margenesEditados[p.producto] : p.margen_pct;
-      const sugerido = calcularPrecioSugerido(p.costo_kg_ultimo, margenActual);
-      const precioFinal = sugerido > 0 ? sugerido : (Number(p.precio_publicado) || 0);
-      return {
-        nombre: p.producto,
-        precio: precioFinal,
-        disponible: p.disponible !== false
-      };
-    });
 
     try {
       const res = await apiPublicarPrecios(prodsParaPublicar);
@@ -2608,21 +2876,53 @@ function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, con
           Se actualizarán precios y disponibilidad en la tienda web y se auditarán en Google Sheets.
         </p>
 
-        {/* Resumen de catálogo y disponibilidad */}
-        <div className="flex items-center justify-between text-xs bg-black/50 border border-gray-800 px-3 py-2 rounded-xl">
-          <span className="text-gray-400">Total: <strong className="text-white">{totalProds}</strong></span>
-          <span className="text-gray-600">|</span>
-          <span className="text-green-400 font-bold">Disponibles: {cantDisponibles}</span>
-          <span className="text-gray-600">|</span>
-          <span className={prodsSinStock.length > 0 ? 'text-red-400 font-bold' : 'text-gray-500'}>
-            Sin stock: {prodsSinStock.length}
-          </span>
+        {/* Resumen de confirmación: cantidad por categoría, cuántos sin stock, cuántos sin precio */}
+        <div className="bg-black/50 border border-gray-800 p-3 rounded-2xl space-y-2.5">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-gray-400 font-bold uppercase text-[10px] tracking-wider">A Publicar:</span>
+            <span className="font-mono font-black text-white text-sm">{totalValidos} productos</span>
+          </div>
+
+          {/* Desglose por categoría */}
+          <div className="flex flex-wrap gap-1.5">
+            {Object.entries(conteoPorCategoria).map(([cat, count]) => (
+              <span key={cat} className="px-2 py-0.5 rounded-lg bg-gray-800 text-gray-300 text-[10px] font-bold">
+                {cat}: <strong className="text-white">{count}</strong>
+              </span>
+            ))}
+          </div>
+
+          {/* Métrica de Disponibilidad */}
+          <div className="flex items-center justify-between text-xs pt-1.5 border-t border-gray-800/80">
+            <span className="text-green-400 font-bold">✓ Disponibles en tienda: {cantDisponibles}</span>
+            <span className={prodsSinStock.length > 0 ? 'text-red-400 font-bold' : 'text-gray-500'}>
+              × Sin stock: {prodsSinStock.length}
+            </span>
+          </div>
         </div>
 
+        {/* Advertencia visible: N productos sin precio no se publican */}
+        {prodsSinPrecioOCosto.length > 0 && (
+          <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs space-y-1.5">
+            <div className="text-amber-400 font-bold flex items-center gap-1.5">
+              <AlertTriangle size={14} />
+              <span>{prodsSinPrecioOCosto.length} productos sin precio o costo NO se publican:</span>
+            </div>
+            <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
+              {prodsSinPrecioOCosto.map((sp, idx) => (
+                <div key={idx} className="flex items-center justify-between text-[11px] text-gray-300 bg-black/40 px-2 py-0.5 rounded">
+                  <span>{sp.producto} <span className="text-gray-500">({sp.categoria})</span></span>
+                  <span className="text-amber-300/80 font-mono text-[10px]">{sp.motivo}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Cambios de precio */}
-        <div className="max-h-52 overflow-y-auto space-y-2 pr-1 divide-y divide-gray-800">
+        <div className="max-h-48 overflow-y-auto space-y-2 pr-1 divide-y divide-gray-800">
           <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400">
-            Cambios de precio pendientes ({productosQueCambian.length}):
+            Cambios de precio detectados ({productosQueCambian.length}):
           </p>
           {productosQueCambian.length === 0 ? (
             <p className="py-2 text-center text-xs text-gray-500">
@@ -2660,15 +2960,10 @@ function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, con
               <AlertTriangle size={13} />
               Productos marcados "Sin stock" a publicar ({prodsSinStock.length}):
             </p>
-            <div className="max-h-28 overflow-y-auto space-y-1 pr-1">
+            <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
               {prodsSinStock.map((p, i) => (
                 <div key={i} className="flex items-center justify-between text-xs py-1 px-2.5 rounded-lg bg-red-500/10 border border-red-500/25">
-                  <div className="flex items-center gap-2">
-                    <span className="text-white font-medium">{p.producto}</span>
-                    {p.sinStockAlmacenAuto && (
-                      <span className="text-[9px] text-amber-400 font-mono">(almacén: 0)</span>
-                    )}
-                  </div>
+                  <span className="text-white font-medium">{p.producto}</span>
                   <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-red-600/40 text-red-200 border border-red-500/50">
                     Sin stock
                   </span>
@@ -2691,10 +2986,10 @@ function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, con
           <button
             type="button"
             onClick={handleConfirmar}
-            disabled={publicando}
+            disabled={publicando || totalValidos === 0}
             className="flex-[2] py-2.5 bg-green-500 hover:bg-green-400 text-black font-black uppercase tracking-wider rounded-xl text-xs cursor-pointer disabled:opacity-50"
           >
-            {publicando ? 'Publicando...' : 'Confirmar y Publicar'}
+            {publicando ? 'Publicando...' : `Confirmar y Publicar (${totalValidos})`}
           </button>
         </div>
       </div>
