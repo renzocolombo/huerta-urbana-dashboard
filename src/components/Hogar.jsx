@@ -10,6 +10,7 @@ import {
 } from '../utils/mercaderiaApi';
 import { useBalanzaSystel } from '../utils/balanzaSystel';
 import { getEanMapping, esCodigoEan } from '../data/productUtils';
+import { determinarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
 
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
@@ -181,21 +182,25 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
         }
       }
 
-      // 2. Verificar en el mapa EAN
+      // 2. Verificar en el mapa EAN o código EAN directo
       const eanMap = getEanMapping();
       const eanInfo = eanMap[code.toUpperCase()];
+      let prodMatch = null;
       if (eanInfo && eanInfo.nombre) {
-        const prodMatch = productos.find(p => norm(p.producto) === norm(eanInfo.nombre));
-        if (prodMatch) {
-          seleccionarProducto(prodMatch);
-          return;
-        }
+        prodMatch = productos.find(p => norm(p.producto) === norm(eanInfo.nombre));
+      }
+      if (!prodMatch) {
+        prodMatch = productos.find(p => p.ean === code || p.barcode === code || norm(p.producto) === norm(code) || norm(p.producto).includes(norm(code)));
       }
 
-      // 3. Buscar coincidencia directa en catálogo
-      const directo = productos.find(p => norm(p.producto) === norm(code) || norm(p.producto).includes(norm(code)));
-      if (directo) {
-        seleccionarProducto(directo);
+      if (prodMatch) {
+        // Si el producto escaneado es el que ya estaba activo y es Almacén con EAN, cada clink suma 1
+        const tipoMatch = determinarTipoCaptura(prodMatch, productos);
+        if (productoActivo && prodMatch.producto === productoActivo.producto && tipoMatch === TIPOS_CAPTURA.ALMACEN_EAN) {
+          setUnidadesManual(prev => (parseInt(prev, 10) || 1) + 1);
+        } else {
+          seleccionarProducto(prodMatch);
+        }
       } else {
         setMensajeError(`No se encontró ningún producto para el código "${code}".`);
       }
@@ -205,10 +210,18 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
   // Cálculos para producto activo
   const saldoActual = Number(datosHogar?.saldo || 0);
 
+  // Tipo de captura del producto activo según catálogo y EAN
+  const tipoCapturaActivo = useMemo(() => {
+    if (!productoActivo) return null;
+    return determinarTipoCaptura(productoActivo, productos);
+  }, [productoActivo, productos]);
+
+  const esPesable = tipoCapturaActivo === TIPOS_CAPTURA.PESABLE;
+  const esUnidadManual = tipoCapturaActivo === TIPOS_CAPTURA.UNIDAD_MANUAL;
+  const esAlmacenEan = tipoCapturaActivo === TIPOS_CAPTURA.ALMACEN_EAN;
+
   const pesoTomado = useMemo(() => {
-    if (!productoActivo) return 0;
-    const esKg = (productoActivo.unidad || 'kg').toLowerCase() === 'kg';
-    if (!esKg) return 0;
+    if (!productoActivo || !esPesable) return 0;
 
     // Si hay balanza conectada y peso vivo > 0 y no hay peso manual escrito
     if (balanza.conectado && balanza.pesoVivo !== null && balanza.pesoVivo > 0 && !pesoManual) {
@@ -219,15 +232,14 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
 
     const p = parseFloat(pesoManual);
     return isNaN(p) || p <= 0 ? 0 : Number(p.toFixed(3));
-  }, [productoActivo, balanza.conectado, balanza.pesoVivo, pesoManual, descontarTara, taraValor]);
+  }, [productoActivo, esPesable, balanza.conectado, balanza.pesoVivo, pesoManual, descontarTara, taraValor]);
 
   const cantidadFinal = useMemo(() => {
     if (!productoActivo) return 0;
-    const esKg = (productoActivo.unidad || 'kg').toLowerCase() === 'kg';
-    if (esKg) return pesoTomado;
+    if (esPesable) return pesoTomado;
     const u = parseInt(unidadesManual, 10);
     return isNaN(u) || u <= 0 ? 1 : u;
-  }, [productoActivo, pesoTomado, unidadesManual]);
+  }, [productoActivo, esPesable, pesoTomado, unidadesManual]);
 
   const costoUnitarioActivo = Number(productoActivo?.costo_unitario || 0);
   const subtotalConsumo = Number((cantidadFinal * costoUnitarioActivo).toFixed(2));
@@ -242,11 +254,11 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
     setMensajeError(null);
     setMensajeExito(null);
 
-    const esKg = (productoActivo.unidad || 'kg').toLowerCase() === 'kg';
     const itemsPayload = [{
       producto: productoActivo.producto,
-      ...(esKg ? { kg: Number(cantidadFinal) } : { unidades: Number(cantidadFinal) }),
-      unidad: productoActivo.unidad || (esKg ? 'kg' : 'un')
+      cantidad: Number(cantidadFinal),
+      ...(esPesable ? { kg: Number(cantidadFinal) } : { unidades: Math.round(Number(cantidadFinal)) }),
+      unidad: productoActivo.unidad || (esPesable ? 'kg' : 'un')
     }];
 
     try {
@@ -260,7 +272,7 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
         const nuevoSaldo = res.saldo !== undefined ? res.saldo : saldoRestante;
         setDatosHogar(prev => ({ ...prev, saldo: nuevoSaldo }));
         setMensajeExito(
-          `¡Consumo confirmado! Se descontaron ${cantidadFinal} ${productoActivo.unidad} de ${productoActivo.producto} (${$$(subtotalConsumo)}). Nuevo saldo disponible: ${$$(nuevoSaldo)}`
+          `¡Consumo confirmado! Se descontaron ${cantidadFinal} ${etiquetaUnidad(productoActivo.unidad, cantidadFinal)} de ${productoActivo.producto} (${$$(subtotalConsumo)}). Nuevo saldo disponible: ${$$(nuevoSaldo)}`
         );
 
         // Descontar del stock local para feedback inmediato
@@ -504,9 +516,15 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
                 </button>
               </div>
 
-              {/* Si es por peso (kg) -> Balanza Systel en vivo */}
-              {(productoActivo.unidad || 'kg').toLowerCase() === 'kg' ? (
+              {/* TIPO A: PESABLES (kg) -> Balanza Systel en vivo */}
+              {esPesable ? (
                 <div className="space-y-4">
+                  <div className="flex items-center gap-2 px-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                      Tipo A: Pesable (kg) &mdash; Balanza Systel
+                    </span>
+                  </div>
+
                   {/* Tarjeta Balanza Systel */}
                   <div className="bg-black border border-gray-800 rounded-2xl p-4 text-center space-y-3">
                     <div className="flex items-center justify-between text-xs">
@@ -526,7 +544,7 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
                       </button>
                     </div>
 
-                    {/* Display gigante de peso */}
+                    {/* Display gigante de peso vivo */}
                     <div className="py-2">
                       <span className="text-5xl sm:text-6xl font-mono font-black text-green-400 tracking-tight">
                         {pesoTomado.toFixed(3)}
@@ -534,28 +552,69 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
                       </span>
                     </div>
 
-                    {/* Input manual alternativo si no usa balanza */}
-                    <div className="max-w-xs mx-auto flex items-center gap-2">
-                      <label className="text-xs text-gray-400 font-bold whitespace-nowrap">
-                        O escribir peso:
+                    {/* Vía alternativa de contingencia (sin balanza) */}
+                    <div className="max-w-xs mx-auto flex items-center gap-2 pt-2 border-t border-gray-900">
+                      <label className="text-[11px] text-gray-500 whitespace-nowrap">
+                        Contingencia manual:
                       </label>
                       <input
                         type="number"
                         step="0.001"
-                        placeholder="Ej: 1.250"
+                        placeholder="Solo si no hay balanza"
                         value={pesoManual}
                         onChange={(e) => setPesoManual(e.target.value)}
-                        className="w-full bg-black/80 border border-gray-700 focus:border-green-500 rounded-xl px-3 py-1.5 text-center font-mono font-bold text-white text-sm outline-none"
+                        className="w-full bg-black/80 border border-gray-800 focus:border-green-500 rounded-xl px-2.5 py-1 text-center font-mono text-gray-300 text-xs outline-none"
                       />
                     </div>
                   </div>
                 </div>
-              ) : (
-                /* Si es producto por unidad (Almacén) */
+              ) : esUnidadManual ? (
+                /* TIPO B: POR UNIDAD O ATADO SIN CÓDIGO DE BARRAS (choclo, lechuga, perejil, etc.) */
                 <div className="bg-black border border-gray-800 rounded-2xl p-5 text-center space-y-3">
+                  <div className="flex items-center justify-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                      Tipo B: Por {etiquetaUnidad(productoActivo.unidad, 1)} (Sin balanza)
+                    </span>
+                  </div>
                   <span className="text-xs font-bold uppercase text-gray-400 block">
-                    Cantidad a consumir (Unidades)
+                    Cantidad a consumir ({etiquetaUnidad(productoActivo.unidad, unidadesManual)})
                   </span>
+                  <div className="flex items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setUnidadesManual(Math.max(1, (parseInt(unidadesManual, 10) || 1) - 1))}
+                      className="w-10 h-10 rounded-xl bg-gray-800 hover:bg-gray-700 text-white font-bold text-lg flex items-center justify-center cursor-pointer"
+                    >
+                      <Minus size={16} />
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={unidadesManual}
+                      onChange={(e) => setUnidadesManual(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      className="w-20 bg-black/80 border border-gray-700 text-center font-mono font-black text-2xl text-white rounded-xl py-1 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setUnidadesManual((parseInt(unidadesManual, 10) || 1) + 1)}
+                      className="w-10 h-10 rounded-xl bg-gray-800 hover:bg-gray-700 text-white font-bold text-lg flex items-center justify-center cursor-pointer"
+                    >
+                      <Plus size={16} />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* TIPO C: ALMACÉN CON CÓDIGO DE BARRAS (EAN) */
+                <div className="bg-black border border-gray-800 rounded-2xl p-5 text-center space-y-3">
+                  <div className="flex items-center justify-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                      Tipo C: Almacén (EAN &mdash; Pistola)
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-gray-400">
+                    Escaneá con la pistola de código de barras para sumar +1 automáticamente o ajustá la cantidad:
+                  </p>
                   <div className="flex items-center justify-center gap-3">
                     <button
                       type="button"

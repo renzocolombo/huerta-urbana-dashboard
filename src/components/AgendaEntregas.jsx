@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido, estaPedidoArmado } from '../utils/remitoPrinter';
 import { getEanMapping, esCodigoEan } from '../data/productUtils';
+import { useBalanzaSystel } from '../utils/balanzaSystel';
+import { determinarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
 import { syncProductWithSheet } from '../utils/stockSync';
 import { 
   apiReservarPedido, 
@@ -275,7 +277,9 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
 
   const esRen = (usuario || localStorage.getItem('huerta_auth_usuario') || '').trim().toLowerCase() === 'ren';
 
-  // ── Calendario de entregas: feriados/días cerrados (se cargan una vez al abrir la Agenda) ──
+  // Balanza Systel (Web Serial API) para pesado en vivo de pedidos
+  const balanza = useBalanzaSystel();
+  const [pesoManualModal, setPesoManualModal] = useState({});
   const [feriados, setFeriados] = useState([]);
   const [avisoFeriados, setAvisoFeriados] = useState(null);
   const [tabSeleccionada, setTabSeleccionada] = useState(() => fechaCompartida || null);
@@ -1122,7 +1126,19 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     let itemsActuales = preparaciones[numPedido]?.items;
 
     if (!preparaciones[numPedido]) {
-      itemsActuales = parsearProductosPedido(pedido.producto, pedido.cantidades);
+      const parsed = parsearProductosPedido(pedido.producto, pedido.cantidades);
+      itemsActuales = parsed.map(it => {
+        const tipo = determinarTipoCaptura(it, stockData);
+        return {
+          ...it,
+          tipoCaptura: tipo,
+          cantidadEditada: it.cantidad,
+          cantidadConfirmada: null,
+          pesoCongelado: null,
+          confirmado: false,
+          scans: 0
+        };
+      });
       const nuevaPrep = { items: itemsActuales, completado: false, fechaInicio: new Date().toISOString() };
       setPreparaciones(prev => ({ ...prev, [numPedido]: nuevaPrep }));
       try {
@@ -1170,7 +1186,166 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     setScanSuccess(null);
     setModalPreparacion({ pedido });
     setTimeout(() => modalScanInputRef.current?.focus(), 150);
-  }, [preparaciones]);
+  }, [preparaciones, stockData]);
+
+  // ── MÉTODOS DE CONFIRMACIÓN DE LOS TRES TIPOS (A, B, C) ───────────────────
+  const confirmarPesoPesable = useCallback((numPedido, itemIdx, pesoEspecifico = null) => {
+    setPreparaciones(prev => {
+      const prep = prev[numPedido];
+      if (!prep || !prep.items[itemIdx]) return prev;
+      const items = [...prep.items];
+      const it = { ...items[itemIdx] };
+
+      let pesoFinal = 0;
+      if (pesoEspecifico !== null && Number(pesoEspecifico) > 0) {
+        pesoFinal = Number(Number(pesoEspecifico).toFixed(3));
+      } else if (balanza.conectado && balanza.pesoVivo !== null && Number(balanza.pesoVivo) > 0) {
+        pesoFinal = Number(Number(balanza.pesoVivo).toFixed(3));
+      } else if (pesoManualModal[itemIdx] && Number(pesoManualModal[itemIdx]) > 0) {
+        pesoFinal = Number(Number(pesoManualModal[itemIdx]).toFixed(3));
+      }
+
+      if (pesoFinal <= 0) {
+        setScanError(`⚖️ Colocá el producto en la balanza para capturar el peso en vivo.`);
+        setTimeout(() => setScanError(null), 3000);
+        return prev;
+      }
+
+      it.pesoCongelado = pesoFinal;
+      it.cantidad_real = pesoFinal;
+      it.confirmado = true;
+      it.esPesado = true;
+      it.bolsasAsignadas = [{
+        uniqueCode: `PESO_${Date.now()}`,
+        peso: pesoFinal,
+        rawCode: `PESO_${pesoFinal}kg`,
+        nombre: it.nombre,
+        ts: Date.now()
+      }];
+
+      items[itemIdx] = it;
+      const todosComp = items.filter(x => !x.sin_stock).every(x => {
+        const t = determinarTipoCaptura(x, stockDataRef.current);
+        if (t === TIPOS_CAPTURA.PESABLE) return Boolean(x.confirmado && x.pesoCongelado != null);
+        if (t === TIPOS_CAPTURA.UNIDAD_MANUAL) return Boolean(x.confirmado && x.cantidadConfirmada != null);
+        return (x.scans || (x.bolsasAsignadas?.length || 0)) >= x.cantidad;
+      });
+
+      const updatedPrep = { ...prep, items, completado: todosComp };
+      try {
+        const local = JSON.parse(localStorage.getItem(PREPARACIONES_KEY) || '{}');
+        localStorage.setItem(PREPARACIONES_KEY, JSON.stringify({ ...local, [numPedido]: updatedPrep }));
+      } catch (e) {}
+      return { ...prev, [numPedido]: updatedPrep };
+    });
+  }, [balanza.conectado, balanza.pesoVivo, pesoManualModal]);
+
+  const reabrirItemPesable = useCallback((numPedido, itemIdx) => {
+    setPreparaciones(prev => {
+      const prep = prev[numPedido];
+      if (!prep || !prep.items[itemIdx]) return prev;
+      const items = [...prep.items];
+      items[itemIdx] = {
+        ...items[itemIdx],
+        confirmado: false,
+        pesoCongelado: null,
+        cantidad_real: 0,
+        bolsasAsignadas: []
+      };
+      const updatedPrep = { ...prep, items, completado: false };
+      try {
+        const local = JSON.parse(localStorage.getItem(PREPARACIONES_KEY) || '{}');
+        localStorage.setItem(PREPARACIONES_KEY, JSON.stringify({ ...local, [numPedido]: updatedPrep }));
+      } catch (e) {}
+      return { ...prev, [numPedido]: updatedPrep };
+    });
+  }, []);
+
+  const ajustarCantidadManual = useCallback((numPedido, itemIdx, delta) => {
+    setPreparaciones(prev => {
+      const prep = prev[numPedido];
+      if (!prep || !prep.items[itemIdx]) return prev;
+      const items = [...prep.items];
+      const it = { ...items[itemIdx] };
+      const actual = it.cantidadEditada != null ? it.cantidadEditada : it.cantidad;
+      const nueva = Math.max(0, actual + delta);
+      it.cantidadEditada = nueva;
+      items[itemIdx] = it;
+      return { ...prev, [numPedido]: { ...prep, items } };
+    });
+  }, []);
+
+  const confirmarCantidadManual = useCallback((numPedido, itemIdx) => {
+    setPreparaciones(prev => {
+      const prep = prev[numPedido];
+      if (!prep || !prep.items[itemIdx]) return prev;
+      const items = [...prep.items];
+      const it = { ...items[itemIdx] };
+      const cantFinal = it.cantidadEditada != null ? it.cantidadEditada : it.cantidad;
+      it.cantidadConfirmada = cantFinal;
+      it.cantidad_real = cantFinal;
+      it.confirmado = true;
+      it.esUnidad = true;
+      it.bolsasAsignadas = [{
+        uniqueCode: `UNID_${Date.now()}`,
+        peso: 1,
+        esUnidad: true,
+        nombre: it.nombre,
+        ts: Date.now()
+      }];
+
+      items[itemIdx] = it;
+      const todosComp = items.filter(x => !x.sin_stock).every(x => {
+        const t = determinarTipoCaptura(x, stockDataRef.current);
+        if (t === TIPOS_CAPTURA.PESABLE) return Boolean(x.confirmado && x.pesoCongelado != null);
+        if (t === TIPOS_CAPTURA.UNIDAD_MANUAL) return Boolean(x.confirmado && x.cantidadConfirmada != null);
+        return (x.scans || (x.bolsasAsignadas?.length || 0)) >= x.cantidad;
+      });
+
+      const updatedPrep = { ...prep, items, completado: todosComp };
+      try {
+        const local = JSON.parse(localStorage.getItem(PREPARACIONES_KEY) || '{}');
+        localStorage.setItem(PREPARACIONES_KEY, JSON.stringify({ ...local, [numPedido]: updatedPrep }));
+      } catch (e) {}
+      return { ...prev, [numPedido]: updatedPrep };
+    });
+  }, []);
+
+  const reabrirItemManual = useCallback((numPedido, itemIdx) => {
+    setPreparaciones(prev => {
+      const prep = prev[numPedido];
+      if (!prep || !prep.items[itemIdx]) return prev;
+      const items = [...prep.items];
+      items[itemIdx] = {
+        ...items[itemIdx],
+        confirmado: false,
+        cantidadConfirmada: null,
+        bolsasAsignadas: []
+      };
+      const updatedPrep = { ...prep, items, completado: false };
+      try {
+        const local = JSON.parse(localStorage.getItem(PREPARACIONES_KEY) || '{}');
+        localStorage.setItem(PREPARACIONES_KEY, JSON.stringify({ ...local, [numPedido]: updatedPrep }));
+      } catch (e) {}
+      return { ...prev, [numPedido]: updatedPrep };
+    });
+  }, []);
+
+  const desarmarScanEan = useCallback((numPedido, itemIdx) => {
+    setPreparaciones(prev => {
+      const prep = prev[numPedido];
+      if (!prep || !prep.items[itemIdx]) return prev;
+      const items = [...prep.items];
+      const it = { ...items[itemIdx] };
+      it.scans = Math.max(0, (it.scans || (it.bolsasAsignadas?.length || 0)) - 1);
+      it.bolsasAsignadas = (it.bolsasAsignadas || []).slice(0, -1);
+      if (it.scans < it.cantidad) {
+        it.confirmado = false;
+      }
+      items[itemIdx] = it;
+      return { ...prev, [numPedido]: { ...prep, items, completado: false } };
+    });
+  }, []);
 
   // Revertir el descuento de stock de una bolsa puntual
   const revertirStockBolsa = useCallback((bolsa) => {
@@ -1474,11 +1649,21 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
       setPreparaciones(prev => {
         const prep = { ...prev[preparandoPedido] };
         const items = [...prep.items];
+        const it = items[matchedItemIdx];
+        const newScans = (it.scans || (it.bolsasAsignadas?.length || 0)) + 1;
+        const estaListo = newScans >= it.cantidad;
         items[matchedItemIdx] = {
-          ...items[matchedItemIdx],
-          bolsasAsignadas: [...(items[matchedItemIdx].bolsasAsignadas || []), nuevaBolsa]
+          ...it,
+          scans: newScans,
+          confirmado: estaListo,
+          bolsasAsignadas: [...(it.bolsasAsignadas || []), nuevaBolsa]
         };
-        const todosCompletos = items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
+        const todosCompletos = items.filter(x => !x.sin_stock).every(x => {
+          const t = determinarTipoCaptura(x, stockDataRef.current);
+          if (t === TIPOS_CAPTURA.PESABLE) return Boolean(x.confirmado && x.pesoCongelado != null);
+          if (t === TIPOS_CAPTURA.UNIDAD_MANUAL) return Boolean(x.confirmado && x.cantidadConfirmada != null);
+          return (x.scans || (x.bolsasAsignadas?.length || 0)) >= x.cantidad;
+        });
         return { ...prev, [preparandoPedido]: { ...prep, items, completado: todosCompletos } };
       });
 
@@ -1626,20 +1811,45 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
       const detalle = prep.items.map(it => {
         const esSinStock = Boolean(it.sin_stock);
         const bolsas = esSinStock ? [] : (it.bolsasAsignadas || []);
-        const esUnidad = it.esUnidad || it.slot === 'unidades';
-        const cantReal = esSinStock 
-          ? 0 
-          : (esUnidad 
-              ? bolsas.length 
-              : Number(bolsas.reduce((acc, b) => acc + (Number(b.peso) || 0), 0).toFixed(3)));
+        const tipo = determinarTipoCaptura(it, stockDataRef.current);
+        let cantReal = 0;
+        let unidad = 'un';
+
+        if (esSinStock) {
+          cantReal = 0;
+        } else if (tipo === TIPOS_CAPTURA.PESABLE) {
+          unidad = 'kg';
+          cantReal = it.pesoCongelado != null
+            ? Number(it.pesoCongelado)
+            : (it.cantidad_real != null && Number(it.cantidad_real) > 0
+                ? Number(it.cantidad_real)
+                : Number(bolsas.reduce((acc, b) => acc + (Number(b.peso) || 0), 0).toFixed(3)));
+        } else if (tipo === TIPOS_CAPTURA.UNIDAD_MANUAL) {
+          unidad = it.unidad || (/\batado\b/i.test(it.nombre) ? 'atado' : 'un');
+          cantReal = it.cantidadConfirmada != null
+            ? Number(it.cantidadConfirmada)
+            : (it.cantidad_real != null && Number(it.cantidad_real) > 0
+                ? Number(it.cantidad_real)
+                : Number(it.cantidad || 1));
+        } else {
+          // ALMACEN_EAN
+          unidad = 'un';
+          cantReal = it.scans != null
+            ? Number(it.scans)
+            : (bolsas.length > 0 ? bolsas.length : Number(it.cantidad || 1));
+        }
+
         const precioUnit = obtenerPrecioCongelado(it.nombre);
         const subtotal = esSinStock ? 0 : Math.round(cantReal * precioUnit);
         return {
           producto: it.nombre,
           nombre: it.nombre,
-          unidad: esUnidad ? 'un' : 'kg',
+          unidad,
+          tipoCaptura: tipo,
           cantidad_real: cantReal,
           cantidad: cantReal,
+          pesoCongelado: tipo === TIPOS_CAPTURA.PESABLE ? cantReal : null,
+          cantidadConfirmada: tipo !== TIPOS_CAPTURA.PESABLE ? cantReal : null,
           precio_unitario: precioUnit,
           precio_unit: precioUnit,
           subtotal,
@@ -4211,9 +4421,23 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
         const prep = preparaciones[numPedido];
         const items = prep?.items || [];
         const itemsActivos = items.filter(it => !it.sin_stock);
-        const todosCompletos = itemsActivos.length > 0 && itemsActivos.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
-        const todosChequeados = items.length > 0 && items.every((it, idx) => it.sin_stock || !!checksPorPedido[numPedido]?.[idx]);
-        const cantChequeados = items.filter((it, idx) => !it.sin_stock && !!checksPorPedido[numPedido]?.[idx]).length;
+        const todosCompletos = itemsActivos.length > 0 && itemsActivos.every(it => {
+          const t = determinarTipoCaptura(it, stockDataRef.current);
+          if (t === TIPOS_CAPTURA.PESABLE) return Boolean(it.confirmado && it.pesoCongelado != null) || (it.bolsasAsignadas?.length || 0) >= (it.cantidad || 1);
+          if (t === TIPOS_CAPTURA.UNIDAD_MANUAL) return Boolean(it.confirmado && it.cantidadConfirmada != null) || (it.bolsasAsignadas?.length || 0) >= (it.cantidad || 1);
+          return (it.scans || (it.bolsasAsignadas?.length || 0)) >= (it.cantidad || 1);
+        });
+        const todosChequeados = items.length > 0 && items.every((it, idx) => {
+          if (it.sin_stock) return true;
+          const t = determinarTipoCaptura(it, stockDataRef.current);
+          const listo = t === TIPOS_CAPTURA.PESABLE 
+            ? Boolean(it.confirmado && it.pesoCongelado != null) || (it.bolsasAsignadas?.length || 0) >= (it.cantidad || 1)
+            : t === TIPOS_CAPTURA.UNIDAD_MANUAL
+            ? Boolean(it.confirmado && it.cantidadConfirmada != null) || (it.bolsasAsignadas?.length || 0) >= (it.cantidad || 1)
+            : (it.scans || (it.bolsasAsignadas?.length || 0)) >= (it.cantidad || 1);
+          return listo || !!checksPorPedido[numPedido]?.[idx];
+        });
+        const cantChequeados = items.filter((it, idx) => !it.sin_stock && (it.confirmado || (it.scans || 0) >= it.cantidad || !!checksPorPedido[numPedido]?.[idx])).length;
 
         // Aviso si el pedido fue pagado online y el total bajó por productos quitados
         const esPagoOnlineApproved = String(mp.estado_pago || '').toLowerCase() === 'approved';
@@ -4374,13 +4598,21 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                   {items.map((item, idx) => {
                     const esSinStock = Boolean(item.sin_stock);
                     const bolsas = item.bolsasAsignadas || [];
-                    const completo = !esSinStock && bolsas.length >= item.cantidad;
-                    const parcial = !esSinStock && bolsas.length > 0 && !completo;
-                    const esUnidad = item.esUnidad || item.slot === 'unidades';
-                    const pesoReal = bolsas.reduce((s, b) => s + (Number(b.peso) || 0), 0);
+                    const tipoCaptura = determinarTipoCaptura(item, stockDataRef.current);
+                    const scans = item.scans || bolsas.length;
+
+                    const completo = !esSinStock && (
+                      tipoCaptura === TIPOS_CAPTURA.PESABLE
+                        ? Boolean(item.confirmado && item.pesoCongelado != null) || (bolsas.length >= item.cantidad && bolsas.length > 0)
+                        : tipoCaptura === TIPOS_CAPTURA.UNIDAD_MANUAL
+                        ? Boolean(item.confirmado && item.cantidadConfirmada != null) || (bolsas.length >= item.cantidad && bolsas.length > 0)
+                        : scans >= item.cantidad
+                    );
+                    const parcial = !esSinStock && !completo && (bolsas.length > 0 || scans > 0 || item.pesoCongelado != null || item.cantidadConfirmada != null);
+                    const isChecked = esSinStock ? true : (completo || !!checksPorPedido[numPedido]?.[idx]);
+                    const pesoReal = item.pesoCongelado != null ? Number(item.pesoCongelado) : bolsas.reduce((s, b) => s + (Number(b.peso) || 0), 0);
                     const pesoPedido = item.pesoSolicitado ? item.pesoSolicitado * item.cantidad : null;
-                    const diff = (!esUnidad && pesoPedido && pesoReal > 0) ? Math.round((pesoReal - pesoPedido) * 1000) / 1000 : null;
-                    const isChecked = esSinStock ? true : !!checksPorPedido[numPedido]?.[idx];
+                    const diff = (!esSinStock && tipoCaptura === TIPOS_CAPTURA.PESABLE && pesoPedido && pesoReal > 0) ? Math.round((pesoReal - pesoPedido) * 1000) / 1000 : null;
 
                     return (
                       <div
@@ -4388,10 +4620,8 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                         className={`rounded-2xl border p-4 transition-all duration-300 ${
                           esSinStock
                             ? 'bg-red-950/20 border-red-900/30 opacity-75'
-                            : isChecked
-                            ? 'bg-green-500/10 border-green-500/40 shadow-[0_0_20px_rgba(34,197,94,0.08)]'
                             : completo
-                            ? 'bg-green-500/5 border-green-500/20'
+                            ? 'bg-green-500/10 border-green-500/40 shadow-[0_0_20px_rgba(34,197,94,0.08)]'
                             : parcial
                             ? 'bg-amber-500/5 border-amber-500/20'
                             : 'bg-white/[0.02] border-white/5'
@@ -4405,13 +4635,13 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                                 type="button"
                                 onClick={() => toggleCheckItem(numPedido, idx)}
                                 className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border transition-all cursor-pointer ${
-                                  isChecked
+                                  completo || isChecked
                                     ? 'bg-green-500 text-white border-green-400 shadow-[0_0_12px_rgba(34,197,94,0.5)]'
                                     : 'bg-white/5 border-white/10 text-gray-500 hover:text-gray-300 hover:border-gray-500'
                                 }`}
                                 title={isChecked ? 'Controlado (clic para desmarcar)' : 'Marcar como controlado'}
                               >
-                                {isChecked ? <Check size={18} /> : <Square size={16} />}
+                                {completo || isChecked ? <Check size={18} /> : <Square size={16} />}
                               </button>
                             ) : (
                               <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-red-500/10 border border-red-500/30 text-red-400" title="Producto quitado por falta de stock">
@@ -4422,7 +4652,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                             <div>
                               <div className="flex items-center gap-2">
                                 <p className={`text-sm font-bold uppercase tracking-wide transition-colors ${
-                                  esSinStock ? 'text-red-400 line-through' : isChecked ? 'text-green-300' : completo ? 'text-white' : 'text-gray-400'
+                                  esSinStock ? 'text-red-400 line-through' : completo ? 'text-green-300' : 'text-gray-200'
                                 }`}>
                                   {item.nombre}
                                 </p>
@@ -4431,9 +4661,19 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                                     Sin stock
                                   </span>
                                 )}
-                                {item.esExtra && (
-                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center gap-1">
-                                    <Sparkles size={9} /> Extra
+                                {tipoCaptura === TIPOS_CAPTURA.PESABLE && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                    ⚖️ Pesable
+                                  </span>
+                                )}
+                                {tipoCaptura === TIPOS_CAPTURA.UNIDAD_MANUAL && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                    🥬 {etiquetaUnidad(item.unidad, item.cantidad)}
+                                  </span>
+                                )}
+                                {tipoCaptura === TIPOS_CAPTURA.ALMACEN_EAN && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                                    🏷️ Almacén EAN
                                   </span>
                                 )}
                               </div>
@@ -4444,8 +4684,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                                   </span>
                                 ) : (
                                   <>
-                                    Solicitado: <span className="text-gray-300 font-bold">{item.cantidad} {esUnidad ? (item.cantidad === 1 ? 'unidad' : 'unidades') : (item.cantidad === 1 ? 'bolsa' : 'bolsas')}</span>
-                                    {(!esUnidad && pesoPedido) ? ` · ${pesoPedido.toFixed(3)} kg` : ''}
+                                    Solicitado: <span className="text-gray-300 font-bold">{item.cantidad} {tipoCaptura === TIPOS_CAPTURA.PESABLE ? 'kg' : etiquetaUnidad(item.unidad, item.cantidad)}</span>
                                     {obtenerPrecioCongelado(item.nombre) <= 0 && (
                                       <span className="ml-2 text-amber-400 font-sans font-semibold text-[10px] bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
                                         ⚠️ Sin precio en catálogo
@@ -4469,7 +4708,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                             </div>
                           </div>
 
-                          {/* Peso o cantidad armada + botón Deshacer si es sin_stock */}
+                          {/* Estado derecho / Deshacer sin stock */}
                           <div className="text-right shrink-0">
                             {esSinStock ? (
                               <button
@@ -4481,25 +4720,194 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                                 <RotateCcw size={12} />
                                 <span>Deshacer</span>
                               </button>
-                            ) : (esUnidad ? bolsas.length > 0 : pesoReal > 0) ? (
-                              <>
-                                <p className="text-green-400 font-mono text-sm font-bold">
-                                  {esUnidad ? `${bolsas.length} ud${bolsas.length !== 1 ? 's' : ''}` : `${pesoReal.toFixed(3)} kg`}
+                            ) : completo ? (
+                              <div>
+                                <p className="text-green-400 font-mono text-sm font-black">
+                                  {tipoCaptura === TIPOS_CAPTURA.PESABLE
+                                    ? `${Number(item.pesoCongelado != null ? item.pesoCongelado : pesoReal).toFixed(3)} kg`
+                                    : tipoCaptura === TIPOS_CAPTURA.UNIDAD_MANUAL
+                                    ? `${item.cantidadConfirmada ?? item.cantidad} ${etiquetaUnidad(item.unidad, item.cantidadConfirmada ?? item.cantidad)}`
+                                    : `${scans} u`}
                                 </p>
                                 {diff !== null && diff !== 0 && (
-                                  <p className={`text-[11px] font-bold font-mono ${
-                                    diff > 0 ? 'text-emerald-400' : 'text-red-400'
-                                  }`}>
+                                  <p className={`text-[11px] font-bold font-mono ${diff > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                                     {diff > 0 ? '+' : ''}{diff.toFixed(3)} kg
-                                    {diff > 0 && <span className="ml-1 text-[9px] font-black text-emerald-500 uppercase tracking-wider">regalo</span>}
                                   </p>
                                 )}
-                              </>
+                              </div>
                             ) : (
-                              <span className="text-xs text-gray-600 italic">Sin pesar</span>
+                              <span className="text-xs text-amber-400/90 font-mono italic">Pendiente</span>
                             )}
                           </div>
                         </div>
+
+                        {/* CONTROLES INTERACTIVOS SEGÚN TIPO (A, B, C) */}
+                        {!esSinStock && (
+                          <div className="mt-3 pt-3 border-t border-white/5">
+                            {/* A) PESABLES */}
+                            {tipoCaptura === TIPOS_CAPTURA.PESABLE && (
+                              <div className="flex flex-wrap items-center justify-between gap-3 bg-black/40 p-2.5 rounded-xl border border-white/5">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[11px] font-bold text-gray-400">⚖️ Balanza:</span>
+                                  {item.confirmado && item.pesoCongelado != null ? (
+                                    <span className="font-mono text-base font-black text-green-400">
+                                      {Number(item.pesoCongelado).toFixed(3)} kg ✓ (Congelado)
+                                    </span>
+                                  ) : (
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-mono text-base font-black text-amber-300">
+                                        {balanza.conectado && balanza.pesoVivo !== null && balanza.pesoVivo > 0
+                                          ? `${Number(balanza.pesoVivo).toFixed(3)} kg`
+                                          : (pesoManualModal[idx] ? `${Number(pesoManualModal[idx]).toFixed(3)} kg` : '0,000 kg')}
+                                      </span>
+                                      {!balanza.conectado && (
+                                        <input
+                                          type="number"
+                                          step="0.001"
+                                          placeholder="O escribir kg"
+                                          value={pesoManualModal[idx] || ''}
+                                          onChange={(e) => setPesoManualModal(prev => ({ ...prev, [idx]: e.target.value }))}
+                                          className="w-28 bg-black/70 border border-gray-700 rounded-lg px-2 py-1 text-center font-mono text-xs text-white"
+                                        />
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  {item.confirmado && item.pesoCongelado != null ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => reabrirItemPesable(numPedido, idx)}
+                                      className="px-3 py-1 text-xs text-gray-300 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 transition-all cursor-pointer font-bold"
+                                    >
+                                      Corregir
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => confirmarPesoPesable(numPedido, idx)}
+                                      className="px-4 py-1.5 bg-green-500 hover:bg-green-400 text-black font-black text-xs rounded-xl shadow-lg transition-all cursor-pointer active:scale-95"
+                                    >
+                                      OK
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* B) UNIDAD / ATADO MANUAL */}
+                            {tipoCaptura === TIPOS_CAPTURA.UNIDAD_MANUAL && (
+                              <div className="flex flex-wrap items-center justify-between gap-3 bg-black/40 p-2.5 rounded-xl border border-white/5">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-[11px] font-bold text-gray-400">
+                                    🥬 Cantidad:
+                                  </span>
+                                  {item.confirmado && item.cantidadConfirmada != null ? (
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-mono text-base font-black text-green-400">
+                                        {item.cantidadConfirmada} {etiquetaUnidad(item.unidad, item.cantidadConfirmada)} ✓
+                                      </span>
+                                      {item.cantidadConfirmada !== item.cantidad && (
+                                        <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-lg font-bold">
+                                          ⚠️ Difiere ({item.cantidadConfirmada} vs {item.cantidad} pedidas)
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => ajustarCantidadManual(numPedido, idx, -1)}
+                                        className="w-7 h-7 bg-gray-800 hover:bg-gray-700 text-white rounded-lg font-bold text-sm flex items-center justify-center cursor-pointer"
+                                      >
+                                        -
+                                      </button>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="1"
+                                        value={item.cantidadEditada != null ? item.cantidadEditada : item.cantidad}
+                                        onChange={(e) => {
+                                          const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                          setPreparaciones(prev => {
+                                            const p = prev[numPedido];
+                                            const itms = [...p.items];
+                                            itms[idx] = { ...itms[idx], cantidadEditada: val };
+                                            return { ...prev, [numPedido]: { ...p, items: itms } };
+                                          });
+                                        }}
+                                        className="w-14 bg-black/80 border border-gray-700 text-center font-mono font-bold text-sm text-white rounded-lg py-1"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => ajustarCantidadManual(numPedido, idx, 1)}
+                                        className="w-7 h-7 bg-gray-800 hover:bg-gray-700 text-white rounded-lg font-bold text-sm flex items-center justify-center cursor-pointer"
+                                      >
+                                        +
+                                      </button>
+                                      <span className="text-xs text-gray-400 font-bold ml-1">
+                                        {etiquetaUnidad(item.unidad, item.cantidadEditada != null ? item.cantidadEditada : item.cantidad)}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  {item.confirmado && item.cantidadConfirmada != null ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => reabrirItemManual(numPedido, idx)}
+                                      className="px-3 py-1 text-xs text-gray-300 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 transition-all cursor-pointer font-bold"
+                                    >
+                                      Corregir
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => confirmarCantidadManual(numPedido, idx)}
+                                      className="px-4 py-1.5 bg-green-500 hover:bg-green-400 text-black font-black text-xs rounded-xl shadow-lg transition-all cursor-pointer active:scale-95"
+                                    >
+                                      OK
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* C) ALMACÉN CON EAN */}
+                            {tipoCaptura === TIPOS_CAPTURA.ALMACEN_EAN && (
+                              <div className="flex flex-wrap items-center justify-between gap-3 bg-black/40 p-2.5 rounded-xl border border-white/5">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[11px] font-bold text-gray-400">🏷️ Pistola EAN:</span>
+                                  <span className={`font-mono text-base font-black ${scans >= item.cantidad ? 'text-green-400' : 'text-amber-400'}`}>
+                                    {scans} / {item.cantidad} u
+                                  </span>
+                                  {scans >= item.cantidad ? (
+                                    <span className="text-[10px] bg-green-500/20 text-green-300 border border-green-500/30 px-2 py-0.5 rounded-lg font-bold">
+                                      ✓ Completo (sin OK)
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] text-gray-400 italic">
+                                      (Dispará la pistola para sumar)
+                                    </span>
+                                  )}
+                                </div>
+
+                                {scans > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => desarmarScanEan(numPedido, idx)}
+                                    className="text-[11px] text-gray-400 hover:text-red-400 px-2 py-1 rounded bg-white/5 border border-white/10 cursor-pointer font-bold"
+                                    title="Restar 1 escaneo"
+                                  >
+                                    -1 scan
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
 
                         {/* Sub-bolsas / unidades asignadas con botón de Etiqueta Térmica */}
                         {bolsas.length > 0 && (

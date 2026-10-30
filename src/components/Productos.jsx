@@ -17,6 +17,7 @@ import {
 } from '../utils/mercaderiaApi';
 import { BalanzaSystelSession, soportaWebSerial, useBalanzaSystel } from '../utils/balanzaSystel';
 import { getCategoriaPrincipal, getEanMapping } from '../data/productUtils';
+import { determinarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
 import PedidoMinimoCard from './PedidoMinimoCard';
 
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -1262,22 +1263,32 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
     });
   }, [productosExistentes, chipCat, busqueda]);
 
-  // Selección de producto para pesar
+  // Selección de producto para pesar o ingresar
   const handleSeleccionarProducto = (p) => {
     setProductoSeleccionado(p);
-    const esKg = (p.unidad || 'kg').toLowerCase() === 'kg';
-    if (esKg) {
+    const tipo = determinarTipoCaptura(p, productosExistentes);
+    if (tipo === TIPOS_CAPTURA.PESABLE) {
       setModoManual(false);
       setCantidadManual('');
     } else {
-      // Para productos en 'un' o 'atado', la cantidad es entera y se ingresa a mano (sin balanza)
+      // Para productos por unidad o atado (sin balanza) o Almacén EAN: entrada entera
       setModoManual(true);
       setCantidadManual('1');
     }
   };
 
+  // Tipo de captura del producto seleccionado
+  const tipoCaptura = useMemo(() => {
+    if (!productoSeleccionado) return null;
+    return determinarTipoCaptura(productoSeleccionado, productosExistentes);
+  }, [productoSeleccionado, productosExistentes]);
+
+  const esPesable = tipoCaptura === TIPOS_CAPTURA.PESABLE;
+  const esUnidadManual = tipoCaptura === TIPOS_CAPTURA.UNIDAD_MANUAL;
+  const esAlmacenEan = tipoCaptura === TIPOS_CAPTURA.ALMACEN_EAN;
+
   // Cálculos de pesaje vivo
-  const esUnidadKg = productoSeleccionado ? (productoSeleccionado.unidad || 'kg').toLowerCase() === 'kg' : true;
+  const esUnidadKg = esPesable;
   const pesoBruto = balanza.pesoVivo !== null ? Number(balanza.pesoVivo) : 0;
   const pesoNeto = descontarTara && taraValor > 0
     ? Math.max(0, Number((pesoBruto - taraValor).toFixed(3)))
@@ -1311,8 +1322,11 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
         ...prev.filter(it => it.producto !== productoSeleccionado.producto),
         {
           producto: productoSeleccionado.producto,
-          unidad: productoSeleccionado.unidad || 'kg',
+          unidad: productoSeleccionado.unidad || (esPesable ? 'kg' : 'un'),
+          tipoCaptura: tipoCaptura,
+          cantidad: cantidadTomada,
           kg: cantidadTomada,
+          unidades: Math.round(cantidadTomada),
           costo_unitario: costoUnit,
           stock_actual: stockActual,
           stock_resultante: stockResultante,
@@ -1332,7 +1346,11 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
         ...prev.filter(it => it.producto !== productoSeleccionado.producto),
         {
           producto: productoSeleccionado.producto,
-          unidad: productoSeleccionado.unidad || 'kg',
+          unidad: productoSeleccionado.unidad || (esPesable ? 'kg' : 'un'),
+          tipoCaptura: tipoCaptura,
+          cantidad: cantidadTomada,
+          kg: cantidadTomada,
+          unidades: Math.round(cantidadTomada),
           stock_real: stockReal,
           dif: dif,
           costo_unitario: costoUnit,
@@ -1376,11 +1394,12 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
 
       if (tipoSalida === 'MERMA') {
         payloadItems = itemsSalida.map(it => {
-          const esKg = (it.unidad || 'kg').toLowerCase() === 'kg';
+          const pesable = it.tipoCaptura === TIPOS_CAPTURA.PESABLE || (it.unidad || 'kg').toLowerCase() === 'kg';
           return {
             producto: it.producto,
-            ...(esKg ? { kg: Number(it.kg) || 0 } : { unidades: Number(it.kg) || 0 }),
-            unidad: it.unidad || (esKg ? 'kg' : 'un')
+            cantidad: Number(it.cantidad != null ? it.cantidad : it.kg) || 0,
+            ...(pesable ? { kg: Number(it.kg) || 0 } : { unidades: Math.round(Number(it.cantidad || it.kg) || 0) }),
+            unidad: it.unidad || (pesable ? 'kg' : 'un')
           };
         });
         notaFinal = notaPersonalizada.trim() ? `${motivoRapido} - ${notaPersonalizada.trim()}` : motivoRapido;
@@ -1529,15 +1548,28 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
                       if (!code) return;
                       const eanMap = getEanMapping();
                       const eanInfo = eanMap[code.toUpperCase()];
+                      let match = null;
                       if (eanInfo && eanInfo.nombre) {
-                        const match = productosExistentes.find(p => norm(p.producto) === norm(eanInfo.nombre));
-                        if (match) {
-                          handleSeleccionarProducto(match);
+                        match = productosExistentes.find(p => norm(p.producto) === norm(eanInfo.nombre));
+                      }
+                      if (!match) {
+                        match = productosExistentes.find(p => p.ean === code || p.barcode === code || norm(p.producto) === norm(code));
+                      }
+
+                      if (match) {
+                        const tipo = determinarTipoCaptura(match, productosExistentes);
+                        if (productoSeleccionado && match.producto === productoSeleccionado.producto && tipo === TIPOS_CAPTURA.ALMACEN_EAN) {
+                          setCantidadManual(prev => String((parseInt(prev, 10) || 1) + 1));
+                          setBusqueda('');
                           return;
                         }
+                        handleSeleccionarProducto(match);
+                        setBusqueda('');
+                        return;
                       }
                       if (productosFiltrados.length === 1) {
                         handleSeleccionarProducto(productosFiltrados[0]);
+                        setBusqueda('');
                       }
                     }
                   }}

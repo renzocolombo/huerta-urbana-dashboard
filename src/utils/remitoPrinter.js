@@ -184,7 +184,8 @@ export function estaPedidoArmado(pedido, preparacion) {
       const tienePesadas = items.some(it => {
         const tieneBolsas = Array.isArray(it.bolsasAsignadas) && it.bolsasAsignadas.length > 0;
         const cantReal = Number(it.cantidad_real || 0);
-        return tieneBolsas || cantReal > 0;
+        const tieneConfirmacion = it.pesoCongelado != null || it.cantidadConfirmada != null || Boolean(it.confirmado);
+        return tieneBolsas || cantReal > 0 || tieneConfirmacion;
       });
       if (tienePesadas) return true;
     }
@@ -215,7 +216,12 @@ export function calcularTotalDetalle(pedido, preparacion, opciones = {}) {
       if (it.sin_stock) return;
       const bolsas = it.bolsasAsignadas || [];
       const esUnidad = it.esUnidad || it.slot === 'unidades';
-      const cantReal = esUnidad ? bolsas.length : Number(bolsas.reduce((s, b) => s + (Number(b.peso) || 0), 0).toFixed(3));
+      let cantReal = 0;
+      if (it.pesoCongelado != null) cantReal = Number(it.pesoCongelado);
+      else if (it.cantidadConfirmada != null) cantReal = Number(it.cantidadConfirmada);
+      else if (it.cantidad_real != null) cantReal = Number(it.cantidad_real);
+      else if (bolsas.length > 0) cantReal = esUnidad ? bolsas.length : Number(bolsas.reduce((s, b) => s + (Number(b.peso) || 0), 0).toFixed(3));
+      else cantReal = Number(it.pesoSolicitado || it.cantidad || 1);
       const precioUnit = (typeof opciones?.obtenerPrecioCongelado === 'function')
         ? opciones.obtenerPrecioCongelado(it.nombre)
         : Number(it.precioUnitario || it.precio_unitario || 0);
@@ -292,7 +298,13 @@ export function obtenerPesosReales(pedido, preparacion, opciones = {}) {
       if (bolsas.length > 0) esPesado = true;
 
       let cantidadReal = 0;
-      if (item.cantidad_real != null && Number(item.cantidad_real) > 0) {
+      if (item.pesoCongelado != null && Number(item.pesoCongelado) > 0) {
+        cantidadReal = Number(item.pesoCongelado);
+        esPesado = true;
+      } else if (item.cantidadConfirmada != null && Number(item.cantidadConfirmada) > 0) {
+        cantidadReal = Number(item.cantidadConfirmada);
+        esPesado = true;
+      } else if (item.cantidad_real != null && Number(item.cantidad_real) > 0) {
         cantidadReal = Number(item.cantidad_real);
         esPesado = true;
       } else if (item.cantidad != null && Number(item.cantidad) > 0) {
@@ -342,20 +354,32 @@ export function obtenerPesosReales(pedido, preparacion, opciones = {}) {
       const nombreLimpio = (item.nombre || '').trim();
       const nombreLower = nombreLimpio.toLowerCase();
 
-      const esAtado = /\batado\b/i.test(nombreLower);
-      const esPorPeso = !esAtado && (
-        Boolean(item.pesoSolicitado) ||
-        /\b(kg|kilos?|g|gr?)\b/i.test(nombreLower) ||
-        bolsas.some(b => b.peso && b.peso > 0) ||
-        !/\b(combo|pack|promo|botella|frasco|unidad|docena)\b/i.test(nombreLower)
-      );
+      let unidad = item.unidad ? (item.unidad.toLowerCase().trim() === 'kg' ? 'kg' : (item.unidad.toLowerCase().trim() === 'atado' ? 'atado' : 'un')) : null;
+      if (!unidad) {
+        const esAtado = /\batado\b/i.test(nombreLower);
+        const esPorPeso = !esAtado && (
+          Boolean(item.pesoSolicitado) ||
+          /\b(kg|kilos?|g|gr?)\b/i.test(nombreLower) ||
+          bolsas.some(b => b.peso && b.peso > 0) ||
+          !/\b(combo|pack|promo|botella|frasco|unidad|docena|choclo|lata)\b/i.test(nombreLower)
+        );
 
-      let unidad = 'un';
-      if (esAtado) unidad = 'atado';
-      else if (esPorPeso) unidad = 'kg';
+        if (esAtado) unidad = 'atado';
+        else if (esPorPeso) unidad = 'kg';
+        else unidad = 'un';
+      }
 
       let cantidadReal = 0;
-      if (bolsas.length > 0) {
+      if (item.pesoCongelado != null && Number(item.pesoCongelado) > 0) {
+        cantidadReal = Number(item.pesoCongelado);
+        esPesado = true;
+      } else if (item.cantidadConfirmada != null && Number(item.cantidadConfirmada) > 0) {
+        cantidadReal = Number(item.cantidadConfirmada);
+        esPesado = true;
+      } else if (item.cantidad_real != null && Number(item.cantidad_real) > 0) {
+        cantidadReal = Number(item.cantidad_real);
+        esPesado = true;
+      } else if (bolsas.length > 0) {
         esPesado = true;
         if (unidad === 'kg') {
           const sumaKg = bolsas.reduce((acc, b) => acc + (Number(b.peso) || 0), 0);

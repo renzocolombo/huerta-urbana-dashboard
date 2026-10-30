@@ -191,7 +191,11 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
     const bolsas = Array.isArray(it.bolsasAsignadas) ? it.bolsasAsignadas : [];
 
     let cantReal = 0;
-    if (it.cantidad_real != null && Number(it.cantidad_real) > 0) {
+    if (it.pesoCongelado != null && Number(it.pesoCongelado) > 0) {
+      cantReal = Number(it.pesoCongelado);
+    } else if (it.cantidadConfirmada != null && Number(it.cantidadConfirmada) > 0) {
+      cantReal = Number(it.cantidadConfirmada);
+    } else if (it.cantidad_real != null && Number(it.cantidad_real) > 0) {
       cantReal = Number(it.cantidad_real);
     } else if (it.cantidad != null && Number(it.cantidad) > 0) {
       cantReal = Number(it.cantidad);
