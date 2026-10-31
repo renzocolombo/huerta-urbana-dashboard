@@ -4,255 +4,16 @@ import {
   PackageX, ShoppingBag, Layers, HelpCircle, CheckSquare, Search, RefreshCw
 } from 'lucide-react';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
-import { parsearProductosPedido } from '../utils/remitoPrinter';
-import { getTipoByNombre, getCategoriaPrincipal } from '../data/productUtils';
 import { apiGetStockKg } from '../utils/mercaderiaApi';
-
-const norm = (s) =>
-  (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
 /**
  * Función central de cálculo de faltantes utilizada por la pantalla Faltantes y el Header (badge).
  */
-export function calcularFaltantes(stockData, productosCostos, pedidos, stockKgList = null) {
-  // 1. Unificar catálogo de productos
-  const stockList = Array.isArray(stockData)
-    ? stockData
-    : Object.values(stockData || {});
-  const costosList = productosCostos || [];
+export { calcularFaltantes } from '../utils/faltantesLogic.js';
+import { calcularFaltantes } from '../utils/faltantesLogic.js';
 
-  const catalogMap = new Map();
-
-  // Incorporar costos
-  costosList.forEach((c) => {
-    if (!c || !c.nombre || !c.activo) return;
-    const k = norm(c.nombre);
-    catalogMap.set(k, {
-      id: c.id,
-      nombre: c.nombre,
-      categoriaPrincipal: c.categoriaPrincipal || getCategoriaPrincipal(c.nombre),
-      tipo: c.categoria || getTipoByNombre(c.nombre),
-      unidad: c.unidad || 'kg',
-      stock_unidades: c.stock_unidades || 0,
-      stock_500g: 0,
-      stock_1kg: 0,
-      original_load_500g: null,
-      original_load_1kg: null,
-      fila: c.fila
-    });
-  });
-
-  // Incorporar productos provenientes de getStockKg si existen
-  if (Array.isArray(stockKgList)) {
-    stockKgList.forEach((sk) => {
-      if (!sk || !sk.producto) return;
-      const k = norm(sk.producto);
-      const existing = catalogMap.get(k) || {};
-      catalogMap.set(k, {
-        ...existing,
-        id: sk.id || existing.id,
-        nombre: sk.producto || existing.nombre,
-        categoriaPrincipal: sk.categoria || existing.categoriaPrincipal || getCategoriaPrincipal(sk.producto),
-        unidad: sk.unidad || existing.unidad || 'kg',
-        en_deposito: Number(sk.en_deposito || 0),
-      });
-    });
-  }
-
-  // Sobreimprimir con datos de ControlStock
-  stockList.forEach((s) => {
-    if (!s || !s.nombre) return;
-    const k = norm(s.nombre);
-    const existing = catalogMap.get(k) || {};
-    catalogMap.set(k, {
-      ...existing,
-      id: s.id || existing.id,
-      nombre: s.nombre || existing.nombre,
-      categoriaPrincipal: s.categoriaPrincipal || existing.categoriaPrincipal || getCategoriaPrincipal(s.nombre),
-      tipo: s.tipo || existing.tipo || getTipoByNombre(s.nombre),
-      unidad: s.unidad || existing.unidad || 'kg',
-      esUnidad: s.esUnidad || existing.esUnidad,
-      stock_unidades: s.stock_unidades !== undefined ? s.stock_unidades : (s.stock?.unidades ?? existing.stock_unidades ?? 0),
-      stock_500g: s.stock_500g !== undefined ? s.stock_500g : (s.stock?.['500g'] ?? existing.stock_500g ?? 0),
-      stock_1kg: s.stock_1kg !== undefined ? s.stock_1kg : (s.stock?.['1kg'] ?? existing.stock_1kg ?? 0),
-      original_load_500g: s.original_load_500g !== undefined ? s.original_load_500g : (s.originalLoad?.['500g'] ?? null),
-      original_load_1kg: s.original_load_1kg !== undefined ? s.original_load_1kg : (s.originalLoad?.['1kg'] ?? null),
-      fila: s.fila || existing.fila
-    });
-  });
-
-  // 2. Filtrar pedidos aprobados no entregados y sin motivo de no entrega (sin filtrar por día)
-  const pedidosAprobados = (pedidos || []).filter((p) => {
-    const pago = String(p.estado_pago || '').toLowerCase().trim();
-    const estado = String(p.estado || '').toLowerCase().trim();
-    const tieneMotivo = Boolean(p.motivo_no_entrega);
-    return (
-      (pago === 'approved' || pago === 'aprobado' || pago === 'pagado') &&
-      estado !== 'entregado' &&
-      !tieneMotivo
-    );
-  });
-
-  // 3. Mapear demanda solicitada por producto
-  const demandaPorProdKey = new Map();
-  const sinIdentificar = [];
-
-  pedidosAprobados.forEach((p) => {
-    const items = parsearProductosPedido(p.producto, p.cantidades);
-    items.forEach((item) => {
-      const itemKey = norm(item.nombre);
-      // Buscar en el catálogo
-      let matchKey = null;
-      if (catalogMap.has(itemKey)) {
-        matchKey = itemKey;
-      } else {
-        // Intento de match parcial
-        for (const k of catalogMap.keys()) {
-          if (k.includes(itemKey) || itemKey.includes(k)) {
-            matchKey = k;
-            break;
-          }
-        }
-      }
-
-      const cantPedida = item.pesoSolicitado
-        ? Math.round(item.pesoSolicitado * (item.cantidad || 1) * 100) / 100
-        : Number(item.cantidad) || 1;
-
-      if (matchKey) {
-        demandaPorProdKey.set(
-          matchKey,
-          (demandaPorProdKey.get(matchKey) || 0) + cantPedida
-        );
-      } else {
-        sinIdentificar.push({
-          nombre: item.nombre,
-          cantidad: cantPedida,
-          pedido: p.numero_pedido || `#${p.sheetRowIndex || '?' }`,
-          cliente: p.nombre || 'Sin nombre',
-          fecha: p.fecha || '',
-          diaEntrega: p.dia_entrega || ''
-        });
-      }
-    });
-  });
-
-  // 4. Evaluar condiciones para cada producto
-  const faltantes = [];
-
-  catalogMap.forEach((p, k) => {
-    const cat = p.categoriaPrincipal || getCategoriaPrincipal(p.nombre);
-    const esUnidad =
-      cat === 'Almacén' ||
-      cat === 'Extras' ||
-      p.esUnidad ||
-      (p.unidad && (p.unidad.includes('unidad') || p.unidad.includes('maple')));
-    const tipo = p.tipo || getTipoByNombre(p.nombre);
-
-    let stockActual = 0;
-    let cargaOriginal = 0;
-    let tieneCargaOriginal = false;
-    let unidadLabel = p.unidad || 'kg';
-
-    if (stockKgList) {
-      // Fuente oficial getStockKg (en_deposito), comparando por nombre normalizado. Si no está, stock 0.
-      stockActual = Number(p.en_deposito || 0);
-      unidadLabel = p.unidad || (esUnidad ? (p.unidad?.includes('maple') ? 'maples' : 'uds') : 'kg');
-    } else {
-      // Cálculo previo legacy (ControlStock: bolsas 500g/1kg y stock_unidades)
-      if (esUnidad) {
-        stockActual = Number(p.stock_unidades ?? 0);
-        unidadLabel = p.unidad?.includes('maple') ? 'maples' : 'uds';
-        if (p.original_load_1kg !== null && p.original_load_1kg !== undefined && p.original_load_1kg !== '') {
-          cargaOriginal = Number(p.original_load_1kg) || 0;
-          tieneCargaOriginal = true;
-        }
-      } else if (tipo === 'hoja verde') {
-        const s500 = Number(p.stock_500g || 0);
-        const s1k = Number(p.stock_1kg || 0);
-        stockActual = Math.round((s500 * 0.25 + s1k * 0.5) * 100) / 100;
-        unidadLabel = 'kg';
-        if (
-          (p.original_load_500g !== null && p.original_load_500g !== undefined && p.original_load_500g !== '') ||
-          (p.original_load_1kg !== null && p.original_load_1kg !== undefined && p.original_load_1kg !== '')
-        ) {
-          const o500 = Number(p.original_load_500g || 0);
-          const o1k = Number(p.original_load_1kg || 0);
-          cargaOriginal = Math.round((o500 * 0.25 + o1k * 0.5) * 100) / 100;
-          tieneCargaOriginal = o500 > 0 || o1k > 0;
-        }
-      } else {
-        const s500 = Number(p.stock_500g || 0);
-        const s1k = Number(p.stock_1kg || 0);
-        stockActual = Math.round((s500 * 0.5 + s1k * 1.0) * 100) / 100;
-        unidadLabel = 'kg';
-        if (
-          (p.original_load_500g !== null && p.original_load_500g !== undefined && p.original_load_500g !== '') ||
-          (p.original_load_1kg !== null && p.original_load_1kg !== undefined && p.original_load_1kg !== '')
-        ) {
-          const o500 = Number(p.original_load_500g || 0);
-          const o1k = Number(p.original_load_1kg || 0);
-          cargaOriginal = Math.round((o500 * 0.5 + o1k * 1.0) * 100) / 100;
-          tieneCargaOriginal = o500 > 0 || o1k > 0;
-        }
-      }
-    }
-
-    const pedidoPendiente = Math.round((demandaPorProdKey.get(k) || 0) * 100) / 100;
-
-    // Evaluación de estado
-    let estado = null;
-    let prioridad = 99;
-
-    // a) SIN STOCK: stock total = 0
-    if (stockActual <= 0) {
-      estado = 'Sin stock';
-      prioridad = 1;
-    }
-    // b) FALTA PARA PEDIDOS: pedidos superan el stock disponible
-    else if (pedidoPendiente > stockActual) {
-      estado = 'Falta para pedidos';
-      prioridad = 2;
-    }
-    // c) STOCK BAJO: stock actual <= 50% de la carga original
-    else if (tieneCargaOriginal && cargaOriginal > 0 && stockActual <= cargaOriginal * 0.5) {
-      estado = 'Stock bajo';
-      prioridad = 3;
-    }
-
-    if (estado) {
-      const faltaParaPedidos = Math.max(0, Math.round((pedidoPendiente - stockActual) * 100) / 100);
-      const faltaParaOriginal = tieneCargaOriginal && cargaOriginal > 0
-        ? Math.max(0, Math.round((cargaOriginal - stockActual) * 100) / 100)
-        : 0;
-
-      let comprarSugerido = Math.max(faltaParaPedidos, faltaParaOriginal);
-      if (comprarSugerido <= 0) {
-        comprarSugerido = pedidoPendiente > 0 ? pedidoPendiente : 1;
-      }
-
-      faltantes.push({
-        id: p.id || k,
-        nombre: p.nombre,
-        categoria: cat,
-        estado,
-        prioridad,
-        stockActual,
-        pedidoPendiente,
-        comprarSugerido,
-        unidad: unidadLabel
-      });
-    }
-  });
-
-  // Ordenar: Sin stock (1), Falta para pedidos (2), Stock bajo (3), luego por nombre
-  faltantes.sort((a, b) => {
-    if (a.prioridad !== b.prioridad) return a.prioridad - b.prioridad;
-    return a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base' });
-  });
-
-  return { faltantes, sinIdentificar };
-}
+const norm = (s) =>
+  (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
 export default function Faltantes() {
   const { stockData, productosCostos, pedidos } = useGoogleSheets();
@@ -564,6 +325,11 @@ export default function Faltantes() {
                         <span className={`w-1.5 h-1.5 rounded-full ${configEstado.dot}`} />
                         {item.estado}
                       </span>
+                      {item.proximaEntregaLabel && item.pedidoPendiente > 0 && (
+                        <span className="block text-[10px] text-gray-400 mt-1 font-mono">
+                          Para: <span className="text-gray-300 font-bold">{item.proximaEntregaLabel}</span>
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 px-4 text-right font-mono text-gray-300">
                       {item.stockActual} {item.unidad}

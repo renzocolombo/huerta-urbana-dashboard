@@ -249,6 +249,7 @@ export function pluralizar(cantidad, palabra) {
 export const EAN_MAP_KEY = 'huerta_ean_mapping_v1';
 
 export function getEanMapping() {
+  if (typeof localStorage === 'undefined') return {};
   try {
     const raw = localStorage.getItem(EAN_MAP_KEY);
     return raw ? JSON.parse(raw) : {};
@@ -259,6 +260,7 @@ export function getEanMapping() {
 }
 
 export function saveEanMapping(map) {
+  if (typeof localStorage === 'undefined') return;
   try {
     localStorage.setItem(EAN_MAP_KEY, JSON.stringify(map));
   } catch (e) {

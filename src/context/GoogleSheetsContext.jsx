@@ -11,7 +11,7 @@ import {
 } from '../data/productUtils';
 import { normNombre, leerCacheAlmacen, aplicarCacheAProducto, aplicarPendientes } from '../utils/almacenCache';
 
-const GoogleSheetsContext = createContext();
+export const GoogleSheetsContext = createContext();
 
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
 const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_KEY || import.meta.env.VITE_GOOGLE_API_KEY;

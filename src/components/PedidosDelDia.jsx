@@ -1,198 +1,198 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { 
-  AlertCircle, Clock, Package, Printer, Calendar, Sun, Sunset, 
-  ArrowRight, CheckCircle, RefreshCw, ChevronLeft 
+  Package, Calendar, ChevronLeft, ChevronRight, Printer, 
+  Clock, CheckCircle, AlertCircle, RefreshCw, Filter, Sparkles
 } from 'lucide-react';
-import { getHoyYMD, extraerFechaYMD } from '../utils/fechasEntrega';
-import { turnoDePedido, sumarDias, dowDeYmd } from '../utils/entregaCalendario';
-import { 
-  resolverEntrega, 
-  esPedidoElegibleReparto, 
-  esPedidoCancelado, 
-  claveTabInicial,
-  etiquetaMedioPagoDisplay,
-  METODOS_PAGO_CONTRA_ENTREGA 
-} from '../utils/agendaCalendario';
+import { getHoyYMD, extraerFechaIngresoYMD } from '../utils/fechasEntrega';
+import { sumarDias, dowDeYmd } from '../utils/entregaCalendario';
+import { resolverEntrega, esPedidoCancelado } from '../utils/agendaCalendario';
 import { imprimirRemitoIndividual, imprimirRemitosEnLote, estaPedidoArmado } from '../utils/remitoPrinter';
-import { 
-  estadoEntregaPedido, 
-  estadoPagoPedido, 
-  calcularResumenDia,
-  esPedidoCobrado 
-} from '../utils/estadosPedido';
+import { estadoEntregaPedido } from '../utils/estadosPedido';
 import { calcularTotalPedido } from '../utils/totalesPedido';
-import { apiGetEstadoCreditoPedidos } from '../utils/mercaderiaApi';
-import ResumenDiaBar from './ResumenDiaBar';
+import TarjetaPedido from './TarjetaPedido';
+import ModalArmadoPedido from './ModalArmadoPedido';
 
-const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
 const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
 function formatearFechaLegible(ymd) {
   if (!ymd || !ymd.includes('-')) return ymd || '';
-  const [y, m, d] = ymd.split('-');
+  const [, m, d] = ymd.split('-');
   const diaNombre = DIAS_SEMANA[dowDeYmd(ymd)] || '';
   return `${diaNombre} ${d}/${m}`;
 }
 
-export default function PedidosDelDia({ rol, usuario, onNav, fechaCompartida, setFechaCompartida }) {
-  const { pedidos: PEDIDOS, actualizarRemitoEnSheet } = useGoogleSheets();
+export default function PedidosDelDia({ _rol, _usuario, _onNav, fechaCompartida, _setFechaCompartida }) {
+  const { pedidos: PEDIDOS, actualizarRemitoEnSheet, fetchSheetPedidos } = useGoogleSheets();
 
   const hoyArgentina = useMemo(() => getHoyYMD(), []);
 
-  const preparaciones = useMemo(() => {
+  // Por defecto siempre abre en HOY (fecha actual de ingreso en Argentina)
+  const [fechaSeleccionada, setFechaSeleccionada] = useState(() => fechaCompartida || hoyArgentina);
+  const [filtroEstado, setFiltroEstado] = useState('todos');
+  const [pedidoArmar, setPedidoArmar] = useState(null);
+
+  // Sincronizar si cambia fechaCompartida externamente
+  useEffect(() => {
+    if (fechaCompartida) {
+      setFechaSeleccionada(fechaCompartida);
+    }
+  }, [fechaCompartida]);
+
+  // Preparaciones locales
+  const [preparaciones, setPreparaciones] = useState(() => {
     try {
       const s = localStorage.getItem('huerta_preparaciones_v1');
       return s ? JSON.parse(s) : {};
     } catch (e) {
       return {};
     }
-  }, []);
-
-  // 1. Pedidos elegibles para reparto (mismos filtros que Agenda, excluyendo cancelados)
-  const pedidosElegibles = useMemo(() => {
-    return (PEDIDOS || []).filter(p => esPedidoElegibleReparto(p) && !esPedidoCancelado(p));
-  }, [PEDIDOS]);
-
-  // Lista de todas las fechas YMD únicas de pedidos elegibles
-  const fechasConPedidos = useMemo(() => {
-    const set = new Set();
-    pedidosElegibles.forEach(p => {
-      const f = resolverEntrega(p).ymd;
-      if (f) set.add(f);
-    });
-    return Array.from(set).sort();
-  }, [pedidosElegibles]);
-
-  // Si hoy no tiene pedidos, calcular próxima fecha elegida automáticamente (igual que Agenda con claveTabInicial)
-  const fechaPorDefecto = useMemo(() => {
-    if (fechaCompartida) return fechaCompartida;
-    return claveTabInicial(fechasConPedidos, hoyArgentina) || hoyArgentina;
-  }, [fechaCompartida, fechasConPedidos, hoyArgentina]);
-
-  const [fechaSeleccionada, setFechaSeleccionada] = useState(fechaPorDefecto);
-  const [avisoAutoFecha, setAvisoAutoFecha] = useState(() => {
-    return !fechaCompartida && !fechasConPedidos.includes(hoyArgentina) && fechaPorDefecto !== hoyArgentina;
   });
-  const [filtroEstado, setFiltroEstado] = useState(null);
 
-  // Si cambia fechaCompartida desde afuera (ej: clic desde Agenda), sincronizar
-  useEffect(() => {
-    if (fechaCompartida) {
-      setFechaSeleccionada(fechaCompartida);
-      setAvisoAutoFecha(false);
-    }
-  }, [fechaCompartida]);
+  // Escuchar cambios en preparaciones
+  const recargarPreparaciones = () => {
+    try {
+      const s = localStorage.getItem('huerta_preparaciones_v1');
+      setPreparaciones(s ? JSON.parse(s) : {});
+    } catch (e) {}
+  };
 
-  // Si cambian los pedidos y aún no hay fecha elegida explícitamente o hoy está vacío
-  useEffect(() => {
-    if (!fechaCompartida && !fechasConPedidos.includes(hoyArgentina) && fechasConPedidos.length > 0) {
-      if (fechaSeleccionada === hoyArgentina && fechaPorDefecto !== hoyArgentina) {
-        setFechaSeleccionada(fechaPorDefecto);
-        setAvisoAutoFecha(true);
+  // 1. Filtrar TODOS los pedidos que ENTRARON ese día (fecha de pedido, sin corrimiento UTC)
+  const pedidosIngresados = useMemo(() => {
+    return (PEDIDOS || []).filter(p => {
+      const fIngreso = extraerFechaIngresoYMD(p.fecha);
+      return fIngreso === fechaSeleccionada;
+    }).slice().sort((a, b) => {
+      // Orden en que entraron: el más nuevo arriba
+      const fA = String(a.fecha || '');
+      const fB = String(b.fecha || '');
+      if (fA !== fB) return fB.localeCompare(fA);
+      return (b.sheetRowIndex || 0) - (a.sheetRowIndex || 0);
+    });
+  }, [PEDIDOS, fechaSeleccionada]);
+
+  // 2. Contadores y totales para el resumen del día (Requisitos B y C)
+  const metricasDia = useMemo(() => {
+    let cantTotal = pedidosIngresados.length;
+    let montoTotal = 0;
+    let montoArmado = 0;
+    let montoEstimado = 0;
+
+    let pendientes = 0;
+    let enPrep = 0;
+    let listos = 0;
+    let entregados = 0;
+    let cancelados = 0;
+
+    pedidosIngresados.forEach(p => {
+      const prep = preparaciones[p.numero_pedido];
+      const { total, esEstimado } = calcularTotalPedido(p, prep);
+      montoTotal += total;
+      if (esEstimado) montoEstimado += total;
+      else montoArmado += total;
+
+      const est = estadoEntregaPedido(p, prep);
+      const clave = est.clave;
+
+      if (clave === 'cancelado' || esPedidoCancelado(p)) {
+        cancelados++;
+      } else if (clave === 'entregado') {
+        entregados++;
+      } else if (clave === 'listo' || p.estado === 'preparado' || estaPedidoArmado(p, prep)) {
+        listos++;
+      } else if (clave === 'en_preparacion' || (prep && !prep.completado)) {
+        enPrep++;
+      } else {
+        pendientes++;
       }
-    }
-  }, [fechasConPedidos, hoyArgentina, fechaCompartida, fechaPorDefecto, fechaSeleccionada]);
+    });
 
-  // 2. Pedidos del día seleccionado filtrados por FECHA DE ENTREGA
-  const pedidosDelDia = useMemo(() => {
-    return pedidosElegibles
-      .filter(p => {
-        const entrega = resolverEntrega(p);
-        return entrega.ymd === fechaSeleccionada;
-      })
-      .sort((a, b) => (a.estado === 'pendiente' ? -1 : 1));
-  }, [pedidosElegibles, fechaSeleccionada]);
+    return {
+      cantTotal,
+      montoTotal,
+      montoArmado,
+      montoEstimado,
+      pendientes,
+      enPrep,
+      listos,
+      entregados,
+      cancelados
+    };
+  }, [pedidosIngresados, preparaciones]);
 
-  // Consultar estado de crédito de referidos en lote para pedidos con crédito usado
-  const [estadosCreditoMap, setEstadosCreditoMap] = useState({});
-  const consultadosCreditoRef = useRef(new Set());
+  // 3. Filtrar según la pestaña seleccionada
+  const pedidosFiltrados = useMemo(() => {
+    if (filtroEstado === 'todos') return pedidosIngresados;
 
-  useEffect(() => {
-    if (!pedidosDelDia || pedidosDelDia.length === 0) return;
-    const pedidosAConsultar = pedidosDelDia
-      .filter(p => p.numero_pedido && Number(p.credito_usado) > 0 && !consultadosCreditoRef.current.has(p.numero_pedido))
-      .map(p => p.numero_pedido);
+    return pedidosIngresados.filter(p => {
+      const prep = preparaciones[p.numero_pedido];
+      const est = estadoEntregaPedido(p, prep);
+      const clave = est.clave;
 
-    if (pedidosAConsultar.length === 0) return;
-    pedidosAConsultar.forEach(num => consultadosCreditoRef.current.add(num));
+      if (filtroEstado === 'pendientes') {
+        return (clave === 'pendiente' || clave === 'demorado') && !prep && !esPedidoCancelado(p);
+      }
+      if (filtroEstado === 'en_preparacion') {
+        return (clave === 'en_preparacion' || (prep && !prep.completado)) && !esPedidoCancelado(p);
+      }
+      if (filtroEstado === 'listos') {
+        return (clave === 'listo' || p.estado === 'preparado' || estaPedidoArmado(p, prep)) && !esPedidoCancelado(p);
+      }
+      if (filtroEstado === 'entregados') {
+        return clave === 'entregado';
+      }
+      if (filtroEstado === 'cancelados') {
+        return clave === 'cancelado' || esPedidoCancelado(p);
+      }
+      return true;
+    });
+  }, [pedidosIngresados, filtroEstado, preparaciones]);
 
-    apiGetEstadoCreditoPedidos({ pedidos: pedidosAConsultar })
-      .then(res => {
-        if (res && res.ok && res.resultados) {
-          setEstadosCreditoMap(prev => ({ ...prev, ...res.resultados }));
+  // 4. Agrupar por día de entrega: "Para hoy", "Para mañana", "Más adelante · [Día] [DD/MM]"
+  const gruposEntrega = useMemo(() => {
+    const mapa = new Map();
+
+    pedidosFiltrados.forEach(p => {
+      const res = resolverEntrega(p);
+      const ymdEntrega = res.ymd;
+
+      let grupoClave = 'sin_fecha';
+      let grupoTitulo = 'Sin fecha de entrega asignada';
+      let orden = 9999;
+
+      if (ymdEntrega) {
+        if (ymdEntrega === hoyArgentina) {
+          grupoClave = 'hoy';
+          grupoTitulo = 'Para hoy';
+          orden = 1;
+        } else if (ymdEntrega === sumarDias(hoyArgentina, 1)) {
+          grupoClave = 'manana';
+          grupoTitulo = 'Para mañana';
+          orden = 2;
+        } else if (ymdEntrega > hoyArgentina) {
+          const [y, m, d] = ymdEntrega.split('-');
+          const dObj = new Date(Number(y), Number(m) - 1, Number(d));
+          const nomDia = DIAS_SEMANA[dObj.getDay()] || '';
+          grupoClave = ymdEntrega;
+          grupoTitulo = `Más adelante · ${nomDia} ${d}/${m}`;
+          orden = 10 + Number(ymdEntrega.replace(/-/g, ''));
+        } else {
+          grupoClave = 'anterior';
+          grupoTitulo = `Entrega anterior · ${formatearFechaLegible(ymdEntrega)}`;
+          orden = 900;
         }
-      })
-      .catch(() => {});
-  }, [pedidosDelDia]);
-
-  // 3. Conteos del día por turno
-  const conteos = useMemo(() => {
-    let manana = 0;
-    let tarde = 0;
-    let sinTurno = 0;
-
-    pedidosDelDia.forEach(p => {
-      const t = turnoDePedido(p);
-      if (t === 'Mañana') manana++;
-      else if (t === 'Tarde') tarde++;
-      else sinTurno++;
-    });
-
-    return {
-      total: pedidosDelDia.length,
-      manana,
-      tarde,
-      sinTurno,
-    };
-  }, [pedidosDelDia]);
-
-  // Resumen del día para ResumenDiaBar (estados de entrega, pago y monto)
-  const resumenDia = useMemo(() => {
-    return calcularResumenDia(pedidosDelDia, preparaciones);
-  }, [pedidosDelDia, preparaciones]);
-
-  // 4. Búsqueda de próxima fecha con entregas si el día actual está vacío
-  const proximaEntregaConPedidos = useMemo(() => {
-    if (pedidosDelDia.length > 0) return null;
-
-    const mapaFechas = new Map();
-    pedidosElegibles.forEach(p => {
-      const f = resolverEntrega(p).ymd;
-      if (f && f > fechaSeleccionada) {
-        if (!mapaFechas.has(f)) mapaFechas.set(f, []);
-        mapaFechas.get(f).push(p);
       }
+
+      if (!mapa.has(grupoClave)) {
+        mapa.set(grupoClave, { clave: grupoClave, titulo: grupoTitulo, orden, pedidos: [] });
+      }
+      mapa.get(grupoClave).pedidos.push(p);
     });
 
-    const fechasFuturas = Array.from(mapaFechas.keys()).sort();
-    if (!fechasFuturas.length) return null;
+    return Array.from(mapa.values()).sort((a, b) => a.orden - b.orden);
+  }, [pedidosFiltrados, hoyArgentina]);
 
-    const proxYMD = fechasFuturas[0];
-    const lista = mapaFechas.get(proxYMD);
-    return {
-      ymd: proxYMD,
-      cantidad: lista.length,
-      label: formatearFechaLegible(proxYMD),
-    };
-  }, [pedidosDelDia, pedidosElegibles, fechaSeleccionada]);
-
-  // 5. Filtrado por estado rápido y agrupación por turno
-  const gruposTurno = useMemo(() => {
-    const filtrados = filtroEstado
-      ? pedidosDelDia.filter(p => {
-          if (filtroEstado === 'listo') return p.estado === 'listo' || p.estado === 'preparado';
-          return p.estado === filtroEstado;
-        })
-      : pedidosDelDia;
-
-    return {
-      manana: filtrados.filter(p => turnoDePedido(p) === 'Mañana'),
-      tarde: filtrados.filter(p => turnoDePedido(p) === 'Tarde'),
-      sinTurno: filtrados.filter(p => turnoDePedido(p) === 'Sin turno'),
-    };
-  }, [pedidosDelDia, filtroEstado]);
-
+  // Impresión de remitos
   const imprimirRemitoPedido = (p) => {
     const prep = preparaciones[p.numero_pedido] || null;
     if (!estaPedidoArmado(p, prep)) {
@@ -205,31 +205,13 @@ export default function PedidosDelDia({ rol, usuario, onNav, fechaCompartida, se
     }
   };
 
-  const imprimirTodosDia = () => {
-    if (pedidosDelDia.length === 0) {
-      alert('No hay pedidos en la fecha seleccionada para imprimir.');
-      return;
-    }
-
-    const armados = pedidosDelDia.filter(p => estaPedidoArmado(p, preparaciones[p.numero_pedido]));
-    const noArmados = pedidosDelDia.filter(p => !estaPedidoArmado(p, preparaciones[p.numero_pedido]));
-
-    if (noArmados.length > 0) {
-      const omitidosStr = noArmados.map(p => `#${p.numero_pedido}`).join(', ');
-      alert(`Impresión masiva: Se omitieron ${noArmados.length} pedidos sin armar (${omitidosStr}). Primero pesá y armá el pedido.`);
-    }
-
+  const imprimirTodosArmados = () => {
+    const armados = pedidosIngresados.filter(p => estaPedidoArmado(p, preparaciones[p.numero_pedido]));
     if (armados.length === 0) {
-      alert('No hay pedidos armados para imprimir en la fecha seleccionada. Primero pesá y armá el pedido.');
+      alert('No hay pedidos armados en esta fecha para imprimir.');
       return;
     }
-
-    imprimirRemitosEnLote(armados, preparaciones, `Remitos · Entrega ${fechaSeleccionada}`);
-    armados.forEach(p => {
-      if (p.sheetRowIndex && actualizarRemitoEnSheet) {
-        actualizarRemitoEnSheet(p.sheetRowIndex, true);
-      }
-    });
+    imprimirRemitosEnLote(armados, preparaciones, `Remitos · Ingresados ${fechaSeleccionada}`);
   };
 
   const esHoy = fechaSeleccionada === hoyArgentina;
@@ -238,460 +220,211 @@ export default function PedidosDelDia({ rol, usuario, onNav, fechaCompartida, se
 
   return (
     <div className="space-y-6">
-      {/* ── Aviso visible si se abrió directo en el próximo día con entregas ── */}
-      {avisoAutoFecha && (
-        <div className="bg-indigo-950/60 border border-indigo-500/40 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 shrink-0">
-              <Calendar size={18} />
-            </div>
-            <div>
-              <p className="text-sm font-bold text-white">
-                Hoy no hay entregas pendientes. Mostrando el próximo día con entregas: <span className="text-indigo-300 font-extrabold">{formatearFechaLegible(fechaSeleccionada)}</span>
-              </p>
-              <p className="text-xs text-indigo-300/80">
-                Podés seleccionar otra fecha o volver a hoy cuando desees.
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setFechaSeleccionada(hoyArgentina);
-              setAvisoAutoFecha(false);
-            }}
-            className="inline-flex items-center justify-center gap-2 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow cursor-pointer shrink-0 active:scale-95"
-          >
-            <span>Ir a hoy</span>
-          </button>
-        </div>
-      )}
-
-      {/* ── Resumen superior unificado para el día elegido ── */}
-      <ResumenDiaBar
-        resumen={resumenDia}
-        fechaLabel={formatearFechaLegible(fechaSeleccionada)}
-        onVolverAgenda={onNav ? () => onNav('agenda', fechaSeleccionada) : undefined}
-        origen="pedidos"
-      />
-
-      {/* ── Encabezado y Navegación de Fecha ── */}
-      <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-5 shadow-lg">
+      {/* ── Encabezado y Barra de Navegación de Fecha de Ingreso ── */}
+      <div className="bg-[#141b26] border border-white/10 rounded-2xl p-5 shadow-xl">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="p-2 rounded-xl bg-green-500/10 text-green-400 border border-green-500/20">
-                <Package size={18} />
-              </span>
-              <div>
-                <div className="flex items-center gap-3">
-                  <h2 className="text-xl font-bold text-white">Pedidos del Día</h2>
-                  {onNav && (
-                    <button
-                      type="button"
-                      onClick={() => onNav('agenda', fechaSeleccionada)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-semibold bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white border border-gray-700 transition-all cursor-pointer active:scale-95"
-                      title="Volver a la Agenda de entregas manteniendo esta fecha"
-                    >
-                      <ChevronLeft size={13} />
-                      <span>Volver a Agenda</span>
-                    </button>
-                  )}
-                </div>
-                <p className="text-gray-400 text-xs mt-0.5">
-                  Entregas programadas para {formatearFechaLegible(fechaSeleccionada)}
-                  {esHoy && <span className="ml-2 text-green-400 font-semibold">(Hoy)</span>}
-                  {esManana && <span className="ml-2 text-sky-400 font-semibold">(Mañana)</span>}
-                  {esAyer && <span className="ml-2 text-amber-400 font-semibold">(Ayer)</span>}
-                </p>
+          <div className="flex items-center gap-3">
+            <span className="p-3 rounded-2xl bg-green-500/10 text-green-400 border border-green-500/20 shadow-inner">
+              <Package size={22} />
+            </span>
+            <div>
+              <div className="flex items-center gap-3">
+                <h2 className="text-xl font-black text-white tracking-tight">Pedidos del Día</h2>
+                {esHoy ? (
+                  <span className="px-2.5 py-0.5 rounded-full bg-green-500/20 text-green-300 border border-green-500/30 text-[11px] font-black uppercase tracking-wider">
+                    Hoy
+                  </span>
+                ) : esAyer ? (
+                  <span className="px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[11px] font-black uppercase tracking-wider">
+                    Ayer
+                  </span>
+                ) : esManana ? (
+                  <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[11px] font-black uppercase tracking-wider">
+                    Mañana
+                  </span>
+                ) : null}
               </div>
+              <p className="text-gray-400 text-xs mt-0.5">
+                Todos los pedidos que <span className="text-white font-bold">ingresaron</span> el {formatearFechaLegible(fechaSeleccionada)} (fecha local de ingreso)
+              </p>
             </div>
           </div>
 
-          {/* Selector de fecha y botones rápidos */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center bg-[#111827] border border-gray-700/80 rounded-xl p-1 shadow-inner">
+          {/* Navegación por fechas de ingreso */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex items-center bg-black/40 border border-white/10 rounded-xl p-1 shadow-inner">
               <button
                 type="button"
-                onClick={() => {
-                  setFechaSeleccionada(sumarDias(hoyArgentina, -1));
-                  setAvisoAutoFecha(false);
-                }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  esAyer ? 'bg-indigo-600 text-white shadow-sm' : 'text-gray-400 hover:text-white'
-                }`}
+                onClick={() => setFechaSeleccionada(sumarDias(fechaSeleccionada, -1))}
+                className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-all cursor-pointer"
+                title="Día de ingreso anterior"
               >
-                Ayer
+                <ChevronLeft size={16} />
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setFechaSeleccionada(hoyArgentina);
-                  setAvisoAutoFecha(false);
-                }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  esHoy ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                Hoy
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setFechaSeleccionada(sumarDias(hoyArgentina, 1));
-                  setAvisoAutoFecha(false);
-                }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  esManana ? 'bg-sky-600 text-white shadow-sm' : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                Mañana
-              </button>
-            </div>
 
-            <div className="flex items-center gap-2 bg-[#111827] border border-gray-700/80 rounded-xl px-3 py-1.5">
-              <Calendar size={14} className="text-gray-400" />
               <input
                 type="date"
                 value={fechaSeleccionada}
-                onChange={(e) => {
-                  setFechaSeleccionada(e.target.value);
-                  setAvisoAutoFecha(false);
-                }}
-                className="bg-transparent text-xs text-white font-medium focus:outline-none cursor-pointer"
-                title="Seleccionar fecha de entrega"
+                onChange={(e) => e.target.value && setFechaSeleccionada(e.target.value)}
+                className="bg-transparent text-white font-mono font-bold text-xs px-2 py-1 outline-none cursor-pointer"
+                title="Seleccionar fecha de ingreso"
               />
-            </div>
 
-            {pedidosDelDia.length > 0 && (
               <button
                 type="button"
-                onClick={imprimirTodosDia}
-                className="flex items-center gap-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-500/40 rounded-xl px-3.5 py-2 transition-all shadow-md active:scale-95 cursor-pointer ml-auto sm:ml-0"
-                title="Imprimir todos los remitos de la fecha seleccionada"
+                onClick={() => setFechaSeleccionada(sumarDias(fechaSeleccionada, 1))}
+                className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-all cursor-pointer"
+                title="Día de ingreso siguiente"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setFechaSeleccionada(hoyArgentina)}
+              className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                esHoy 
+                  ? 'bg-green-600 text-white border-green-500 shadow-md shadow-green-950/40' 
+                  : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/10'
+              }`}
+            >
+              Hoy
+            </button>
+
+            {metricasDia.listos > 0 && (
+              <button
+                type="button"
+                onClick={imprimirTodosArmados}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#1f2937] hover:bg-gray-700 text-gray-200 text-xs font-bold border border-gray-600 transition-all cursor-pointer shadow-sm"
+                title="Imprimir remitos de los pedidos armados de este día"
               >
                 <Printer size={14} />
-                <span>Imprimir remitos ({pedidosDelDia.length})</span>
+                <span>Imprimir remitos ({metricasDia.listos})</span>
               </button>
             )}
           </div>
         </div>
 
-        {/* ── Métricas y Conteos por Turno ── */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
-          <div className="bg-[#111827] rounded-xl p-3 border border-gray-800">
-            <div className="flex items-center justify-between text-gray-400 mb-1">
-              <span className="text-xs font-medium">Total Entregas</span>
-              <Package size={14} className="text-gray-400" />
+        {/* ── Barra de Métricas y Resumen del Día (Requisito C) ── */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-5 border-t border-white/5">
+          <div className="bg-black/30 border border-white/5 rounded-xl p-3">
+            <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Total Ingresados</span>
+            <div className="text-xl font-black text-white mt-0.5">
+              {metricasDia.cantTotal} <span className="text-xs font-medium text-gray-500">pedidos</span>
             </div>
-            <p className="text-2xl font-black text-white">{conteos.total}</p>
           </div>
 
-          <div className="bg-[#111827] rounded-xl p-3 border border-gray-800">
-            <div className="flex items-center justify-between text-amber-400 mb-1">
-              <span className="text-xs font-medium">Mañana (8 a 12h)</span>
-              <Sun size={14} />
+          <div className="bg-black/30 border border-white/5 rounded-xl p-3">
+            <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Monto del Día</span>
+            <div className="text-xl font-black text-emerald-400 mt-0.5">
+              ${metricasDia.montoTotal.toLocaleString('es-AR')}
             </div>
-            <p className="text-2xl font-black text-amber-400">{conteos.manana}</p>
           </div>
 
-          <div className="bg-[#111827] rounded-xl p-3 border border-gray-800">
-            <div className="flex items-center justify-between text-indigo-400 mb-1">
-              <span className="text-xs font-medium">Tarde (14 a 17h)</span>
-              <Sunset size={14} />
+          <div className="bg-black/30 border border-white/5 rounded-xl p-3">
+            <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Monto Armado</span>
+            <div className="text-xl font-black text-cyan-400 mt-0.5">
+              ${metricasDia.montoArmado.toLocaleString('es-AR')}
             </div>
-            <p className="text-2xl font-black text-indigo-400">{conteos.tarde}</p>
           </div>
 
-          <div className="bg-[#111827] rounded-xl p-3 border border-gray-800">
-            <div className="flex items-center justify-between text-gray-400 mb-1">
-              <span className="text-xs font-medium">Sin turno</span>
-              <Clock size={14} />
+          <div className="bg-black/30 border border-white/5 rounded-xl p-3">
+            <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Monto Estimado</span>
+            <div className="text-xl font-black text-amber-400 mt-0.5">
+              ${metricasDia.montoEstimado.toLocaleString('es-AR')}
             </div>
-            <p className="text-2xl font-black text-gray-400">{conteos.sinTurno}</p>
           </div>
         </div>
-      </div>
 
-      {/* ── Aviso cuando el día elegido no tiene pedidos ── */}
-      {pedidosDelDia.length === 0 && (
-        <div className="bg-[#1f2937]/80 border border-gray-800 rounded-2xl p-8 text-center space-y-4 shadow-md">
-          <div className="w-12 h-12 mx-auto rounded-full bg-gray-800/80 flex items-center justify-center text-gray-400">
-            <Calendar size={22} />
-          </div>
-          <div>
-            <h3 className="text-base font-bold text-white">
-              No hay pedidos programados para {formatearFechaLegible(fechaSeleccionada)}
-            </h3>
-            <p className="text-xs text-gray-400 mt-1">
-              No se registran entregas activas con fecha confirmada para este día.
-            </p>
-          </div>
-
-          {proximaEntregaConPedidos && (
-            <div className="pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setFechaSeleccionada(proximaEntregaConPedidos.ymd);
-                  setAvisoAutoFecha(false);
-                }}
-                className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-950/40 active:scale-95 cursor-pointer"
-              >
-                <span>Ir a la próxima entrega con pedidos: {proximaEntregaConPedidos.label} ({proximaEntregaConPedidos.cantidad} {proximaEntregaConPedidos.cantidad === 1 ? 'pedido' : 'pedidos'})</span>
-                <ArrowRight size={14} />
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Filtros por estado (solo si hay pedidos en el día) ── */}
-      {pedidosDelDia.length > 0 && (
-        <div className="flex items-center justify-between bg-[#1f2937] border border-gray-800 rounded-xl px-4 py-2.5">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-gray-400 font-medium">Filtrar estado:</span>
-            {[
-              { id: null, label: `Todos (${pedidosDelDia.length})` },
-              { id: 'pendiente', label: `Pendientes (${pedidosDelDia.filter(p => p.estado === 'pendiente').length})` },
-              { id: 'en_preparacion', label: `En preparación (${pedidosDelDia.filter(p => p.estado === 'en_preparacion').length})` },
-              { id: 'listo', label: `Listos (${pedidosDelDia.filter(p => p.estado === 'listo' || p.estado === 'preparado').length})` },
-              { id: 'entregado', label: `Entregados (${pedidosDelDia.filter(p => p.estado === 'entregado').length})` },
-            ].map(f => (
-              <button
-                key={f.id || 'todos'}
-                type="button"
-                onClick={() => setFiltroEstado(f.id)}
-                className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer ${
-                  filtroEstado === f.id
-                    ? 'bg-gray-700 text-white font-bold'
-                    : 'text-gray-400 hover:text-white hover:bg-gray-800'
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-
-          {filtroEstado && (
+        {/* ── Filtros Rápidos con Contadores (Requisito C) ── */}
+        <div className="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-white/5">
+          {[
+            { id: 'todos', label: 'Todos', count: metricasDia.cantTotal },
+            { id: 'pendientes', label: 'Pendientes', count: metricasDia.pendientes },
+            { id: 'en_preparacion', label: 'En preparación', count: metricasDia.enPrep },
+            { id: 'listos', label: 'Listos', count: metricasDia.listos },
+            { id: 'entregados', label: 'Entregados', count: metricasDia.entregados },
+            { id: 'cancelados', label: 'Cancelados', count: metricasDia.cancelados },
+          ].map(f => (
             <button
+              key={f.id}
               type="button"
-              onClick={() => setFiltroEstado(null)}
-              className="text-xs text-emerald-400 hover:underline cursor-pointer"
+              onClick={() => setFiltroEstado(f.id)}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                filtroEstado === f.id
+                  ? 'bg-green-600 text-white shadow-md shadow-green-950/40 border border-green-500'
+                  : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10 border border-white/5'
+              }`}
             >
-              Quitar filtro
+              <span>{f.label}</span>
+              <span className={`px-1.5 py-0.2 rounded-md text-[10px] font-mono ${
+                filtroEstado === f.id ? 'bg-black/30 text-white' : 'bg-black/40 text-gray-400'
+              }`}>
+                {f.count}
+              </span>
             </button>
-          )}
+          ))}
         </div>
-      )}
+      </div>
 
-      {/* ── Lista agrupada por turno ── */}
-      {pedidosDelDia.length > 0 && (
+      {/* ── Lista de Pedidos Agrupados por Fecha de Entrega (Requisito A y B) ── */}
+      {pedidosFiltrados.length === 0 ? (
+        <div className="bg-[#141b26] border border-white/10 rounded-2xl p-12 text-center space-y-3">
+          <Package size={40} className="mx-auto text-gray-600 stroke-[1.5]" />
+          <h3 className="text-base font-bold text-white">No hay pedidos registrados</h3>
+          <p className="text-xs text-gray-400 max-w-sm mx-auto">
+            {filtroEstado === 'todos'
+              ? `No ingresó ningún pedido el ${formatearFechaLegible(fechaSeleccionada)}.`
+              : `No hay pedidos con filtro "${filtroEstado}" ingresados el ${formatearFechaLegible(fechaSeleccionada)}.`}
+          </p>
+        </div>
+      ) : (
         <div className="space-y-6">
-          {/* SECCIÓN TURNO MAÑANA */}
-          {gruposTurno.manana.length > 0 && (
-            <TablaTurno
-              titulo="Turno Mañana"
-              horario="08:00 a 12:00 hs"
-              icono={<Sun size={16} className="text-amber-400" />}
-              pedidos={gruposTurno.manana}
-              imprimirRemitoPedido={imprimirRemitoPedido}
-              preparaciones={preparaciones}
-              estadosCreditoMap={estadosCreditoMap}
-            />
-          )}
+          {gruposEntrega.map(grupo => (
+            <div key={grupo.clave} className="space-y-3">
+              {/* Encabezado de grupo de entrega ("Para hoy", "Para mañana", "Más adelante · Lunes 02/11") */}
+              <div className="flex items-center gap-3 px-2">
+                <div className="flex items-center gap-2">
+                  <Calendar size={15} className="text-green-400" />
+                  <h3 className="text-sm font-black uppercase tracking-wider text-white">
+                    {grupo.titulo}
+                  </h3>
+                </div>
+                <span className="text-[11px] font-mono text-gray-400 bg-white/5 border border-white/10 px-2 py-0.5 rounded-lg">
+                  {grupo.pedidos.length} {grupo.pedidos.length === 1 ? 'pedido' : 'pedidos'}
+                </span>
+                <div className="flex-1 h-px bg-white/5" />
+              </div>
 
-          {/* SECCIÓN TURNO TARDE */}
-          {gruposTurno.tarde.length > 0 && (
-            <TablaTurno
-              titulo="Turno Tarde"
-              horario="14:00 a 17:00 hs"
-              icono={<Sunset size={16} className="text-indigo-400" />}
-              pedidos={gruposTurno.tarde}
-              imprimirRemitoPedido={imprimirRemitoPedido}
-              preparaciones={preparaciones}
-              estadosCreditoMap={estadosCreditoMap}
-            />
-          )}
-
-          {/* SECCIÓN SIN TURNO */}
-          {gruposTurno.sinTurno.length > 0 && (
-            <TablaTurno
-              titulo="Sin Turno Asignado"
-              horario="Horario a coordinar"
-              icono={<Clock size={16} className="text-gray-400" />}
-              pedidos={gruposTurno.sinTurno}
-              imprimirRemitoPedido={imprimirRemitoPedido}
-              preparaciones={preparaciones}
-              estadosCreditoMap={estadosCreditoMap}
-            />
-          )}
-
-          {/* Si aplicó filtro de estado y no quedaron pedidos en ningún turno */}
-          {gruposTurno.manana.length === 0 && gruposTurno.tarde.length === 0 && gruposTurno.sinTurno.length === 0 && (
-            <div className="bg-[#1f2937] border border-gray-800 rounded-2xl p-8 text-center text-gray-400 text-xs italic">
-              No hay pedidos con el estado "{filtroEstado}" en esta fecha.
+              {/* Tarjetas de pedidos del grupo */}
+              <div className="space-y-3">
+                {grupo.pedidos.map(p => (
+                  <TarjetaPedido
+                    key={p.numero_pedido || p.sheetRowIndex}
+                    pedido={p}
+                    preparacion={preparaciones[p.numero_pedido]}
+                    onArmar={(ped) => setPedidoArmar(ped)}
+                    onImprimirRemito={imprimirRemitoPedido}
+                  />
+                ))}
+              </div>
             </div>
-          )}
+          ))}
         </div>
       )}
-    </div>
-  );
-}
 
-function TablaTurno({ titulo, horario, icono, pedidos, imprimirRemitoPedido, preparaciones = {}, estadosCreditoMap = {} }) {
-  return (
-    <div className="bg-[#1f2937] border border-gray-800 rounded-2xl overflow-hidden shadow-md">
-      <div className="px-5 py-3.5 bg-[#111827]/70 border-b border-gray-800 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {icono}
-          <h3 className="text-sm font-bold text-white">{titulo}</h3>
-          <span className="text-xs text-gray-400">· {horario}</span>
-        </div>
-        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-800 text-gray-300 border border-gray-700">
-          {pedidos.length} {pedidos.length === 1 ? 'pedido' : 'pedidos'}
-        </span>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-800 text-gray-400 text-xs uppercase">
-              <th className="text-left px-4 py-3 font-semibold"># Pedido</th>
-              <th className="text-left px-4 py-3 font-semibold">Cliente</th>
-              <th className="text-left px-4 py-3 font-semibold">Localidad</th>
-              <th className="text-left px-4 py-3 font-semibold">Productos</th>
-              <th className="text-left px-4 py-3 font-semibold">Total</th>
-              <th className="text-left px-4 py-3 font-semibold">Entrega</th>
-              <th className="text-left px-4 py-3 font-semibold">Pago</th>
-              <th className="text-center px-4 py-3 font-semibold">Remito</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-800/60">
-            {pedidos.map(p => {
-              const prep = preparaciones[p.numero_pedido] || null;
-              const infoCobro = calcularTotalPedido(p, prep);
-              const estEnt = estadoEntregaPedido(p, prep);
-              const estPag = estadoPagoPedido(p);
-
-              return (
-                <tr key={p.numero_pedido} className="hover:bg-gray-800/40 transition-colors">
-                  <td className="px-4 py-3">
-                    <span className="text-xs font-mono font-semibold text-white">{p.numero_pedido}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="font-medium text-white text-xs block">{p.nombre}</span>
-                    {p.telefono && <span className="text-[11px] text-gray-500">{p.telefono}</span>}
-                  </td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{p.localidad || '-'}</td>
-                  <td className="px-4 py-3">
-                    <span className="text-white text-xs block line-clamp-1">{p.producto || 'Varios'}</span>
-                    <span className="text-[11px] text-gray-500">x{p.cantidades || 1}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="font-bold text-emerald-400 text-xs block">
-                      {$$(infoCobro.monto)}
-                    </span>
-                    {infoCobro.esEstimado && (
-                      <span className="text-[10px] text-amber-400 block leading-tight font-medium" title={infoCobro.motivoEstimado}>
-                        {infoCobro.motivoEstimado || 'Estimado'}
-                      </span>
-                    )}
-                    {Number(p.credito_usado) > 0 && (() => {
-                      const estadoCred = (estadosCreditoMap[p.numero_pedido]?.estado || '').toLowerCase().trim();
-                      const montoCred = Number(p.credito_usado);
-
-                      if (estadoCred === 'sin_reserva') {
-                        return (
-                          <span
-                            className="text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 block mt-1 w-fit animate-pulse"
-                            title="Crédito sin reserva: revisar. No tocar saldos."
-                          >
-                            ⚠️ Sin reserva: revisar
-                          </span>
-                        );
-                      }
-                      if (estadoCred === 'reservado') {
-                        return (
-                          <span
-                            className="text-[10px] font-bold text-amber-300 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 block mt-1 w-fit"
-                            title={`Crédito reservado: $${montoCred.toLocaleString('es-AR')}`}
-                          >
-                            🟡 Créd: Reservado
-                          </span>
-                        );
-                      }
-                      if (estadoCred === 'consumido') {
-                        return (
-                          <span
-                            className="text-[10px] font-bold text-emerald-300 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 block mt-1 w-fit"
-                            title={`Crédito consumido: $${montoCred.toLocaleString('es-AR')}`}
-                          >
-                            🟢 Créd: Consumido
-                          </span>
-                        );
-                      }
-                      if (estadoCred === 'liberado') {
-                        return (
-                          <span
-                            className="text-[10px] font-bold text-gray-400 bg-gray-500/10 px-1.5 py-0.5 rounded border border-gray-500/20 block mt-1 w-fit"
-                            title={`Crédito liberado: $${montoCred.toLocaleString('es-AR')}`}
-                          >
-                            ⚪ Créd: Liberado
-                          </span>
-                        );
-                      }
-                      return (
-                        <span className="text-[10px] text-gray-500 block mt-1">
-                          Créd: ${montoCred.toLocaleString('es-AR')}
-                        </span>
-                      );
-                    })()}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${estEnt.color}`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${estEnt.dot}`} />
-                      <span>{estEnt.label}</span>
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div>
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${estPag.color}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${estPag.dot}`} />
-                        <span>{estPag.label}</span>
-                      </span>
-                      {estPag.sublabel && (
-                        <span className="text-[10px] text-gray-400 block mt-0.5 leading-tight">{estPag.sublabel}</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    {(() => {
-                      const armado = estaPedidoArmado(p, prep);
-                      return (
-                        <button
-                          type="button"
-                          onClick={() => armado ? imprimirRemitoPedido(p) : null}
-                          disabled={!armado}
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
-                            armado
-                              ? 'bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 hover:text-white active:scale-95 cursor-pointer'
-                              : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed opacity-60'
-                          }`}
-                          title={armado ? 'Imprimir remito individual' : 'Primero pesá y armá el pedido'}
-                        >
-                          <Printer size={12} className={armado ? 'text-indigo-400' : 'text-gray-500'} />
-                          <span>{armado ? 'Remito' : 'Primero pesá y armá el pedido'}</span>
-                        </button>
-                      );
-                    })()}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      {/* ── Modal de Armado de Pedido (Requisito D: armar desde aquí aunque sea futuro) ── */}
+      {pedidoArmar && (
+        <ModalArmadoPedido
+          pedido={pedidoArmar}
+          onClose={() => setPedidoArmar(null)}
+          onPedidoArmado={() => {
+            recargarPreparaciones();
+            if (fetchSheetPedidos) fetchSheetPedidos();
+          }}
+        />
+      )}
     </div>
   );
 }

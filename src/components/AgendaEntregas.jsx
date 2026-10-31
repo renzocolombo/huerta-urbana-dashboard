@@ -1,7 +1,7 @@
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import { useState, useMemo, useEffect, useRef, useCallback, Fragment } from 'react';
 import { 
-  MapPin, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Package, 
+  MapPin, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, MessageCircle, AlertCircle, Package, 
   CheckCircle, Sun, Sunset, Printer, FileText, User, Clock, ScanBarcode, 
   X, Trash2, Check, RotateCcw, Lock, AlertTriangle, Sparkles, Tag, CheckSquare, Square,
   CreditCard, DollarSign, Calendar, ArrowRight
@@ -344,8 +344,17 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     const hoy = getHoyYMD();
 
     const activos = (PEDIDOS || []).filter(p => {
-      const estadoActual = estados[p.numero_pedido] || p.estado;
-      return esPedidoElegibleReparto(p, estadoActual);
+      const estadoActual = (estados[p.numero_pedido] || p.estado || '').toLowerCase().trim();
+      const esCancelado = estadoActual === 'cancelado' || estadoActual === 'cancelled' ||
+        (estadoActual === 'no_entregado' && (p.motivo_no_entrega || p.motivo || '').toLowerCase().includes('cancel'));
+      const esEntregado = estadoActual === 'entregado' || estadoActual === 'delivered';
+      const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
+
+      // Si está entregado o cancelado y no tiene reembolso pendiente, no va a reparto
+      if ((esEntregado || esCancelado) && !tieneReembolsoPendiente) {
+        return false;
+      }
+      return true;
     }).map(p => {
       const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
       return { ...enriquecerPedido(p, hoy), esReembolsoPendiente: tieneReembolsoPendiente };
@@ -373,15 +382,17 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     return arr;
   }, [gruposEntrega, hoyYMD]);
 
-  const tabActiva = (tabSeleccionada && tabsEntrega.some(t => t.clave === tabSeleccionada))
+  const tabActiva = (tabSeleccionada && (tabsEntrega.some(t => t.clave === tabSeleccionada) || /^\d{4}-\d{2}-\d{2}$/.test(tabSeleccionada)))
     ? tabSeleccionada
     : claveTabInicial(tabsEntrega.map(t => t.clave), hoyYMD);
 
-  // Pedidos de la pestaña elegida
+  // Pedidos de la pestaña elegida (permite cualquier fecha arbitraria de entrega)
   const pedidosDelDia = useMemo(() => {
     if (tabActiva === CLAVE_ATRASADOS) return gruposEntrega.atrasados;
-    return gruposEntrega.dias.find(d => d.clave === tabActiva)?.pedidos || [];
-  }, [gruposEntrega, tabActiva]);
+    const diaEncontrado = gruposEntrega.dias.find(d => d.clave === tabActiva);
+    if (diaEncontrado) return diaEncontrado.pedidos;
+    return pedidosActivosTodos.filter(p => p.entregaYMD === tabActiva);
+  }, [gruposEntrega, tabActiva, pedidosActivosTodos]);
 
   // Texto de la pestaña activa (títulos de impresión)
   const tituloTabActiva = useMemo(() => {
@@ -2678,6 +2689,75 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
         />
       ) : (
         <>
+          {/* Barra de navegación a CUALQUIER fecha de entrega (Requisito E) */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#111827]/80 border border-white/5 p-3 rounded-2xl mb-4">
+            <div className="flex items-center gap-2">
+              <Calendar size={18} className="text-green-400 shrink-0" />
+              <span className="text-white font-black text-sm">Fecha de Entrega:</span>
+              <span className="text-xs text-gray-400 font-mono">
+                {/^\d{4}-\d{2}-\d{2}$/.test(tabActiva) ? tabActiva : (tabActiva === CLAVE_ATRASADOS ? 'Atrasados' : hoyYMD)}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => {
+                  const base = /^\d{4}-\d{2}-\d{2}$/.test(tabActiva) ? tabActiva : hoyYMD;
+                  const prev = new Date(Number(base.slice(0, 4)), Number(base.slice(5, 7)) - 1, Number(base.slice(8, 10)) - 1);
+                  const y = prev.getFullYear();
+                  const m = String(prev.getMonth() + 1).padStart(2, '0');
+                  const d = String(prev.getDate()).padStart(2, '0');
+                  setTabSeleccionada(`${y}-${m}-${d}`);
+                }}
+                className="p-2 rounded-xl bg-[#1f2937] border border-gray-700 hover:border-gray-500 text-gray-300 hover:text-white cursor-pointer"
+                title="Día de entrega anterior"
+              >
+                <ChevronLeft size={16} />
+              </button>
+
+              <input
+                type="date"
+                value={/^\d{4}-\d{2}-\d{2}$/.test(tabActiva) ? tabActiva : hoyYMD}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setTabSeleccionada(e.target.value);
+                  }
+                }}
+                className="bg-[#1f2937] border border-gray-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono font-bold outline-none cursor-pointer"
+                title="Seleccionar cualquier fecha de entrega"
+              />
+
+              <button
+                type="button"
+                onClick={() => {
+                  const base = /^\d{4}-\d{2}-\d{2}$/.test(tabActiva) ? tabActiva : hoyYMD;
+                  const next = new Date(Number(base.slice(0, 4)), Number(base.slice(5, 7)) - 1, Number(base.slice(8, 10)) + 1);
+                  const y = next.getFullYear();
+                  const m = String(next.getMonth() + 1).padStart(2, '0');
+                  const d = String(next.getDate()).padStart(2, '0');
+                  setTabSeleccionada(`${y}-${m}-${d}`);
+                }}
+                className="p-2 rounded-xl bg-[#1f2937] border border-gray-700 hover:border-gray-500 text-gray-300 hover:text-white cursor-pointer"
+                title="Día de entrega siguiente"
+              >
+                <ChevronRight size={16} />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setTabSeleccionada(hoyYMD)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                  tabActiva === hoyYMD
+                    ? 'bg-green-600 text-white border-green-500'
+                    : 'bg-[#1f2937] text-gray-300 border-gray-700 hover:text-white'
+                }`}
+              >
+                Hoy
+              </button>
+            </div>
+          </div>
+
           {/* Pestañas dinámicas por fecha de entrega */}
           <div id="tabs-fechas-entrega" className="flex gap-2 mb-4 overflow-x-auto pb-2">
             {tabsEntrega.length === 0 && (
@@ -3106,6 +3186,28 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                       </button>
                     )}
 
+                    {/* Botón prominente de Armar / Continuar / Ver armado (Requisitos B y D) */}
+                    {rol !== 'repartidor' && !tieneReembolsoPendiente && (estadoActual !== 'entregado' && estadoActual !== 'cancelado') && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          iniciarPreparacion(p);
+                        }}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer border ${
+                          esArmado
+                            ? 'bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border-cyan-500/40'
+                            : (prep && !esArmado)
+                            ? 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white border-amber-400/40 animate-pulse'
+                            : 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white border-emerald-400/30 shadow-emerald-950/40'
+                        }`}
+                        title={esArmado ? 'Ver detalles del armado' : (prep ? 'Continuar pesaje y escaneo' : 'Armar pedido')}
+                      >
+                        <Package size={13} />
+                        <span>{esArmado ? 'Ver armado' : (prep ? 'Continuar armado' : 'Armar pedido')}</span>
+                      </button>
+                    )}
+
                     {/* Botón Cobrar en cabecera de pedido por cobrar (Requisito 2 y 3) */}
                     {esPorCobrar && esPedidoPendienteDeEntrega(p, estadoActual) && !tieneReembolsoPendiente && (
                       <button
@@ -3456,7 +3558,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
 
                             {/* Botón MARCAR PREPARADO */}
                             {estaPreparando && todosCompletos && (
-                              <button onClick={() => marcarPreparado(p.numero_pedido)} className="w-full flex items-center justify-center gap-3 py-4 rounded-2xl bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-400 hover:to-emerald-400 text-white font-black text-sm uppercase tracking-widest transition-all active:scale-[0.98] cursor-pointer shadow-lg shadow-green-900/40 border-b-2 border-green-700 animate-pulse">
+                              <button onClick={() => handlePedidoArmado(p, p.numero_pedido)} className="w-full flex items-center justify-center gap-3 py-4 rounded-2xl bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-400 hover:to-emerald-400 text-white font-black text-sm uppercase tracking-widest transition-all active:scale-[0.98] cursor-pointer shadow-lg shadow-green-900/40 border-b-2 border-green-700 animate-pulse">
                                 <CheckCircle size={20} /> ✅ MARCAR COMO PREPARADO
                               </button>
                             )}

@@ -1,15 +1,17 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Loader2, AlertTriangle, RefreshCw, CalendarDays,
-  X, Download, Sun, Sunset, Clock, Package, CheckCircle, TrendingUp, TrendingDown, Minus
+  X, Download, Sun, Sunset, Clock, Package, CheckCircle, TrendingUp, TrendingDown, Minus, DollarSign
 } from 'lucide-react';
 import { apiGetCalendario, apiSetDiaCalendario, apiSembrarFeriados } from '../utils/mercaderiaApi';
 import {
   mapaCalendario, estadoDelDia, accionesDelDia, semanasDelMes, ESTADOS_DIA,
-  metricasDia, metricasMes, turnoDePedido,
+  metricasDia, metricasMes, resolverEntrega, esPedidoCancelado
 } from '../utils/agendaCalendario';
 import { calcularDetalleYTotalesDia } from '../utils/calendarioTotales';
+import { calcularTotalPedido } from '../utils/totalesPedido';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
+import ModalArmadoPedido from './ModalArmadoPedido';
 
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 const DIAS_CAB = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'];
@@ -41,6 +43,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
   const [aviso, setAviso] = useState(null); // { tipo: 'ok' | 'error', texto }
   const [sembrando, setSembrando] = useState(false);
   const [turnosAbiertos, setTurnosAbiertos] = useState({});
+  const [pedidoArmar, setPedidoArmar] = useState(null);
   const enVuelo = useRef(false);
 
   const toggleTurno = (nombre) => {
@@ -51,12 +54,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
   };
 
   // Obtener pedidos de props o de contexto
-  let sheetsCtx = null;
-  try {
-    sheetsCtx = useGoogleSheets();
-  } catch (e) {
-    // Para contextos de prueba aislados
-  }
+  const sheetsCtx = useGoogleSheets();
   const todosLosPedidos = useMemo(() => {
     if (pedidosProp && Array.isArray(pedidosProp) && pedidosProp.length > 0) return pedidosProp;
     return sheetsCtx?.pedidos || [];
@@ -64,6 +62,31 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
 
   // Metricas mensuales (se actualizan al cambiar anio/mes)
   const mesMetricas = useMemo(() => metricasMes(todosLosPedidos, anio, mes), [todosLosPedidos, anio, mes]);
+
+  // Cálculo de montos diarios y del mes
+  const totalesPorDia = useMemo(() => {
+    const mapa = {};
+    const mesStr = `${anio}-${String(mes).padStart(2, '0')}`;
+    let sumaMes = 0;
+
+    (todosLosPedidos || []).forEach(p => {
+      const res = p.entregaYMD || resolverEntrega(p).ymd;
+      if (!res) return;
+      if (!mapa[res]) {
+        mapa[res] = { cantidad: 0, monto: 0 };
+      }
+      if (!esPedidoCancelado(p)) {
+        mapa[res].cantidad++;
+        const { total } = calcularTotalPedido(p, preparaciones[p.numero_pedido]);
+        mapa[res].monto += total;
+        if (res.startsWith(mesStr)) {
+          sumaMes += total;
+        }
+      }
+    });
+
+    return { mapa, sumaMes };
+  }, [todosLosPedidos, anio, mes, preparaciones]);
 
   // Metricas del dia seleccionado
   const diaMetricas = useMemo(() => seleccionado ? metricasDia(todosLosPedidos, seleccionado) : null, [todosLosPedidos, seleccionado]);
@@ -99,13 +122,23 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
   }, [aplicarResultado]);
 
   const mapa = useMemo(() => mapaCalendario(dias), [dias]);
-  const semanas = useMemo(() => semanasDelMes(anio, mes), [anio, mes]);
+  const semanas = useMemo(() => semanasDelMes(anio, mes, true), [anio, mes]);
 
   const moverMes = (delta) => {
     let m = mes + delta, a = anio;
     if (m < 1) { m = 12; a -= 1; }
     if (m > 12) { m = 1; a += 1; }
     setMes(m); setAnio(a); setSeleccionado(null); setConfirmando(null); setTurnosAbiertos({});
+  };
+
+  const irAHoy = () => {
+    const a = Number(hoyYMD.slice(0, 4));
+    const m = Number(hoyYMD.slice(5, 7));
+    setAnio(a);
+    setMes(m);
+    setSeleccionado(hoyYMD);
+    setConfirmando(null);
+    setTurnosAbiertos({});
   };
 
   const elegirDia = (ymd) => {
@@ -184,6 +217,9 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
           </div>
           <button id="cal-mes-siguiente" type="button" onClick={() => moverMes(1)} className="p-2 rounded-xl bg-[#1f2937] border border-gray-700 hover:border-gray-500 text-gray-300 cursor-pointer" title="Mes siguiente">
             <ChevronRight size={16} />
+          </button>
+          <button id="cal-mes-hoy" type="button" onClick={irAHoy} className="px-3 py-1.5 rounded-xl bg-[#1f2937] border border-gray-700 hover:border-gray-500 text-gray-300 hover:text-white text-xs font-bold cursor-pointer transition-all ml-1">
+            Hoy
           </button>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -264,14 +300,16 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
             </div>
           </div>
 
-          {/* Cancelados / No entregados */}
-          <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-3 flex flex-col justify-between">
-            <span className="text-[10px] uppercase font-bold text-red-400/80 flex items-center gap-1.5">
-              <X size={13} className="text-red-400" /> Cancel / No Entr.
+          {/* Monto Total Mes */}
+          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-3 flex flex-col justify-between">
+            <span className="text-[10px] uppercase font-bold text-emerald-400 flex items-center gap-1.5">
+              <DollarSign size={13} className="text-emerald-400" /> Monto Mes
             </span>
             <div className="mt-1 flex items-baseline justify-between">
-              <span className="text-xl font-black text-red-300">{mesMetricas.canceladosNoEntregados}</span>
-              <span className="text-[10px] text-gray-500 font-medium">cancel / fallidos</span>
+              <span className="text-xl font-black text-emerald-300">
+                ${Math.round(totalesPorDia.sumaMes).toLocaleString('es-AR')}
+              </span>
+              <span className="text-[10px] text-emerald-500 font-medium">total</span>
             </div>
           </div>
         </div>
@@ -334,29 +372,39 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                 {fila.map((ymd, j) => {
                   if (!ymd) return <div key={j} className="min-h-[56px] sm:min-h-[76px]" />;
                   const est = estadoDelDia(ymd, mapa);
-                  const n = conteo[ymd] || 0;
+                  const infoDia = totalesPorDia.mapa[ymd] || { cantidad: 0, monto: 0 };
+                  const n = infoDia.cantidad || (conteo[ymd] || 0);
+                  const monto = infoDia.monto || 0;
                   const esHoy = ymd === hoyYMD;
                   const esPasado = ymd < hoyYMD;
                   const sel = ymd === seleccionado;
+                  const esMesActual = ymd.startsWith(`${anio}-${String(mes).padStart(2, '0')}`);
                   return (
                     <button
                       key={ymd}
                       id={`cal-dia-${ymd}`}
                       type="button"
                       onClick={() => elegirDia(ymd)}
-                      className={`min-h-[56px] sm:min-h-[76px] rounded-xl border p-1 sm:p-1.5 text-left flex flex-col justify-between transition-all cursor-pointer ${ESTILO[est].celda} ${esPasado ? 'opacity-50' : 'hover:scale-[1.03]'} ${sel ? 'ring-2 ring-white/70' : ''} ${esHoy ? 'outline outline-2 outline-green-400' : ''}`}
+                      className={`min-h-[56px] sm:min-h-[76px] rounded-xl border p-1 sm:p-1.5 text-left flex flex-col justify-between transition-all cursor-pointer ${ESTILO[est].celda} ${!esMesActual ? 'opacity-40 hover:opacity-80' : esPasado ? 'opacity-60' : 'hover:scale-[1.03]'} ${sel ? 'ring-2 ring-white/70' : ''} ${esHoy ? 'outline outline-2 outline-green-400' : ''}`}
                       title={`${fmtLargo(ymd)} · ${ESTADOS_DIA[est].etiqueta}${mapa[ymd]?.motivo ? ` · ${mapa[ymd].motivo}` : ''}`}
                     >
                       <div className="flex items-start justify-between">
-                        <span className="text-xs sm:text-sm font-black">{Number(ymd.slice(8))}</span>
+                        <span className={`text-xs sm:text-sm font-black ${!esMesActual ? 'text-gray-400' : ''}`}>{Number(ymd.slice(8))}</span>
                         <span className={`w-2 h-2 rounded-full mt-1 ${ESTILO[est].punto}`} />
                       </div>
                       <div className="leading-tight">
                         <span className="hidden sm:block text-[9px] uppercase font-bold opacity-80 truncate">{ESTADOS_DIA[est].etiqueta}</span>
                         {n > 0 && (
-                          <span className="inline-block mt-0.5 text-[10px] font-black bg-black/40 border border-white/15 rounded-md px-1">
-                            {n} <span className="hidden sm:inline">{n === 1 ? 'pedido' : 'pedidos'}</span>
-                          </span>
+                          <div className="mt-0.5 space-y-0.5">
+                            <span className="inline-block text-[10px] font-black bg-black/40 border border-white/15 rounded-md px-1">
+                              {n} <span className="hidden sm:inline">{n === 1 ? 'ped' : 'peds'}</span>
+                            </span>
+                            {monto > 0 && (
+                              <span className="block text-[9px] font-mono font-bold text-emerald-400 truncate">
+                                ${Math.round(monto).toLocaleString('es-AR')}
+                              </span>
+                            )}
+                          </div>
                         )}
                       </div>
                     </button>
@@ -557,6 +605,17 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                                   <span className={`w-1.5 h-1.5 rounded-full ${it.estPag.dot}`} />
                                   <span>{it.estPag.shortLabel || it.estPag.label}</span>
                                 </span>
+                                {it.estEnt.estado !== 'entregado' && it.estEnt.estado !== 'cancelado' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPedidoArmar(it.pedidoOriginal || todosLosPedidos.find(p => p.numero_pedido === it.numero_pedido))}
+                                    className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 hover:text-white text-[10px] font-bold cursor-pointer transition-all"
+                                    title="Armar pedido"
+                                  >
+                                    <Package size={11} />
+                                    <span>Armar</span>
+                                  </button>
+                                )}
                               </div>
                             </div>
                           ))}
@@ -674,6 +733,17 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                                   <span className={`w-1.5 h-1.5 rounded-full ${it.estPag.dot}`} />
                                   <span>{it.estPag.shortLabel || it.estPag.label}</span>
                                 </span>
+                                {it.estEnt.estado !== 'entregado' && it.estEnt.estado !== 'cancelado' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPedidoArmar(it.pedidoOriginal || todosLosPedidos.find(p => p.numero_pedido === it.numero_pedido))}
+                                    className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 hover:text-white text-[10px] font-bold cursor-pointer transition-all"
+                                    title="Armar pedido"
+                                  >
+                                    <Package size={11} />
+                                    <span>Armar</span>
+                                  </button>
+                                )}
                               </div>
                             </div>
                           ))}
@@ -792,6 +862,17 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                                     <span className={`w-1.5 h-1.5 rounded-full ${it.estPag.dot}`} />
                                     <span>{it.estPag.shortLabel || it.estPag.label}</span>
                                   </span>
+                                  {it.estEnt.estado !== 'entregado' && it.estEnt.estado !== 'cancelado' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setPedidoArmar(it.pedidoOriginal || todosLosPedidos.find(p => p.numero_pedido === it.numero_pedido))}
+                                      className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 hover:text-white text-[10px] font-bold cursor-pointer transition-all"
+                                      title="Armar pedido"
+                                    >
+                                      <Package size={11} />
+                                      <span>Armar</span>
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             ))}
@@ -982,6 +1063,16 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
           )}
         </div>
       </div>
+
+      {pedidoArmar && (
+        <ModalArmadoPedido
+          pedido={pedidoArmar}
+          onClose={() => setPedidoArmar(null)}
+          onPedidoArmado={() => {
+            if (onCambio) onCambio();
+          }}
+        />
+      )}
     </div>
   );
 }

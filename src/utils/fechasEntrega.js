@@ -120,3 +120,95 @@ export function obtenerFechaCierreEfectiva(p, estadoActual) {
   }
   return '';
 }
+
+/**
+ * Extrae la fecha de ingreso (YMD) de un pedido sin corrimiento por UTC.
+ * Para formatos locales ("2026-10-30 23:30:00", "30/10/2026", "Date(...)") se extraen
+ * directamente los componentes de la fecha. Si viene en ISO con 'Z' UTC, se formatea
+ * en zona America/Argentina/Buenos_Aires.
+ */
+export function extraerFechaIngresoYMD(fechaRaw) {
+  if (!fechaRaw) return '';
+  if (fechaRaw instanceof Date) {
+    return isNaN(fechaRaw.getTime()) ? '' : getHoyYMD(fechaRaw);
+  }
+  if (typeof fechaRaw === 'string') {
+    const s = fechaRaw.trim();
+    // Google Sheets format: Date(YYYY, M-1, D, ...)
+    const mDate = s.match(/Date\((\d+),(\d+),(\d+)/);
+    if (mDate) {
+      const y = mDate[1];
+      const m = String(parseInt(mDate[2], 10) + 1).padStart(2, '0');
+      const d = String(parseInt(mDate[3], 10)).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+    // Si viene con 'Z' explícito (UTC ISO string)
+    if (s.endsWith('Z') || s.includes('Z')) {
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) return getHoyYMD(d);
+    }
+    // YYYY-MM-DD (con o sin hora posterior ej. "2026-10-30 23:30:00" o "2026-10-30T23:30:00")
+    const mYMD = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (mYMD) {
+      return `${mYMD[1]}-${mYMD[2].padStart(2, '0')}-${mYMD[3].padStart(2, '0')}`;
+    }
+    // DD/MM/YYYY
+    const mDMY = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (mDMY) {
+      return `${mDMY[3]}-${mDMY[2].padStart(2, '0')}-${mDMY[1].padStart(2, '0')}`;
+    }
+  }
+  return extraerFechaYMD(fechaRaw);
+}
+
+/**
+ * Extrae la hora de ingreso formateada en "HH:mm" (ej: "23:30").
+ */
+export function extraerHoraIngreso(fechaRaw) {
+  if (!fechaRaw) return '';
+  if (fechaRaw instanceof Date) {
+    if (isNaN(fechaRaw.getTime())) return '';
+    const formatter = new Intl.DateTimeFormat('es-AR', {
+      timeZone: TZ_ARGENTINA,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+    return formatter.format(fechaRaw);
+  }
+  if (typeof fechaRaw === 'string') {
+    const s = fechaRaw.trim();
+    // Date(YYYY, M, D, H, m, s)
+    const mDate = s.match(/Date\(\d+,\s*\d+,\s*\d+,\s*(\d+),\s*(\d+)/);
+    if (mDate) {
+      return `${mDate[1].padStart(2, '0')}:${mDate[2].padStart(2, '0')}`;
+    }
+    // Si tiene hora explicita HH:mm:ss o HH:mm
+    const mHora = s.match(/(?:T|\s)(\d{1,2}):(\d{2})/);
+    if (mHora) {
+      // Si termina en Z, convertir por timezone
+      if (s.endsWith('Z')) {
+        const d = new Date(s);
+        if (!isNaN(d.getTime())) {
+          return new Intl.DateTimeFormat('es-AR', {
+            timeZone: TZ_ARGENTINA,
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+          }).format(d);
+        }
+      }
+      return `${mHora[1].padStart(2, '0')}:${mHora[2]}`;
+    }
+  }
+  const d = parsearFecha(fechaRaw);
+  if (d && !isNaN(d.getTime())) {
+    return new Intl.DateTimeFormat('es-AR', {
+      timeZone: TZ_ARGENTINA,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).format(d);
+  }
+  return '';
+}

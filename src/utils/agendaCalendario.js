@@ -2,7 +2,7 @@
 import {
   parseDiaEntrega, bloquesDelDia, primeraEntrega, claveOrden, dowDeYmd, BLOQUES, turnoDePedido,
 } from './entregaCalendario.js';
-import { calcularFechaEntregaProgramada, fechaA_YMD, parsearFecha, extraerFechaYMD, getHoyYMD } from './fechasEntrega.js';
+import { calcularFechaEntregaProgramada, fechaA_YMD, parsearFecha, extraerFechaYMD } from './fechasEntrega.js';
 
 export const METODOS_PAGO_CONTRA_ENTREGA = ['efectivo', 'contra_entrega', 'al_recibir'];
 
@@ -242,7 +242,10 @@ export function accionesDelDia(ymd, diasMap, hoyYMD) {
 }
 
 // Semanas (lunes a domingo) de un mes: array de filas de 7 celdas ymd o null.
-export function semanasDelMes(anio, mes) { // mes 1..12
+export function semanasDelMes(anio, mes, conVecinos = false) { // mes 1..12
+  if (conVecinos) {
+    return semanasDelMesConVecinos(anio, mes);
+  }
   const primero = anio + '-' + String(mes).padStart(2, '0') + '-01';
   const dias = new Date(Date.UTC(anio, mes, 0)).getUTCDate();
   const offset = (dowDeYmd(primero) + 6) % 7; // lunes = 0
@@ -252,6 +255,40 @@ export function semanasDelMes(anio, mes) { // mes 1..12
   while (celdas.length % 7 !== 0) celdas.push(null);
   const filas = [];
   for (let i = 0; i < celdas.length; i += 7) filas.push(celdas.slice(i, i + 7));
+  return filas;
+}
+
+export function semanasDelMesConVecinos(anio, mes) {
+  const primero = anio + '-' + String(mes).padStart(2, '0') + '-01';
+  const dias = new Date(Date.UTC(anio, mes, 0)).getUTCDate();
+  const offset = (dowDeYmd(primero) + 6) % 7; // lunes = 0
+  const celdas = [];
+
+  for (let i = offset; i > 0; i--) {
+    const dVecino = new Date(Date.UTC(anio, mes - 1, 1 - i));
+    const y = dVecino.getUTCFullYear();
+    const m = String(dVecino.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(dVecino.getUTCDate()).padStart(2, '0');
+    celdas.push(`${y}-${m}-${d}`);
+  }
+
+  for (let d = 1; d <= dias; d++) {
+    celdas.push(anio + '-' + String(mes).padStart(2, '0') + '-' + String(d).padStart(2, '0'));
+  }
+
+  let proxD = 1;
+  while (celdas.length % 7 !== 0) {
+    const dVecino = new Date(Date.UTC(anio, mes, proxD++));
+    const y = dVecino.getUTCFullYear();
+    const m = String(dVecino.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(dVecino.getUTCDate()).padStart(2, '0');
+    celdas.push(`${y}-${m}-${d}`);
+  }
+
+  const filas = [];
+  for (let i = 0; i < celdas.length; i += 7) {
+    filas.push(celdas.slice(i, i + 7));
+  }
   return filas;
 }
 
