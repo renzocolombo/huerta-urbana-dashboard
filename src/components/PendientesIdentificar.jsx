@@ -6,14 +6,14 @@ import {
 } from 'lucide-react';
 import {
   asociarEanAProducto, normalizeSubcategoriaAlmacen, getEanMapping,
-  SUBCATEGORIAS_ALMACEN, getSubcategoriaAlmacen
+  SUBCATEGORIAS_ALMACEN, getSubcategoriaAlmacen, getCategoriaPrincipal
 } from '../data/productUtils';
 import {
   getIdentificaciones, esProductoAlmacenUnidad, normNombre,
   registrarEscaneo, deshacerUltimoEscaneo, productoDeCodigo
 } from '../utils/identificacionAlmacen';
 import { APPS_SCRIPT_URL } from '../utils/appsScriptUrl';
-import { postAppsScript, leerCacheAlmacen } from '../utils/almacenCache';
+import { leerCacheAlmacen } from '../utils/almacenCache';
 
 const LOTE_STORAGE_KEY = 'huerta_lote_escaneos_pendientes_v1';
 
@@ -623,17 +623,7 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
             unidad: prod.unidad || 'unidad'
           });
 
-          // 4. Actualizar pestaña "Almacen" en Google Sheets con el código EAN y el nuevo stock
-          if (prod.fila && APPS_SCRIPT_URL) {
-            postAppsScript(APPS_SCRIPT_URL, {
-              accion: 'updateAlmacen',
-              sheet: 'Almacen',
-              fila: prod.fila,
-              nombre: prod.nombre,
-              codigo_ean: lastCode,
-              stock_unidades: totalCacheStock
-            }).catch((err) => console.warn('Error actualizando EAN en Google Sheet:', err));
-          }
+          // 4. Escritura de stock absoluto en Google Sheets deshabilitada (solo lectura / visualización local)
         }
       }
     }
@@ -992,34 +982,15 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
 
         {/* ── BOTONES DE ACCIÓN: CARGAR O SEGUIR CON OTROS PRODUCTOS ──────── */}
         <div className="space-y-2 pt-1">
-          {/* Botón 1: Cargar este producto al stock */}
+          {/* Botón 1: Cargar este producto al stock (deshabilitado: escritura en hoja desactivada) */}
           <button
             type="button"
-            onClick={subirProductoActualAlStock}
-            disabled={subiendo || (enCola === 0 && !codigoInput.trim())}
-            className={`w-full py-4 px-6 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center justify-center gap-3 transition-all duration-200 cursor-pointer shadow-xl select-none ${
-              (enCola > 0 || codigoInput.trim())
-                ? 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-green-500 hover:from-emerald-500 hover:to-green-400 text-white shadow-emerald-950/70 scale-[1.01] active:scale-[0.99]'
-                : 'bg-white/5 text-gray-500 border border-white/5 opacity-50 cursor-not-allowed'
-            }`}
+            disabled={true}
+            title="Escritura de stock en hoja deshabilitada"
+            className="w-full py-4 px-6 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center justify-center gap-3 bg-white/5 text-gray-500 border border-white/5 opacity-50 cursor-not-allowed select-none shadow-xl"
           >
-            {subiendo ? (
-              <>
-                <Loader2 size={20} className="animate-spin" />
-                <span>Subiendo al stock y Google Sheets...</span>
-              </>
-            ) : (
-              <>
-                <UploadCloud size={20} />
-                <span>
-                  {enCola > 0
-                    ? `Cargar ${enCola} ${enCola === 1 ? 'producto' : 'productos'} de "${prod.nombre}" al stock real`
-                    : codigoInput.trim()
-                    ? 'Cargar al stock real'
-                    : 'Cargar este producto al stock real'}
-                </span>
-              </>
-            )}
+            <UploadCloud size={20} />
+            <span>Escritura de stock en hoja deshabilitada</span>
           </button>
 
           {/* Botón 2: Guardar y seguir con otro producto */}
@@ -1036,13 +1007,12 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
             {totalCodigosEnLote > enCola && (
               <button
                 type="button"
-                onClick={subirLoteCompletoAlStock}
-                disabled={subiendo}
-                className="py-3 px-4 rounded-xl bg-green-700 hover:bg-green-600 text-white font-black text-xs uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer shadow-lg"
-                title="Sube todos los productos acumulados en el lote"
+                disabled={true}
+                title="Escritura de stock en hoja deshabilitada"
+                className="py-3 px-4 rounded-xl bg-white/5 text-gray-500 border border-white/5 opacity-50 cursor-not-allowed font-black text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-lg"
               >
                 <Check size={14} />
-                <span>Subir todo el lote ({totalCodigosEnLote})</span>
+                <span>Subir todo el lote (deshabilitado)</span>
               </button>
             )}
           </div>
@@ -1132,21 +1102,12 @@ export default function PendientesIdentificar({ stockData, setStockData, syncWit
 
           <button
             type="button"
-            onClick={subirLoteCompletoAlStock}
-            disabled={subiendo}
-            className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-400 hover:to-green-400 text-black font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-emerald-950/60"
+            disabled={true}
+            title="Escritura de stock en hoja deshabilitada"
+            className="w-full py-3.5 px-6 rounded-xl bg-white/5 border border-white/5 opacity-50 cursor-not-allowed text-gray-500 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2"
           >
-            {subiendo ? (
-              <>
-                <Loader2 size={18} className="animate-spin" />
-                <span>Subiendo lote a Google Sheets y Stock Real...</span>
-              </>
-            ) : (
-              <>
-                <UploadCloud size={18} />
-                <span>Cargar todo el lote al stock real ({totalCodigosEnLote} unidades)</span>
-              </>
-            )}
+            <UploadCloud size={18} />
+            <span>Cargar todo el lote al stock real (deshabilitado)</span>
           </button>
         </div>
       )}

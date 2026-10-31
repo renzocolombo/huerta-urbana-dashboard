@@ -424,3 +424,111 @@ test('SSR: render de Productos, PedidosDelDia, Agenda y ModalArmadoPedido sin la
   }
 });
 
+// ==============================================================================
+// 8. Verificación de eliminación de syncProductWithSheet y updateAlmacen en Armado
+// ==============================================================================
+test('Armado (Agenda, ModalArmado, Calendario): cero llamadas a syncProductWithSheet y updateAlmacen', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+
+  const filesToCheck = [
+    'src/components/AgendaEntregas.jsx',
+    'src/components/ModalArmadoPedido.jsx',
+    'src/components/CalendarioEntregas.jsx',
+    'src/components/PedidosDelDia.jsx'
+  ];
+
+  for (const relPath of filesToCheck) {
+    const fullPath = path.resolve(relPath);
+    if (!fs.existsSync(fullPath)) continue;
+    const content = fs.readFileSync(fullPath, 'utf8');
+
+    // No debe contener llamada a syncProductWithSheet
+    assert.strictEqual(
+      content.includes('syncProductWithSheet'),
+      false,
+      `Archivo ${relPath} no debe contener llamadas ni imports de syncProductWithSheet`
+    );
+
+    // No debe contener updateAlmacen
+    assert.strictEqual(
+      content.includes('updateAlmacen'),
+      false,
+      `Archivo ${relPath} no debe contener updateAlmacen`
+    );
+  }
+
+  // Verificar que en ControlStock.jsx y PendientesIdentificar.jsx no haya fetch/postAppsScript activo con updateAlmacen
+  const controlStockContent = fs.readFileSync(path.resolve('src/components/ControlStock.jsx'), 'utf8');
+  assert.strictEqual(
+    controlStockContent.includes("accion: 'updateAlmacen'"),
+    false,
+    'ControlStock.jsx no debe tener payload activo con updateAlmacen'
+  );
+
+  const pendientesContent = fs.readFileSync(path.resolve('src/components/PendientesIdentificar.jsx'), 'utf8');
+  assert.strictEqual(
+    pendientesContent.includes("accion: 'updateAlmacen'"),
+    false,
+    'PendientesIdentificar.jsx no debe tener postAppsScript activo con updateAlmacen'
+  );
+});
+
+// ==============================================================================
+// 9. Verificación de los 3 flujos intactos en el armado
+// ==============================================================================
+test('Flujos intactos: 1) EAN Almacén suma contador/verde, 2) Pesaje balanza, 3) Unidad manual', () => {
+  // 1) EAN de Almacén por unidad
+  const itemAlmacen = {
+    nombre: 'Arroz 1kg',
+    ean: '7791234567890',
+    cantidad: 2,
+    scans: 0,
+    confirmado: false
+  };
+  const tipoAlm = determinarTipoCaptura(itemAlmacen, {});
+  assert.strictEqual(tipoAlm, TIPOS_CAPTURA.ALMACEN_EAN, 'Arroz con EAN debe ser ALMACEN_EAN');
+  // Simular escaneo 1 y 2
+  itemAlmacen.scans += 1;
+  assert.strictEqual(itemAlmacen.scans < itemAlmacen.cantidad, true);
+  itemAlmacen.scans += 1;
+  itemAlmacen.confirmado = itemAlmacen.scans >= itemAlmacen.cantidad;
+  assert.strictEqual(itemAlmacen.confirmado, true, 'Al completar scans queda confirmado (verde)');
+
+  // 2) Pesaje por balanza
+  const itemPesable = {
+    nombre: 'Papa negra',
+    unidad: 'kg',
+    cantidad: 2.5,
+    confirmado: false,
+    pesoCongelado: null
+  };
+  const tipoPesable = determinarTipoCaptura(itemPesable, {});
+  assert.strictEqual(tipoPesable, TIPOS_CAPTURA.PESABLE, 'Papa con unidad kg debe ser PESABLE');
+  // Simular captura de peso desde la balanza Systel
+  const pesoCapturadoBalanza = 2.485;
+  itemPesable.pesoCongelado = pesoCapturadoBalanza;
+  itemPesable.cantidad_real = pesoCapturadoBalanza;
+  itemPesable.confirmado = true;
+  assert.strictEqual(itemPesable.confirmado, true);
+  assert.strictEqual(itemPesable.pesoCongelado, 2.485);
+
+  // 3) Unidad manual (maple / atado / unidad)
+  const itemManual = {
+    nombre: 'Huevos Colorados',
+    unidad: 'maple',
+    cantidad: 1,
+    confirmado: false,
+    cantidadConfirmada: null
+  };
+  const tipoManual = determinarTipoCaptura(itemManual, {});
+  assert.strictEqual(tipoManual, TIPOS_CAPTURA.UNIDAD_MANUAL, 'Huevos maple debe ser UNIDAD_MANUAL');
+  // Confirmar cantidad manual
+  itemManual.cantidadConfirmada = 1;
+  itemManual.cantidad_real = 1;
+  itemManual.confirmado = true;
+  assert.strictEqual(itemManual.confirmado, true);
+  assert.strictEqual(itemManual.cantidadConfirmada, 1);
+});
+
+

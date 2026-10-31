@@ -10,7 +10,6 @@ import { imprimirRemitoIndividual, imprimirRemitosEnLote, parsearProductosPedido
 import { getEanMapping, esCodigoEan } from '../data/productUtils';
 import { useBalanzaSystel } from '../utils/balanzaSystel';
 import { determinarTipoCaptura, analizarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
-import { syncProductWithSheet } from '../utils/stockSync';
 import { 
   apiReservarPedido, 
   apiRegistrarPesadas, 
@@ -183,84 +182,6 @@ export {
 
 // ── Normalizar texto para matcheo fuzzy ────────────────────────────────────
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-
-// ── Parsear código de barras ────────────────────────────────────────────────
-function parsearCodigoBarras(raw) {
-  if (!raw) return null;
-  let code = String(raw).replace(/[\r\n\x00-\x1F]/g, '').trim().replace(/^\][a-zA-Z0-9]{2,3}/, '').trim();
-  code = code.replace(/^\*+|\*+$/g, '').trim();
-  if (!code) return null;
-
-  // 1. Formato Balanza Systel / Kretz / Toledo (EAN-13 estándar de balanza)
-  const eanBalanza = code.match(/^(20|02)(\d{4,5})(\d{5})\d$/);
-  if (eanBalanza) {
-    const plu = eanBalanza[2]; const gramos = parseInt(eanBalanza[3], 10);
-    return { nombre: `plu ${plu}`, plu, peso: Math.round((gramos / 1000) * 1000) / 1000, tagId: null, uniqueCode: code.toUpperCase(), rawCode: code, origenBalanza: true };
-  }
-
-  // 2. Formato con ID único por bolsa: NOMBRE-PESO-TAGID (ej: BANANA-1.000-E49A, PAPA-1.120-7K9F)
-  const parts = code.split('-');
-  if (parts.length >= 3) {
-    const lastPart = parts[parts.length - 1].trim();
-    const secondLastRaw = parts[parts.length - 2].trim().replace(',', '.').replace(/(?:kg|kilos?|g|gr?)$/i, '').trim();
-    const pesoNum = parseFloat(secondLastRaw);
-    if (!isNaN(pesoNum) && pesoNum > 0 && /^[A-Za-z0-9]{2,10}$/.test(lastPart)) {
-      const nombre = parts.slice(0, parts.length - 2).join(' ').toLowerCase().trim();
-      const pesoKg = pesoNum >= 100 && !/[.,]/.test(secondLastRaw) ? pesoNum / 1000 : pesoNum;
-      return { nombre, peso: Math.round(pesoKg * 1000) / 1000, tagId: lastPart.toUpperCase(), uniqueCode: code.toUpperCase(), rawCode: code };
-    }
-  }
-
-  // 3. Formato clásico: NOMBRE-PESO (ej: PAPA-1.120, TOMATE-CHERRY-0.500)
-  const lastDashIdx = code.lastIndexOf('-');
-  if (lastDashIdx > 0) {
-    const rawPeso = code.slice(lastDashIdx + 1).replace(',', '.').replace(/(?:kg|kilos?|g|gr?)$/i, '').trim();
-    const pesoNum = parseFloat(rawPeso);
-    if (!isNaN(pesoNum) && pesoNum > 0) {
-      const nombre = code.slice(0, lastDashIdx).toLowerCase().replace(/-/g, ' ').trim();
-      const pesoKg = pesoNum >= 100 && !/[.,]/.test(rawPeso) ? pesoNum / 1000 : pesoNum;
-      return { nombre, peso: Math.round(pesoKg * 1000) / 1000, tagId: null, uniqueCode: code.toUpperCase(), rawCode: code };
-    }
-  }
-
-  // 4. Formato alternativo con espacios, guión bajo o dos puntos (ej: "PAPA 1.120", "PAPA 1.120 KG", "PAPA_0.500")
-  const altMatch = code.match(/^(.+?)[\s_:–]+([0-9]+(?:[.,][0-9]+)?)\s*(?:kg|kilos?|g|gr?)?$/i);
-  if (altMatch) {
-    const nombre = altMatch[1].toLowerCase().replace(/[-_]/g, ' ').trim();
-    const rawPeso = altMatch[2].replace(',', '.');
-    const pesoNum = parseFloat(rawPeso);
-    if (!isNaN(pesoNum) && pesoNum > 0) {
-      const pesoKg = pesoNum >= 100 && !/[.,]/.test(altMatch[2]) ? pesoNum / 1000 : pesoNum;
-      return {
-        nombre,
-        peso: Math.round(pesoKg * 1000) / 1000,
-        tagId: null,
-        uniqueCode: code.toUpperCase(),
-        rawCode: code
-      };
-    }
-  }
-
-  return { nombre: code.toLowerCase().replace(/[-_]/g, ' ').trim(), peso: null, tagId: null, uniqueCode: code.toUpperCase(), rawCode: code, esIncompleto: true };
-}
-
-function determinarSlot(tipo, pesoKg) {
-  if (tipo === 'hoja verde') return pesoKg <= 0.35 ? '500g' : '1kg';
-  return pesoKg <= 0.75 ? '500g' : '1kg';
-}
-
-const PRODUCT_TYPES = {
-  'hoja verde': ['espinaca', 'lechuga', 'rucula', 'acelga', 'perejil', 'albahaca', 'ciboulette', 'radicheta'],
-  'blando': ['tomate', 'tomate cherry', 'banana', 'durazno', 'frutilla', 'pera', 'morron', 'pepino', 'chaucha', 'berenjena'],
-  'duro': ['papa', 'cebolla', 'cebolla comun', 'cebolla morada', 'zanahoria', 'zapallito', 'zapallo blanco', 'cabutia', 'ajo', 'remolacha', 'hinojo', 'apio', 'brocoli', 'coliflor', 'repollo', 'choclo', 'huevos', 'miel pura', 'palta', 'manzana roja', 'manzana verde', 'naranja', 'limon', 'pomelo', 'uva', 'arandano', 'boniato']
-};
-
-function getTipoByNombre(nombre) {
-  const n = norm(nombre);
-  if (PRODUCT_TYPES['hoja verde'].some(p => n.includes(p))) return 'hoja verde';
-  if (PRODUCT_TYPES['blando'].some(p => n.includes(p))) return 'blando';
-  return 'duro';
-}
 
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -693,27 +614,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     return () => { isMounted = false; };
   }, []);
 
-  const handleSyncStatus = useCallback((info, prodNombre) => {
-    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
-    if (info.status === 'retrying') {
-      setSyncNotice({
-        tipo: 'retrying',
-        mensaje: `No se pudo guardar en el Sheet, reintentando... (${prodNombre})`
-      });
-    } else if (info.status === 'error') {
-      setSyncNotice({
-        tipo: 'error',
-        mensaje: `No se pudo guardar "${prodNombre}" en el Sheet tras varios intentos. El cambio se mantuvo localmente.`
-      });
-      syncTimerRef.current = setTimeout(() => setSyncNotice(null), 6000);
-    } else if (info.status === 'success') {
-      setSyncNotice({
-        tipo: 'success',
-        mensaje: `✅ "${prodNombre}" guardado en Google Sheet`
-      });
-      syncTimerRef.current = setTimeout(() => setSyncNotice(null), 3000);
-    }
-  }, []);
+
 
   useEffect(() => { stockDataRef.current = stockData; }, [stockData]);
   useEffect(() => { try { localStorage.setItem(PREPARACIONES_KEY, JSON.stringify(preparaciones)); } catch (e) {} }, [preparaciones]);
@@ -1361,55 +1262,16 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     });
   }, []);
 
-  // Revertir el descuento de stock de una bolsa puntual
-  const revertirStockBolsa = useCallback((bolsa) => {
-    if (!bolsa?.matchedStockId) return;
-    const current = stockDataRef.current || {};
-    const prod = current[bolsa.matchedStockId];
-    if (!prod) return;
-
-    // En v20: El stock de almacén no se descuenta en memoria ni en pantalla durante el armado;
-    // por lo tanto no se incrementa localmente al revertir bolsas.
-    const subcat = (prod.subcategoria || '').toLowerCase().trim();
-    const cat = (prod.categoria || '').toLowerCase().trim();
-    if (subcat === 'almacén' || subcat === 'almacen' || cat === 'almacén' || cat === 'almacen') {
-      return;
-    }
-
-    const newData = { ...current };
-
-    if (bolsa.esUnidad || bolsa.slot === 'unidades' || bolsa.slot === 'unidad') {
-      const stockActual = Number(prod.stock?.unidades ?? prod.stock?.['1kg']) || 0;
-      const nuevoStock = stockActual + 1;
-      newData[bolsa.matchedStockId] = {
-        ...prod,
-        stock: { ...prod.stock, unidades: nuevoStock, '1kg': nuevoStock }
-      };
-      try {
-        const unitsCache = JSON.parse(localStorage.getItem('huerta_stock_units_cache_v1') || '{}');
-        const pNorm = norm(prod.nombre);
-        if (unitsCache[pNorm]) {
-          unitsCache[pNorm].stock = nuevoStock;
-        } else {
-          unitsCache[pNorm] = { stock: nuevoStock, originalLoad: nuevoStock, subcategoria: prod.subcategoria };
-        }
-        localStorage.setItem('huerta_stock_units_cache_v1', JSON.stringify(unitsCache));
-      } catch (e) {}
-    } else if (bolsa.slot) {
-      const stockSlot = prod.stock?.[bolsa.slot] || 0;
-      newData[bolsa.matchedStockId] = { ...prod, stock: { ...prod.stock, [bolsa.slot]: stockSlot + 1 } };
-    }
-    setStockData(newData);
-  }, [setStockData]);
+  // Revertir el descuento de stock de una bolsa puntual (eliminado: ya no se usan bolsas pre-fraccionadas)
+  const revertirStockBolsa = useCallback((_bolsa) => {}, []);
 
   // Confirmar y agregar un ítem extra escaneado que no figuraba en el pedido original
   const confirmarAgregarItemExtra = useCallback((itemExtraData) => {
     if (!itemExtraData || !itemExtraData.numPedido) return;
-    const { nombre, cleanCode, matchedStockId, numPedido, peso, tagId, slot, esUnidad, mappedEan } = itemExtraData;
+    const { nombre, cleanCode, matchedStockId, numPedido, peso, tagId, esUnidad } = itemExtraData;
     const prepActual = preparaciones[numPedido];
     if (!prepActual) return;
 
-    // Descontar 1 unidad o slot del stock
     const current = stockDataRef.current || {};
     let finalMatchedStockId = matchedStockId;
     if (!finalMatchedStockId && typeof current === 'object' && !Array.isArray(current)) {
@@ -1417,25 +1279,6 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
         const pNorm = norm(current[id]?.nombre);
         return pNorm === norm(nombre) || pNorm.includes(norm(nombre)) || norm(nombre).includes(pNorm);
       });
-    }
-
-    const matchedProd = finalMatchedStockId ? current[finalMatchedStockId] : null;
-    if (matchedProd && finalMatchedStockId) {
-      if (esUnidad) {
-        // En v20: El stock de almacén se fija en conjunto al finalizar el pedido (handlePedidoArmado)
-      } else if (slot) {
-        const stockActual = matchedProd.stock?.[slot] || 0;
-        const nuevoStock = Math.max(0, stockActual - 1);
-        const updatedProd = { ...matchedProd, stock: { ...matchedProd.stock, [slot]: nuevoStock } };
-        const newData = { ...current };
-        newData[finalMatchedStockId] = updatedProd;
-        setStockData(newData);
-
-        syncProductWithSheet(updatedProd, {
-          onStatusChange: (status) => handleSyncStatus(status, matchedProd.nombre),
-          currentStockMap: current
-        });
-      }
     }
 
     const now = new Date();
@@ -1465,7 +1308,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
       tagId: tagId || null,
       ts: Date.now(),
       matchedStockId: finalMatchedStockId || null,
-      slot: esUnidad ? 'unidades' : slot,
+      slot: 'unidades',
       esUnidad: Boolean(esUnidad)
     };
 
@@ -1502,7 +1345,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
     setScanSuccess(`✅ Agregado ítem extra: ${nombre.toUpperCase()} (+1 ${esUnidad ? 'ud' : 'bolsa'})`);
     setTimeout(() => setScanSuccess(null), 2500);
     setTimeout(() => modalScanInputRef.current?.focus(), 80);
-  }, [preparaciones, setStockData, sincronizarPesadasSheet]);
+  }, [preparaciones, sincronizarPesadasSheet]);
 
   // ── ESCANEAR BOLSA / PRODUCTO EAN ──────────────────────────────────────────
   const procesarEscaneoPedido = useCallback((rawCode) => {
@@ -1645,126 +1488,9 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
       return;
     }
     
-    // ── 2. Códigos de balanza (Verduras / Frutas) ─────────────────────────────
-    const resultado = parsearCodigoBarras(rawCode);
-    if (!resultado || (!resultado.peso && !resultado.esIncompleto)) {
-      setScanError('No se pudo leer el código. Intentá de nuevo.');
-      return;
-    }
-
-    const uniqueCode = resultado.uniqueCode;
-    const codigos = getCodigosProcesados();
-    const reg = codigos[uniqueCode];
-    
-    if (reg?.bloqueado) { setScanError(`🚫 Código BLOQUEADO: "${uniqueCode}" fue dado de baja definitiva.`); return; }
-
-    const prepActual = preparaciones[preparandoPedido];
-    if (prepActual) {
-      const yaAsignado = prepActual.items.some(item => item.bolsasAsignadas?.some(b => b.uniqueCode === uniqueCode));
-      if (yaAsignado) { setScanError(`⚠️ Esta bolsa ya fue asignada a este pedido.`); return; }
-    }
-
-    const nombreEscaneado = norm(resultado.nombre);
-    const current = stockDataRef.current || {};
-    
-    let matchedStockId = null;
-    let matchedProd = null;
-    if (typeof current === 'object' && !Array.isArray(current)) {
-      matchedStockId = Object.keys(current).find(id => norm(current[id]?.nombre) === nombreEscaneado);
-      if (!matchedStockId) {
-        matchedStockId = Object.keys(current).find(id => {
-          const pNorm = norm(current[id]?.nombre);
-          return pNorm.includes(nombreEscaneado) || nombreEscaneado.includes(pNorm);
-        });
-      }
-      matchedProd = matchedStockId ? current[matchedStockId] : null;
-    }
-
-    if (!prepActual) return;
-    
-    // Prioridad 1: Coincidencia exacta
-    let matchedItemIdx = -1;
-    for (let i = 0; i < prepActual.items.length; i++) {
-      if (prepActual.items[i].sin_stock) continue;
-      const itemNorm = norm(prepActual.items[i].nombre);
-      const prodNorm = matchedProd ? norm(matchedProd.nombre) : nombreEscaneado;
-      if (itemNorm === prodNorm || itemNorm === nombreEscaneado) {
-        const asignadas = prepActual.items[i].bolsasAsignadas?.length || 0;
-        if (asignadas < prepActual.items[i].cantidad) { matchedItemIdx = i; break; }
-      }
-    }
-
-    // Prioridad 2: Coincidencia parcial si no hubo exacta
-    if (matchedItemIdx === -1) {
-      for (let i = 0; i < prepActual.items.length; i++) {
-        if (prepActual.items[i].sin_stock) continue;
-        const itemNorm = norm(prepActual.items[i].nombre);
-        const prodNorm = matchedProd ? norm(matchedProd.nombre) : nombreEscaneado;
-        if (itemNorm.includes(prodNorm) || prodNorm.includes(itemNorm) ||
-            itemNorm.includes(nombreEscaneado) || nombreEscaneado.includes(itemNorm)) {
-          const asignadas = prepActual.items[i].bolsasAsignadas?.length || 0;
-          if (asignadas < prepActual.items[i].cantidad) { matchedItemIdx = i; break; }
-        }
-      }
-    }
-    
-    // Si la bolsa de balanza no coincide con ningún producto pendiente:
-    if (matchedItemIdx === -1) {
-      setModalItemExtra({
-        nombre: matchedProd ? matchedProd.nombre : resultado.nombre,
-        cleanCode: uniqueCode,
-        matchedStockId,
-        numPedido: preparandoPedido,
-        peso: resultado.peso,
-        tagId: resultado.tagId,
-        esUnidad: false,
-        slot: (matchedProd && matchedStockId) ? determinarSlot(matchedProd.tipo || getTipoByNombre(matchedProd.nombre), resultado.peso || 0.5) : null
-      });
-      return;
-    }
-    
-    // Descontar del stock
-    if (matchedProd && matchedStockId) {
-      const tipo = matchedProd.tipo || getTipoByNombre(matchedProd.nombre);
-      const slot = determinarSlot(tipo, resultado.peso || 0.5);
-      const stockActual = matchedProd.stock?.[slot] || 0;
-      if (stockActual <= 0) { setScanError(`🚫 ¡Sin stock! No hay "${matchedProd.nombre}" (${slot}) disponible.`); return; }
-      const nuevoStock = Math.max(0, stockActual - 1);
-      const updatedProd = {
-        ...matchedProd,
-        stock: { ...matchedProd.stock, [slot]: nuevoStock }
-      };
-      const newData = { ...current };
-      newData[matchedStockId] = updatedProd;
-      setStockData(newData);
-
-      // Sincronizar con Google Sheet (con reintentos y aviso visual)
-      syncProductWithSheet(updatedProd, {
-        onStatusChange: (status) => handleSyncStatus(status, matchedProd.nombre),
-        currentStockMap: current
-      });
-    }
-    
-    const now = new Date();
-    const horaStr = now.toLocaleDateString('es-AR') + ' ' + now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
-    setCodigosProcesados(prev => ({ ...prev, [uniqueCode]: { uniqueCode, nombre: resultado.nombre, matchedId: matchedStockId, peso: resultado.peso, estado: 'SACADO', bloqueado: false, fechaModificacion: horaStr, ultimaAccion: `Asignado a pedido ${preparandoPedido}`, ts: Date.now() } }));
-    
-    const nuevaBolsa = { uniqueCode, nombre: resultado.nombre, peso: resultado.peso, tagId: resultado.tagId, ts: Date.now(), matchedStockId: matchedStockId || null, slot: (matchedProd && matchedStockId) ? determinarSlot(matchedProd.tipo || getTipoByNombre(matchedProd.nombre), resultado.peso || 0.5) : null };
-    
-    setPreparaciones(prev => {
-      const prep = { ...prev[preparandoPedido] };
-      const items = [...prep.items];
-      items[matchedItemIdx] = { ...items[matchedItemIdx], bolsasAsignadas: [...(items[matchedItemIdx].bolsasAsignadas || []), nuevaBolsa] };
-      const todosCompletos = items.every(it => (it.bolsasAsignadas?.length || 0) >= it.cantidad);
-      const nuevaPrep = { ...prep, items, completado: todosCompletos };
-      sincronizarPesadasSheet(preparandoPedido, nuevaPrep);
-      return { ...prev, [preparandoPedido]: nuevaPrep };
-    });
-    
-    setScanSuccess(`✅ ${resultado.nombre.toUpperCase()} — ${resultado.peso?.toFixed(3) || '?'} kg asignado`);
-    setTimeout(() => setScanSuccess(null), 2500);
-    setTimeout(() => modalScanInputRef.current?.focus(), 50);
-  }, [preparandoPedido, preparaciones, setStockData, sincronizarPesadasSheet]);
+    // Ya no se procesan bolsas pesables fraccionadas con código de barras
+    setScanError('⚠️ El producto no corresponde a un código EAN de Almacén. Los productos pesables se capturan desde la balanza.');
+  }, [preparandoPedido, preparaciones]);
 
   // ── 4. BOTÓN "PEDIDO ARMADO": CONGELAR DETALLE Y FINALIZAR ─────────────────
   const handlePedidoArmado = useCallback(async (pedido, numPedido) => {

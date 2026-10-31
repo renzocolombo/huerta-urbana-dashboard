@@ -587,7 +587,7 @@ export default function ModalArmadoPedido({ pedido, onClose, onPedidoArmado }) {
               value={scanBuffer}
               onChange={(e) => setScanBuffer(e.target.value)}
               onKeyDown={handleScanKeyDown}
-              placeholder={todosCompletos ? '✅ Pedido completo — revisá y finalizá' : 'Escaneá la bolsa o código de barras...'}
+              placeholder={todosCompletos ? '✅ Pedido completo — revisá y finalizá' : 'Escaneá el código de barras (EAN)...'}
               className="w-full bg-black/60 border border-green-500/30 focus:border-green-500/60 text-white text-sm font-mono rounded-2xl pl-14 pr-4 py-3 outline-none transition-all placeholder:text-gray-600 focus:bg-black/80"
               autoComplete="off"
               spellCheck={false}
