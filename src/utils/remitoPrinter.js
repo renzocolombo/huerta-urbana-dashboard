@@ -21,7 +21,9 @@ export const EMISOR = {
   inicio_actividades: '01/04/2026',
 };
 
-const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+import { norm, sonNombresEquivalentes } from './productNorm.js';
+
+export { norm, sonNombresEquivalentes };
 
 // Cache en memoria para catálogo de PreciosWeb
 let cachePreciosWeb = null;
@@ -51,65 +53,121 @@ export function setCatalogoPreciosWebCache(catalogo) {
 
 /**
  * Parsea el texto del campo producto de un pedido cuando no proviene de detalle_json.
- * Mantiene compatibilidad estricta con Finanzas, Faltantes y AgendaEntregas.
- * Evita duplicar/multiplicar cantidades cuando el peso ya viene especificado en el texto del producto.
+ * Mantiene compatibilidad estricta con Finanzas, Faltantes, AgendaEntregas y ModalArmadoPedido.
+ * Separa cantidad, unidad y nombre limpio (sin dejar la palabra de la unidad dentro del nombre).
+ * Un sufijo de presentación ("Arroz 1kg", "Aceite 500ml", "Yerba 500g") NO se interpreta como peso solicitado:
+ * solo se interpreta como peso la unidad que viene justo después de la cantidad inicial.
  */
 export function parsearProductosPedido(textoProducto, cantidadGeneral = 1) {
   if (!textoProducto) return [];
-  const partes = String(textoProducto).split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
-  const cantGral = parsearCantidad(cantidadGeneral).valor || 1;
-  
+
+  // Proteger comas decimales entre dígitos para no cortarlas en el split:
+  // e.g. "1,5 KILOS PAPA, 2 HARINA" -> "1.5 KILOS PAPA, 2 HARINA"
+  const textoNormalizado = String(textoProducto).replace(/(\d+),(\d+)/g, '$1.$2');
+
+  const partes = textoNormalizado
+    .split(/[,;\n]+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  const cantGral = parseFloat(String(cantidadGeneral).replace(',', '.')) || 1;
+
   return partes.map(parte => {
     let multiplicador = 1;
     let pesoSolicitado = null;
     let cantidad = null;
-    let texto = parte;
-    
-    // Multiplicador tipo "2x" o "2 x": e.g. "2x 2kg" o "2 x 1kg"
+    let unidadDetectada = null;
+    let texto = parte.trim();
+
+    // 1. Multiplicador tipo "2x" o "2 x" al inicio: e.g. "2x 2kg PAPA"
     const cantInicio = texto.match(/^(\d+)\s*[xX]\s+(.+)$/);
     if (cantInicio) {
       multiplicador = parseInt(cantInicio[1], 10);
-      texto = cantInicio[2];
+      texto = cantInicio[2].trim();
     }
-    
+
+    // Multiplicador al final tipo "PAPA x2"
     const cantFinal = texto.match(/^(.+?)\s+[xX](\d+)$/);
     if (cantFinal) {
       multiplicador = parseInt(cantFinal[2], 10);
-      texto = cantFinal[1];
+      texto = cantFinal[1].trim();
     }
-    
-    // Peso tipo "6.5 KILOS", "4,250 kg", "4250 g", "1kg", etc.
-    const pesoMatch = texto.match(/(\d+(?:[.,]\d+)?)\s*(kg|kilos?|g|gr?)\b/i);
-    if (pesoMatch) {
-      let val = parseFloat(pesoMatch[1].replace(',', '.'));
-      const unit = pesoMatch[2].toLowerCase();
-      if (unit.startsWith('g')) val = val / 1000;
-      pesoSolicitado = Math.round(val * 1000) / 1000;
-      texto = texto.replace(pesoMatch[0], '').trim();
-    } else {
-      // Si no es peso, verificar si empieza con número de unidades: e.g. "2 LECHUGA" o "2 ATADOS"
-      const unitMatch = texto.match(/^(\d+(?:[.,]\d+)?)\s+(.+)$/);
-      if (unitMatch && !/^(kilo|kg|g|gr)/i.test(unitMatch[2])) {
-        cantidad = parseFloat(unitMatch[1].replace(',', '.'));
-        texto = unitMatch[2];
+
+    // 2. Extraer cantidad inicial y la unidad que viene JUSTO después
+    // Nota: Un sufijo de presentación dentro del nombre ("Arroz 1kg", "Aceite 500ml", "Yerba 500g")
+    // NO es peso solicitado: solo se interpreta como peso la unidad que viene justo después de la cantidad inicial.
+    const cantMatch = texto.match(/^(\d+(?:\.\d+)?)\s*(.*)$/);
+    if (cantMatch) {
+      cantidad = parseFloat(cantMatch[1]);
+      const resto = cantMatch[2].trim();
+
+      const tokens = resto.split(/\s+/);
+      const primerToken = tokens[0] ? tokens[0].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[.:]$/, '') : '';
+
+      const esKg = /^(kg|kilo|kilos)$/.test(primerToken);
+      const esGramos = /^(g|gr|grs|gramo|gramos)$/.test(primerToken);
+      const esUnidad = /^(unidad|unidades|un|u|uds|unid|unids)$/.test(primerToken);
+      const esMaple = /^(maple|maples)$/.test(primerToken);
+      const esAtado = /^(atado|atados)$/.test(primerToken);
+      const esPaquete = /^(paquete|paquetes|paq|pack|packs)$/.test(primerToken);
+      const esBandeja = /^(bandeja|bandejas)$/.test(primerToken);
+      const esDocena = /^(docena|docenas)$/.test(primerToken);
+
+      if (esKg) {
+        unidadDetectada = 'kg';
+        pesoSolicitado = cantidad;
+        texto = tokens.slice(1).join(' ').trim();
+      } else if (esGramos) {
+        unidadDetectada = 'g';
+        pesoSolicitado = Math.round((cantidad / 1000) * 1000) / 1000;
+        cantidad = pesoSolicitado;
+        texto = tokens.slice(1).join(' ').trim();
+      } else if (esMaple) {
+        unidadDetectada = 'maple';
+        texto = tokens.slice(1).join(' ').trim();
+      } else if (esAtado) {
+        unidadDetectada = 'atado';
+        texto = tokens.slice(1).join(' ').trim();
+      } else if (esBandeja) {
+        unidadDetectada = 'bandeja';
+        texto = tokens.slice(1).join(' ').trim();
+      } else if (esDocena) {
+        unidadDetectada = 'docena';
+        texto = tokens.slice(1).join(' ').trim();
+      } else if (esPaquete) {
+        unidadDetectada = 'paquete';
+        texto = tokens.slice(1).join(' ').trim();
+      } else if (esUnidad) {
+        unidadDetectada = 'unidad';
+        texto = tokens.slice(1).join(' ').trim();
+      } else {
+        texto = resto;
       }
     }
-    
-    // Limpieza de caracteres de relleno
-    const nombre = texto.replace(/[-_()]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-    // Si encontramos peso solicitado, la cantidad base de este ítem es el peso
+    // Nombre limpio: eliminar guiones iniciales o dos puntos, pero preservar paréntesis de presentación/marca
+    const nombre = texto
+      .replace(/^[-–—:]+/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
     if (pesoSolicitado !== null) {
-      cantidad = Math.round(pesoSolicitado * multiplicador * 1000) / 1000;
+      const pesoBase = pesoSolicitado;
+      cantidad = Math.round(pesoBase * multiplicador * 1000) / 1000;
+      pesoSolicitado = pesoBase;
     } else if (cantidad !== null) {
       cantidad = Math.round(cantidad * multiplicador * 1000) / 1000;
     } else {
-      // Si no pudimos extraer ni peso ni cantidad del texto del producto:
-      // Si el pedido tiene un solo producto, tomamos la cantidad general
       cantidad = partes.length === 1 ? cantGral : 1;
     }
 
-    return { nombre, cantidad, pesoSolicitado, bolsasAsignadas: [] };
+    return {
+      nombre,
+      cantidad,
+      pesoSolicitado,
+      unidad: unidadDetectada,
+      bolsasAsignadas: []
+    };
   });
 }
 

@@ -17,8 +17,9 @@
 
 export const ALM_CACHE_KEY = 'huerta_stock_units_cache_v1';
 
-export const normNombre = (s) =>
-  (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+import { norm } from './productNorm.js';
+
+export const normNombre = norm;
 
 export function leerCacheAlmacen() {
   try {

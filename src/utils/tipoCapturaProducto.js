@@ -13,14 +13,15 @@
  */
 
 import { getEanMapping } from '../data/productUtils.js';
+import { norm, sonNombresEquivalentes, esUnidadManual, esUnidadPesable } from './productNorm.js';
+
+export { norm, sonNombresEquivalentes, esUnidadManual, esUnidadPesable };
 
 export const TIPOS_CAPTURA = {
   PESABLE: 'PESABLE',
   UNIDAD_MANUAL: 'UNIDAD_MANUAL',
   ALMACEN_EAN: 'ALMACEN_EAN'
 };
-
-const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
 /**
  * Determina el tipo de captura de un producto o ítem de pedido.
@@ -62,7 +63,7 @@ export function analizarTipoCaptura(item, catalogoRef = null) {
   try {
     const eanMap = getEanMapping();
     if (eanMap && typeof eanMap === 'object') {
-      const matchEan = Object.values(eanMap).some(m => norm(m?.nombre) === nombreNorm);
+      const matchEan = Object.values(eanMap).some(m => sonNombresEquivalentes(m?.nombre, nombre));
       if (matchEan) {
         return { tipo: TIPOS_CAPTURA.ALMACEN_EAN, deducidoPorNombre: false, aviso: null };
       }
@@ -76,9 +77,9 @@ export function analizarTipoCaptura(item, catalogoRef = null) {
       if (catalogoRef[nombreNorm]) {
         prodCat = catalogoRef[nombreNorm];
       } else if (Array.isArray(catalogoRef)) {
-        prodCat = catalogoRef.find(p => norm(p.nombre || p.producto) === nombreNorm);
+        prodCat = catalogoRef.find(p => sonNombresEquivalentes(p.nombre || p.producto, nombre));
       } else {
-        const foundKey = Object.keys(catalogoRef).find(k => norm(catalogoRef[k]?.nombre || k) === nombreNorm);
+        const foundKey = Object.keys(catalogoRef).find(k => sonNombresEquivalentes(catalogoRef[k]?.nombre || k, nombre));
         if (foundKey) prodCat = catalogoRef[foundKey];
       }
     }
@@ -91,31 +92,16 @@ export function analizarTipoCaptura(item, catalogoRef = null) {
   }
 
   // 2. TIPO B: POR UNIDAD O ATADO (PRIMERO: UNIDAD DEL CATÁLOGO)
-  const unidadPropia = String(item.unidad || unidadCatalogo || '').toLowerCase().trim();
+  const unidadPropia = String(item.unidad || unidadCatalogo || '').trim();
 
-  const esUnidadOAtadoCatalogo = (
-    unidadPropia === 'atado' ||
-    unidadPropia === 'atados' ||
-    unidadPropia === 'unidad' ||
-    unidadPropia === 'unidades' ||
-    unidadPropia === 'un' ||
-    unidadPropia === 'u' ||
-    unidadPropia === 'paquete' ||
-    unidadPropia === 'paquetes' ||
-    unidadPropia === 'bandeja' ||
-    unidadPropia === 'bandejas' ||
-    unidadPropia === 'maple' ||
-    unidadPropia === 'docena'
-  );
-
-  if (esUnidadOAtadoCatalogo) {
+  if (esUnidadManual(unidadPropia)) {
     return { tipo: TIPOS_CAPTURA.UNIDAD_MANUAL, deducidoPorNombre: false, aviso: null };
   }
 
-  // 3. RESPALDO POR NOMBRE: solo si la unidad en catálogo no es kg explícito y coincide con la lista
-  const esKgExplicito = unidadPropia === 'kg' || unidadPropia === 'kilo' || unidadPropia === 'kilos';
+  // 3. RESPALDO POR NOMBRE: solo si la unidad en catálogo no es pesable explícito y coincide con la lista
+  const esPesableExplicito = esUnidadPesable(unidadPropia);
   
-  if (!esKgExplicito) {
+  if (!esPesableExplicito) {
     const regexRespaldo = new RegExp(`\\b(${PALABRAS_RESPALDO_NOMBRE_TIPO_B.join('|')})\\b`, 'i');
     if (regexRespaldo.test(nombreNorm)) {
       return {
@@ -149,7 +135,8 @@ export function determinarTipoCaptura(item, catalogoRef = null) {
  */
 export function etiquetaUnidad(unidad, cantidad = 1) {
   const u = String(unidad || '').toLowerCase().trim();
-  if (u === 'kg' || u === 'kilo' || u === 'kilos') return 'kg';
-  if (u === 'atado' || u === 'atados') return cantidad === 1 ? 'atado' : 'atados';
+  if (esUnidadPesable(u)) return 'kg';
+  if (/atado/i.test(u)) return cantidad === 1 ? 'atado' : 'atados';
+  if (/maple/i.test(u)) return cantidad === 1 ? 'maple' : 'maples';
   return cantidad === 1 ? 'unidad' : 'unidades';
 }

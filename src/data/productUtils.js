@@ -1,3 +1,5 @@
+export { norm, normSinMarca, sonNombresEquivalentes, esUnidadManual, esUnidadPesable } from '../utils/productNorm.js';
+
 export const CATEGORIAS_PRINCIPALES = ['Verduras', 'Frutas', 'Almacén', 'Extras', 'Carnes'];
 
 export const SUBCATEGORIAS_ALMACEN = ['Almacén', 'Bebidas', 'Limpieza', 'Lácteos', 'Golosinas'];

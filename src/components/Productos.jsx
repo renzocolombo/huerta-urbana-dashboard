@@ -21,7 +21,7 @@ import { leerCacheAlmacen } from '../utils/almacenCache';
 import { determinarTipoCaptura, analizarTipoCaptura, TIPOS_CAPTURA } from '../utils/tipoCapturaProducto';
 import PedidoMinimoCard from './PedidoMinimoCard';
 
-const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+import { norm } from '../utils/productNorm.js';
 const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
 
 export default function Productos() {
@@ -172,7 +172,7 @@ export default function Productos() {
         mapa.set(k, {
           producto: p.producto,
           categoria: cat,
-          unidad: p.unidad || 'kg',
+          unidad: p.unidad || '',
           costo_kg_ultimo: Number(p.costo_kg_ultimo || p.costo || 0),
           costo_unitario: Number(p.costo_kg_ultimo || p.costo || 0),
           margen_pct: Number(p.margen_pct !== undefined ? p.margen_pct : 60),
@@ -197,7 +197,7 @@ export default function Productos() {
         const existing = mapa.get(k) || {
           producto: s.producto,
           categoria: cat,
-          unidad: s.unidad || 'kg',
+          unidad: s.unidad || '',
           costo_kg_ultimo: Number(s.costo_kg_ultimo || 0),
           costo_unitario: Number(s.costo_kg_ultimo || 0),
           margen_pct: 60,
@@ -209,7 +209,7 @@ export default function Productos() {
         mapa.set(k, {
           ...existing,
           categoria: s.categoria || existing.categoria || getCategoriaPrincipal(s.producto),
-          unidad: s.unidad || existing.unidad || 'kg',
+          unidad: s.unidad || existing.unidad || '',
           costo_kg_ultimo: s.costo_kg_ultimo ? Number(s.costo_kg_ultimo) : existing.costo_kg_ultimo,
           costo_unitario: s.costo_kg_ultimo ? Number(s.costo_kg_ultimo) : existing.costo_kg_ultimo,
           en_deposito: Number(s.en_deposito || 0),
@@ -227,7 +227,8 @@ export default function Productos() {
         const nom = String(item.nombre || item.producto || '').trim();
         // Regla: Filas con nombre vacío NO se muestran como productos
         if (!nom) return;
-        const k = norm(nom);
+        const marca = String(item.marca || '').trim();
+        const k = norm(nom) + '__' + norm(marca);
         const prev = mapaRawAlmacen.get(k) || {};
 
         const stockUds = Number(
@@ -248,7 +249,7 @@ export default function Productos() {
           (item.precio !== undefined ? item.precio : prev.precio_venta || 0))
         ) || 0;
 
-        const marca = String(item.marca || prev.marca || '').trim();
+        const finalMarca = marca || String(prev.marca || '').trim();
         const cat = String(item.categoria || prev.categoria || 'Almacén').trim();
         const subcat = String(item.subcategoria || prev.subcategoria || 'Almacén').trim();
         const ean = String(item.codigo_ean || item.ean || prev.codigo_ean || '').trim().toUpperCase();
@@ -259,7 +260,7 @@ export default function Productos() {
         mapaRawAlmacen.set(k, {
           nombre: nom,
           producto: nom,
-          marca,
+          marca: finalMarca,
           categoria: cat,
           subcategoria: subcat,
           codigo_ean: ean,
@@ -334,7 +335,7 @@ export default function Productos() {
         if (!alm.nombre || !alm.nombre.trim()) return;
         if (Number(alm.stock_unidades || 0) <= 0) return;
 
-        const pw = mapaWeb.get(k);
+        const pw = mapaWeb.get(k) || (alm.marca ? mapaWeb.get(norm(`${alm.nombre} (${alm.marca})`)) : null) || mapaWeb.get(norm(alm.nombre));
         const costo = alm.costo_unitario;
         const precioVenta = alm.precio_venta;
         const margen = alm.margen_pct !== undefined 
@@ -357,7 +358,7 @@ export default function Productos() {
           existing.precio_publicado = pw && pw.precio !== undefined ? Number(pw.precio) : (existing.precio_publicado || precioVenta);
           existing.margen_pct = margen;
           existing.disponible = alm.stock_unidades > 0;
-          existing.unidad = 'un';
+          existing.unidad = 'unidad';
         } else {
           mapa.set(k, {
             producto: alm.nombre,
@@ -366,7 +367,7 @@ export default function Productos() {
             codigo_ean: alm.codigo_ean || '',
             categoria: 'Almacén',
             subcategoria: alm.subcategoria || 'Almacén',
-            unidad: 'un',
+            unidad: 'unidad',
             costo_unitario: costo,
             costo_kg_ultimo: costo,
             precio_venta: precioVenta,
@@ -2975,11 +2976,12 @@ function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, con
   const [error, setError] = useState(null);
 
   // Clasificación de productos a publicar y validación de precios/costos
-  const { prodsParaPublicar, prodsSinPrecioOCosto, conteoPorCategoria, prodsSinStock } = useMemo(() => {
+  const { prodsParaPublicar, prodsSinPrecioOCosto, conteoPorCategoria, prodsSinStock, prodsSinUnidad } = useMemo(() => {
     const listValidos = [];
     const listSinPrecio = [];
     const conteo = {};
     const sinStockArr = [];
+    const sinUnidadArr = [];
 
     (preciosList || []).forEach(p => {
       const esAlm = Boolean(p.es_almacen || p.categoria === 'Almacén' || norm(p.categoria).includes('almacen'));
@@ -2990,7 +2992,14 @@ function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, con
       let disponible = true;
       let cat = p.categoria || (esAlm ? 'Almacén' : 'Verduras');
       let subcat = p.subcategoria || (esAlm ? 'Almacén' : '');
-      let unidad = esAlm ? 'un' : (p.unidad || 'kg');
+      let unidad = esAlm ? 'unidad' : (p.unidad || '');
+
+      if (!esAlm && (!p.unidad || !String(p.unidad).trim())) {
+        sinUnidadArr.push({
+          producto: p.producto,
+          categoria: cat
+        });
+      }
 
       if (esAlm) {
         // Nombre con marca si corresponde (igual a como se mostrará en la web)
@@ -3047,7 +3056,8 @@ function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, con
       prodsParaPublicar: listValidos,
       prodsSinPrecioOCosto: listSinPrecio,
       conteoPorCategoria: conteo,
-      prodsSinStock: sinStockArr
+      prodsSinStock: sinStockArr,
+      prodsSinUnidad: sinUnidadArr
     };
   }, [preciosList, margenesEditados, calcularPrecioSugerido]);
 
@@ -3125,6 +3135,24 @@ function ModalPublicar({ productosQueCambian, preciosList, margenesEditados, con
                 <div key={idx} className="flex items-center justify-between text-[11px] text-gray-300 bg-black/40 px-2 py-0.5 rounded">
                   <span>{sp.producto} <span className="text-gray-500">({sp.categoria})</span></span>
                   <span className="text-amber-300/80 font-mono text-[10px]">{sp.motivo}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Advertencia no bloqueante: N productos sin unidad definida */}
+        {prodsSinUnidad.length > 0 && (
+          <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs space-y-1.5">
+            <div className="text-amber-400 font-bold flex items-center gap-1.5">
+              <AlertTriangle size={14} />
+              <span>{prodsSinUnidad.length} productos sin unidad definida:</span>
+            </div>
+            <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
+              {prodsSinUnidad.map((su, idx) => (
+                <div key={idx} className="flex items-center justify-between text-[11px] text-gray-300 bg-black/40 px-2 py-0.5 rounded">
+                  <span>{su.producto} <span className="text-gray-500">({su.categoria})</span></span>
+                  <span className="text-amber-300/80 font-mono text-[10px]">Sin unidad (se publica tal cual)</span>
                 </div>
               ))}
             </div>

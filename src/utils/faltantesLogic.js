@@ -8,8 +8,9 @@ import { leerCacheAlmacen } from './almacenCache.js';
 import { resolverEntrega } from './agendaCalendario.js';
 import { extraerFechaYMD } from './fechasEntrega.js';
 
-const norm = (s) =>
-  (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+import { norm, sonNombresEquivalentes } from './productNorm.js';
+
+export { norm, sonNombresEquivalentes };
 
 /**
  * Función central de cálculo de faltantes utilizada por la pantalla Faltantes y el Header (badge).
@@ -178,7 +179,7 @@ export function calcularFaltantes(stockData, productosCostos, pedidos, stockKgLi
           matchKey = itemKey;
         } else {
           for (const k of catalogMap.keys()) {
-            if (k.includes(itemKey) || itemKey.includes(k)) {
+            if (sonNombresEquivalentes(k, item.nombre) || k.includes(itemKey) || itemKey.includes(k)) {
               matchKey = k;
               break;
             }
@@ -186,9 +187,7 @@ export function calcularFaltantes(stockData, productosCostos, pedidos, stockKgLi
         }
       }
 
-      const cantPedida = item.pesoSolicitado
-        ? Math.round(item.pesoSolicitado * (item.cantidad || 1) * 100) / 100
-        : Number(item.cantidad) || 1;
+      const cantPedida = Number(item.cantidad) || (item.pesoSolicitado ? Number(item.pesoSolicitado) : 1);
 
       if (matchKey) {
         demandaPorProdKey.set(
