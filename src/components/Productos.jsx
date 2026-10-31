@@ -2079,7 +2079,10 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
 
       if (busqueda.trim()) {
         const q = norm(busqueda);
-        return norm(p.producto).includes(q);
+        const prod = norm(p.producto || p.nombre || '');
+        const marca = norm(p.marca || '');
+        const ean = String(p.ean || p.codigo_ean || p.barcode || '').trim();
+        return prod.includes(q) || marca.includes(q) || ean.includes(q);
       }
       return true;
     });
@@ -2392,10 +2395,17 @@ function ModalSalida({ productosExistentes, taraKg, onClose, onSuccess, ejecutar
                       const eanInfo = eanMap[code.toUpperCase()];
                       let match = null;
                       if (eanInfo && eanInfo.nombre) {
-                        match = productosExistentes.find(p => norm(p.producto) === norm(eanInfo.nombre));
+                        match = productosExistentes.find(p => norm(p.producto) === norm(eanInfo.nombre) || norm(p.nombre) === norm(eanInfo.nombre));
                       }
                       if (!match) {
-                        match = productosExistentes.find(p => p.ean === code || p.barcode === code || norm(p.producto) === norm(code));
+                        match = productosExistentes.find(p => {
+                          const eanStr = String(p.ean || p.barcode || p.codigo_ean || '').trim();
+                          if (eanStr && eanStr === code) return true;
+                          const nom = norm(p.producto || p.nombre || '');
+                          const mar = norm(p.marca || '');
+                          const cod = norm(code);
+                          return nom === cod || nom.includes(cod) || mar.includes(cod);
+                        });
                       }
 
                       if (match) {

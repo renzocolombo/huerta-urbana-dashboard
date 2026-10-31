@@ -5,6 +5,16 @@ import React from 'react';
 import ReactDOMServer from 'react-dom/server';
 import { createServer } from 'vite';
 
+if (typeof globalThis.localStorage === 'undefined') {
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => store.get(k) ?? null,
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+    clear: () => store.clear()
+  };
+}
+
 import { 
   norm, 
   normSinMarca, 
@@ -26,6 +36,27 @@ import {
 import { 
   calcularFaltantes 
 } from '../src/utils/faltantesLogic.js';
+
+import { 
+  parsearMonto, 
+  formatearMonto, 
+  parsearCantidad, 
+  calcularTotalPedido, 
+  obtenerMontoACobrar 
+} from '../src/utils/totalesPedido.js';
+
+import { 
+  calcularDetalleYTotalesDia 
+} from '../src/utils/calendarioTotales.js';
+
+import { 
+  asociarEanAProducto, 
+  getEanMapping 
+} from '../src/data/productUtils.js';
+
+import { 
+  aplicarCacheAProducto 
+} from '../src/utils/almacenCache.js';
 
 // ==============================================================================
 // 1. Tests de tipoCapturaProducto.js (Reconocimiento de UNIDAD_MANUAL y PESABLE)
@@ -530,5 +561,412 @@ test('Flujos intactos: 1) EAN Almacén suma contador/verde, 2) Pesaje balanza, 3
   assert.strictEqual(itemManual.confirmado, true);
   assert.strictEqual(itemManual.cantidadConfirmada, 1);
 });
+
+// ==============================================================================
+// 11. Falla A: Simulación de hoja Almacén de 1000 filas (fila 1000 + fantasma 34-999)
+// ==============================================================================
+test('Falla A: Hoja Almacén 1000 filas — producto en fila 1000 se encuentra en todas las pantallas', () => {
+  // Construir 1000 filas simuladas del Sheet Almacén
+  const rawRows = [];
+  // Fila 1: encabezado
+  // Filas 2 a 33: productos reales
+  for (let f = 2; f <= 33; f++) {
+    rawRows.push({
+      c: [
+        { v: `Producto Almacén ${f}` }, // nombre
+        { v: 'Marca Test' },            // marca
+        { v: 'Almacén' },               // categoría
+        { v: 'Comestibles' },           // subcategoría
+        { v: `7790000000${f.toString().padStart(3, '0')}` }, // ean
+        { v: 1000 },                    // costo_unitario
+        { v: 1800 },                    // precio_venta
+        { v: 10 },                      // stock_unidades
+        { v: f }                        // filaCol
+      ]
+    });
+  }
+
+  // Filas 34 a 999: filas fantasma (vacías con categoría y ceros)
+  for (let f = 34; f <= 999; f++) {
+    rawRows.push({
+      c: [
+        { v: '' },          // nombre vacío
+        { v: '' },          // marca vacía
+        { v: 'Almacén' },   // categoría
+        { v: '' },          // subcategoría
+        { v: '' },          // ean
+        { v: 0 },           // costo
+        { v: 0 },           // precio
+        { v: 0 },           // stock
+        { v: f }            // filaCol
+      ]
+    });
+  }
+
+  // Fila 1000: Harina leudante ultrarefinada Pureza
+  rawRows.push({
+    c: [
+      { v: 'harina leudante ultrarefinada' }, // nombre
+      { v: 'pureza' },                       // marca
+      { v: 'Almacén' },                      // categoría
+      { v: 'Harinas' },                      // subcategoría
+      { v: '7790070411854' },                // ean
+      { v: 6000 },                           // costo_unitario
+      { v: 10200 },                          // precio_venta
+      { v: 5 },                              // stock_unidades
+      { v: 1000 }                            // filaCol
+    ]
+  });
+
+  // Simular parseo de GoogleSheetsContext
+  const mapped = [];
+  rawRows.forEach((r, idx) => {
+    const nombreP = String(r.c?.[0]?.v || '').trim();
+    if (!nombreP) return; // Filas fantasma 34-999 deben ser descartadas
+
+    const filaCol = Number(r.c?.[8]?.v);
+    const filaP = (filaCol && filaCol > 1) ? filaCol : (idx + 2); // > 1 permite fila 1000!
+    const marcaP = String(r.c?.[1]?.v || '').trim();
+    const catP = String(r.c?.[2]?.v || 'Almacén').trim();
+    const subCatP = String(r.c?.[3]?.v || 'Almacén').trim();
+    const eanP = String(r.c?.[4]?.v || '').trim();
+    if (eanP) {
+      asociarEanAProducto(eanP, { nombre: nombreP, marca: marcaP, subcategoria: subCatP, unidad: 'un' });
+    }
+    const costoP = Number(r.c?.[5]?.v) || 0;
+    const precioP = Number(r.c?.[6]?.v) || 0;
+    const stockUdsP = Number(r.c?.[7]?.v) || 0;
+
+    mapped.push({
+      id: `alm_${filaP}`,
+      fila: filaP,
+      nombre: nombreP,
+      producto: nombreP,
+      marca: marcaP,
+      categoria: 'otros',
+      categoriaPrincipal: 'Almacén',
+      subcategoria: subCatP,
+      cantidadCajon: 1,
+      unidad: 'unidad',
+      precioCajon: costoP,
+      precio: precioP,
+      precio_venta: precioP,
+      costo_unitario: costoP,
+      stock_unidades: stockUdsP,
+      ean: eanP,
+      codigo_ean: eanP,
+      barcode: eanP,
+      activo: true
+    });
+  });
+
+  // 1. Debe haber exactamente 33 productos parseados (32 primeros + 1 de la fila 1000)
+  assert.strictEqual(mapped.length, 33, 'Deben parsearse 33 productos ignorando las filas fantasma 34-999');
+  
+  // 2. El producto en la fila 1000 debe existir en la lista
+  const prod1000 = mapped.find(p => p.fila === 1000);
+  assert.ok(prod1000, 'El producto de la fila 1000 debe estar en la lista mapped');
+  assert.strictEqual(prod1000.nombre, 'harina leudante ultrarefinada');
+  assert.strictEqual(prod1000.stock_unidades, 5);
+  assert.strictEqual(prod1000.ean, '7790070411854');
+
+  // 3. Hogar: búsqueda por nombre, marca y EAN
+  const buscarHogar = (q, lista) => {
+    const qn = norm(q);
+    return lista.filter(p => {
+      const prod = norm(p.producto || p.nombre || '');
+      const marca = norm(p.marca || '');
+      const ean = String(p.ean || p.codigo_ean || p.barcode || '').trim();
+      return prod.includes(qn) || marca.includes(qn) || ean.includes(qn);
+    });
+  };
+
+  assert.strictEqual(buscarHogar('harina leudante', mapped).length, 1, 'Hogar encuentra fila 1000 por nombre');
+  assert.strictEqual(buscarHogar('pureza', mapped).length, 1, 'Hogar encuentra fila 1000 por marca');
+  assert.strictEqual(buscarHogar('7790070411854', mapped).length, 1, 'Hogar encuentra fila 1000 por código EAN');
+
+  // 4. ModalSalida (Merma): búsqueda y escaneo
+  const eanMap = getEanMapping();
+  const eanInfo = eanMap['7790070411854'];
+  assert.ok(eanInfo, 'El mapa EAN debe tener asociado 7790070411854');
+  assert.strictEqual(norm(eanInfo.nombre), norm('harina leudante ultrarefinada'));
+
+  const matchModalSalida = mapped.find(p => {
+    const eanStr = String(p.ean || p.barcode || p.codigo_ean || '').trim();
+    if (eanStr && eanStr === '7790070411854') return true;
+    const nom = norm(p.producto || p.nombre || '');
+    const mar = norm(p.marca || '');
+    const cod = norm('7790070411854');
+    return nom === cod || nom.includes(cod) || mar.includes(cod);
+  });
+  assert.ok(matchModalSalida, 'ModalSalida encuentra fila 1000 al escanear código EAN');
+  assert.strictEqual(matchModalSalida.fila, 1000);
+
+  // 5. Faltantes: calcularFaltantes detecta el stock del producto de fila 1000
+  const pedidosFaltantes = [
+    {
+      numero_pedido: 'HU-1000',
+      producto: '7 UNIDADES HARINA LEUDANTE ULTRAREFINADA',
+      cantidades: '7',
+      dia_entrega: '2026-11-02'
+    }
+  ];
+  const resFaltantes = calcularFaltantes([], mapped, pedidosFaltantes, null, null);
+  const faltanteHarina = resFaltantes.faltantes.find(f => norm(f.nombre).includes('harina leudante'));
+  assert.ok(faltanteHarina, 'Faltantes detecta demanda de Harina');
+  assert.strictEqual(faltanteHarina.stockActual, 5, 'Faltantes lee stock actual = 5 de fila 1000');
+  assert.strictEqual(faltanteHarina.faltaParaPedidos, 2, 'Faltantes calcula que faltan 2 unidades (7 demanda - 5 stock)');
+
+  // 6. AlmacenCache: no pisa stock fresco del Sheet si el cache local no es reciente
+  const cacheViejo = { stock: 0 }; // sin updatedAt o viejo
+  const prodActualizado = aplicarCacheAProducto({ ...prod1000 }, cacheViejo, 6000);
+  assert.strictEqual(prodActualizado.stock_unidades, 5, 'Cache viejo con stock 0 NO debe pisar stock fresco = 5 del Sheet');
+});
+
+// ==============================================================================
+// 12. Falla B: HU-868434 y variantes de montos nunca devuelven NaN y calculan 20400
+// ==============================================================================
+test('Falla B: HU-868434 y variantes — montos seguros, sin NaN, total exacto 20400', () => {
+  const catalogo = [
+    {
+      id: 1000,
+      nombre: 'HARINA LEUDANTE ULTRAREFINADA',
+      precio: 10200,
+      precio_venta: 10200,
+      unidad: 'unidad',
+      categoriaPrincipal: 'Almacén'
+    }
+  ];
+
+  // Caso Base: Pedido real HU-868434 sin armar
+  const pedidoBase = {
+    numero_pedido: 'HU-868434',
+    fecha: '2026-10-30',
+    dia_entrega: 'Lunes 02/11/2026 Tarde',
+    forma_pago: 'efectivo',
+    producto: '2 KILOS HARINA LEUDANTE ULTRAREFINADA',
+    cantidades: '2',
+    total: '20400'
+  };
+
+  // 1. Total como string '20400'
+  const res1 = calcularTotalPedido(pedidoBase, null, { catalogo });
+  assert.strictEqual(res1.monto, 20400, 'Monto debe ser 20400');
+  assert.strictEqual(res1.total, 20400, 'Total debe ser 20400');
+  assert.strictEqual(Number.isNaN(res1.monto), false);
+  assert.strictEqual(res1.esEstimado, true, 'Pedido sin armar es estimado');
+
+  // 2. Total como número 20400
+  const res2 = calcularTotalPedido({ ...pedidoBase, total: 20400 }, null, { catalogo });
+  assert.strictEqual(res2.monto, 20400);
+  assert.strictEqual(res2.total, 20400);
+
+  // 3. Total con signo peso y punto de miles '$20.400'
+  const res3 = calcularTotalPedido({ ...pedidoBase, total: '$20.400' }, null, { catalogo });
+  assert.strictEqual(res3.monto, 20400);
+  assert.strictEqual(res3.total, 20400);
+
+  // 4. Total con coma decimal '20.400,50'
+  const res4 = calcularTotalPedido({ ...pedidoBase, total: '20.400,50' }, null, { catalogo });
+  assert.strictEqual(res4.monto, 20401, 'Redondea 20400.5 a 20401');
+  assert.strictEqual(res4.total, 20401);
+
+  // 5. Total vacío '' -> calcula desde productos del catálogo
+  const res5 = calcularTotalPedido({ ...pedidoBase, total: '' }, null, { catalogo });
+  assert.strictEqual(res5.monto, 20400, 'Calcula 2 x 10200 = 20400');
+  assert.strictEqual(res5.total, 20400);
+
+  // 6. Total undefined -> calcula desde productos del catálogo
+  const res6 = calcularTotalPedido({ ...pedidoBase, total: undefined }, null, { catalogo });
+  assert.strictEqual(res6.monto, 20400);
+  assert.strictEqual(res6.total, 20400);
+
+  // 7. Línea con '2 UNIDADES HARINA LEUDANTE ULTRAREFINADA'
+  const res7 = calcularTotalPedido({
+    ...pedidoBase,
+    producto: '2 UNIDADES HARINA LEUDANTE ULTRAREFINADA',
+    total: undefined
+  }, null, { catalogo });
+  assert.strictEqual(res7.monto, 20400);
+  assert.strictEqual(res7.total, 20400);
+
+  // 8. Pedido armado con detalle de pesaje
+  const prepArmada = {
+    completado: true,
+    items: [
+      {
+        nombre: 'HARINA LEUDANTE ULTRAREFINADA',
+        precioUnitario: 10200,
+        cantidad_real: 2,
+        subtotal: 20400,
+        confirmado: true
+      }
+    ]
+  };
+  const resArmado = calcularTotalPedido(pedidoBase, prepArmada, { catalogo });
+  assert.strictEqual(resArmado.monto, 20400);
+  assert.strictEqual(resArmado.total, 20400);
+  assert.strictEqual(resArmado.estaArmado, true);
+
+  // 9. Cantidad con coma decimal '1,5' y producto faltante en catálogo
+  const resDec = calcularTotalPedido({
+    numero_pedido: 'HU-999',
+    producto: '1,5 KILOS PAPA',
+    cantidades: '1,5',
+    total: ''
+  }, null, { catalogo: [] });
+  assert.strictEqual(Number.isNaN(resDec.monto), false);
+  assert.strictEqual(Number.isNaN(resDec.total), false);
+
+  // 10. Robustez de parsearMonto y formatearMonto
+  assert.strictEqual(parsearMonto(null), 0);
+  assert.strictEqual(parsearMonto(undefined), 0);
+  assert.strictEqual(parsearMonto(NaN), 0);
+  assert.strictEqual(parsearMonto(''), 0);
+  assert.strictEqual(parsearMonto('   '), 0);
+  assert.strictEqual(parsearMonto('2 UNIDADES HARINA'), 0);
+  assert.strictEqual(parsearMonto('$20.400'), 20400);
+  assert.strictEqual(parsearMonto('20.400,50'), 20400.5);
+
+  assert.strictEqual(formatearMonto(NaN), '$0');
+  assert.strictEqual(formatearMonto(undefined), '$0');
+  assert.strictEqual(formatearMonto(null), '$0');
+  assert.strictEqual(formatearMonto('NaN'), '$0');
+  assert.strictEqual(formatearMonto(20400), '$20.400');
+  assert.strictEqual(formatearMonto('$20.400'), '$20.400');
+
+  // 11. Calendario Totales con HU-868434
+  const resDia = calcularDetalleYTotalesDia([pedidoBase], '2026-11-02', {}, { catalogo });
+  assert.strictEqual(resDia.totalMonto, 20400, 'Total del día en calendario debe ser 20400');
+  assert.strictEqual(Number.isNaN(resDia.totalMonto), false);
+  assert.strictEqual(resDia.turnos.Tarde.total, 20400);
+  assert.strictEqual(Number.isNaN(resDia.turnos.Tarde.total), false);
+  assert.strictEqual(resDia.desglose.pendiente.monto, 20400);
+});
+
+// ==============================================================================
+// 13. SSR: Ningún componente renderiza la palabra "NaN" en su HTML
+// ==============================================================================
+test('SSR: Renderizado de TarjetaPedido, PedidosDelDia, Calendario y Agenda jamás produce "NaN"', async () => {
+  const server = await createServer({ server: { middlewareMode: true } });
+  try {
+    const modContext = await server.ssrLoadModule('/src/context/GoogleSheetsContext.jsx');
+    const GoogleSheetsContext = modContext.GoogleSheetsContext;
+
+    // Escenario 1: Pedido HU-868434 con total string y formatos varios
+    const mockCtxReal = {
+      pedidos: [
+        {
+          numero_pedido: 'HU-868434',
+          cliente: 'Cliente Test',
+          nombre: 'Cliente Test',
+          telefono: '1122334455',
+          direccion: 'Calle Falsa 123',
+          producto: '2 KILOS HARINA LEUDANTE ULTRAREFINADA',
+          cantidades: '2',
+          estado: 'pendiente',
+          dia_entrega: 'Lunes 02/11/2026 Tarde',
+          metodo_pago: 'efectivo',
+          total: '20400'
+        }
+      ],
+      productosCostos: [
+        { id: 1000, nombre: 'HARINA LEUDANTE ULTRAREFINADA', activo: true, precio: 10200, unidad: 'unidad', categoriaPrincipal: 'Almacén' }
+      ],
+      stockData: {},
+      cargando: false,
+      refrescar: () => {},
+      actualizarStock: () => {},
+      actualizarEstadoEnSheet: async () => ({ ok: true }),
+      fetchControlStock: async () => ({ ok: true })
+    };
+
+    // Escenario 2: Contexto vacío
+    const mockCtxVacio = {
+      pedidos: [],
+      productosCostos: [],
+      stockData: {},
+      cargando: false,
+      refrescar: () => {},
+      actualizarStock: () => {},
+      actualizarEstadoEnSheet: async () => ({ ok: true }),
+      fetchControlStock: async () => ({ ok: true })
+    };
+
+    // Cargar componentes
+    const modTarjeta = await server.ssrLoadModule('/src/components/TarjetaPedido.jsx');
+    const TarjetaPedidoComp = modTarjeta.default;
+
+    const modPedidos = await server.ssrLoadModule('/src/components/PedidosDelDia.jsx');
+    const PedidosDelDiaComp = modPedidos.default;
+
+    const modAgenda = await server.ssrLoadModule('/src/components/AgendaEntregas.jsx');
+    const AgendaComp = modAgenda.default;
+
+    const modCalendario = await server.ssrLoadModule('/src/components/CalendarioEntregas.jsx');
+    const CalendarioComp = modCalendario.default;
+
+    // 1. TarjetaPedido con HU-868434
+    const htmlTarjeta = ReactDOMServer.renderToString(
+      React.createElement(GoogleSheetsContext.Provider, { value: mockCtxReal },
+        React.createElement(TarjetaPedidoComp, {
+          pedido: mockCtxReal.pedidos[0],
+          preparacion: null
+        })
+      )
+    );
+    assert.strictEqual(htmlTarjeta.includes('NaN'), false, 'TarjetaPedido no debe contener "NaN"');
+    assert.ok(htmlTarjeta.includes('$20.400'), 'TarjetaPedido debe mostrar $20.400');
+
+    // 2. PedidosDelDia con HU-868434 y vacío
+    const htmlPedidosReal = ReactDOMServer.renderToString(
+      React.createElement(GoogleSheetsContext.Provider, { value: mockCtxReal },
+        React.createElement(PedidosDelDiaComp, { rol: 'admin', usuario: 'Renzo' })
+      )
+    );
+    assert.strictEqual(htmlPedidosReal.includes('NaN'), false, 'PedidosDelDia (real) no debe contener "NaN"');
+
+    const htmlPedidosVacio = ReactDOMServer.renderToString(
+      React.createElement(GoogleSheetsContext.Provider, { value: mockCtxVacio },
+        React.createElement(PedidosDelDiaComp, { rol: 'admin', usuario: 'Renzo' })
+      )
+    );
+    assert.strictEqual(htmlPedidosVacio.includes('NaN'), false, 'PedidosDelDia (vacío) no debe contener "NaN"');
+
+    // 3. AgendaEntregas con HU-868434 y vacío
+    const htmlAgendaReal = ReactDOMServer.renderToString(
+      React.createElement(GoogleSheetsContext.Provider, { value: mockCtxReal },
+        React.createElement(AgendaComp, { rol: 'admin', usuario: 'Renzo' })
+      )
+    );
+    assert.strictEqual(htmlAgendaReal.includes('NaN'), false, 'AgendaEntregas (real) no debe contener "NaN"');
+
+    const htmlAgendaVacio = ReactDOMServer.renderToString(
+      React.createElement(GoogleSheetsContext.Provider, { value: mockCtxVacio },
+        React.createElement(AgendaComp, { rol: 'admin', usuario: 'Renzo' })
+      )
+    );
+    assert.strictEqual(htmlAgendaVacio.includes('NaN'), false, 'AgendaEntregas (vacío) no debe contener "NaN"');
+
+    // 4. CalendarioEntregas con HU-868434 y vacío
+    const htmlCalReal = ReactDOMServer.renderToString(
+      React.createElement(GoogleSheetsContext.Provider, { value: mockCtxReal },
+        React.createElement(CalendarioComp, { rol: 'admin', usuario: 'Renzo' })
+      )
+    );
+    assert.strictEqual(htmlCalReal.includes('NaN'), false, 'CalendarioEntregas (real) no debe contener "NaN"');
+
+    const htmlCalVacio = ReactDOMServer.renderToString(
+      React.createElement(GoogleSheetsContext.Provider, { value: mockCtxVacio },
+        React.createElement(CalendarioComp, { rol: 'admin', usuario: 'Renzo' })
+      )
+    );
+    assert.strictEqual(htmlCalVacio.includes('NaN'), false, 'CalendarioEntregas (vacío) no debe contener "NaN"');
+
+  } finally {
+    await server.close();
+  }
+});
+
 
 

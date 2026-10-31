@@ -33,7 +33,7 @@ import {
   apiGetReembolsos,
   apiGetFeriados
 } from '../utils/mercaderiaApi';
-import { calcularTotalPedido, esItemSinStock } from '../utils/totalesPedido';
+import { calcularTotalPedido, esItemSinStock, formatearMonto, parsearMonto } from '../utils/totalesPedido';
 import { imprimirEtiquetaBolsa } from '../utils/etiquetaPrinter';
 import { esPedidoCobrado, estadoEntregaPedido, estadoPagoPedido, calcularResumenDia } from '../utils/estadosPedido';
 import ResumenDiaBar from './ResumenDiaBar';
@@ -57,7 +57,7 @@ import {
   CLAVE_ATRASADOS, esPedidoElegibleReparto, esFormaEntregaOLink, METODOS_PAGO_CONTRA_ENTREGA,
 } from '../utils/agendaCalendario';
 
-const $$ = (n) => `$${Number(n).toLocaleString('es-AR')}`;
+const $$ = (n) => formatearMonto(n);
 // Horario textual de un bloque (columna horario_entrega al reagendar): "08:00 - 12:00" / "14:00 - 17:00"
 const horarioDeBloque = (b) => `${String(BLOQUES[b].desde).padStart(2, '0')}:00 - ${String(BLOQUES[b].hasta).padStart(2, '0')}:00`;
 
@@ -688,7 +688,7 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
       const esPorCobrar = (formaPago === 'entrega' || formaPago === 'link') && !fueCobrado;
       if (!esPorCobrar) return sum;
       const prep = preparaciones[p.numero_pedido];
-      const monto = calcularTotalDetalle(p, prep);
+      const monto = parsearMonto(calcularTotalDetalle(p, prep));
       return sum + monto;
     }, 0);
   }, [pedidosDelTurno, preparaciones, calcularTotalDetalle]);
@@ -1354,7 +1354,27 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
 
     const cleanCode = String(rawCode).replace(/[\r\n\x00-\x1F]/g, '').trim().replace(/^\][a-zA-Z0-9]{2,3}/, '').replace(/^\*+|\*+$/g, '').trim().toUpperCase();
     const eanMap = getEanMapping();
-    const mappedEan = eanMap[cleanCode] || eanMap[cleanCode.replace(/^0+/, '')] || eanMap['0' + cleanCode];
+    let mappedEan = eanMap[cleanCode] || eanMap[cleanCode.replace(/^0+/, '')] || eanMap['0' + cleanCode];
+
+    // Si no está en eanMap local, buscar en stockData si algún producto tiene este EAN
+    if (!mappedEan) {
+      const current = stockDataRef.current || {};
+      const foundInStock = Object.values(current).find(p =>
+        p && (
+          (p.codigo_ean && String(p.codigo_ean).toUpperCase() === cleanCode) ||
+          (p.ean && String(p.ean).toUpperCase() === cleanCode) ||
+          (p.barcode && String(p.barcode).toUpperCase() === cleanCode)
+        )
+      );
+      if (foundInStock) {
+        mappedEan = {
+          ean: cleanCode,
+          nombre: foundInStock.nombre || foundInStock.producto,
+          productoId: foundInStock.id,
+          unidad: foundInStock.unidad || 'unidad'
+        };
+      }
+    }
 
     // ── 1. Si es un código EAN de fábrica mapeado a Almacén ──────────────────
     if (mappedEan) {
@@ -2684,12 +2704,12 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
             let cartelPago = null;
             const tieneReembolsoPendiente = (p.reembolso_estado || '').toLowerCase().trim() === 'pendiente';
             const tieneReembolsoDevuelto = (p.reembolso_estado || '').toLowerCase().trim() === 'devuelto';
-            const montoReembolso = p.reembolso_monto != null ? Number(p.reembolso_monto) : Math.round(Number(p.total) || 0);
+            const montoReembolso = parsearMonto(p.reembolso_monto != null ? p.reembolso_monto : p.total);
 
             if (tieneReembolsoPendiente) {
               cartelPago = {
                 tipo: 'rojo',
-                texto: `A REEMBOLSAR $${montoReembolso.toLocaleString('es-AR')}`,
+                texto: `A REEMBOLSAR ${formatearMonto(montoReembolso)}`,
                 className: 'bg-red-500/20 text-red-300 border-red-500/40 shadow-sm animate-pulse'
               };
             } else if (tieneReembolsoDevuelto) {
@@ -2697,16 +2717,16 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
               const medioLabel = MEDIOS_REEMBOLSO_LABELS[rawMedio.toLowerCase().trim()] || rawMedio;
               cartelPago = {
                 tipo: 'gris',
-                texto: `REEMBOLSADO $${montoReembolso.toLocaleString('es-AR')}${medioLabel ? ` · ${medioLabel}` : ''}`,
+                texto: `REEMBOLSADO ${formatearMonto(montoReembolso)}${medioLabel ? ` · ${medioLabel}` : ''}`,
                 className: 'bg-gray-500/20 text-gray-300 border-gray-500/40 shadow-sm'
               };
             } else if (estaCobrado) {
               const rawMedio = p.medio_cobro || p.medio_pago || p.medio || '';
               const medioLabel = rawMedio ? ` · ${(MEDIOS_LABELS[rawMedio] || rawMedio).toUpperCase()}` : '';
-              const montoVal = p.monto_cobrado != null ? Number(p.monto_cobrado) : totalExactoPedido;
+              const montoVal = parsearMonto(p.monto_cobrado != null ? p.monto_cobrado : totalExactoPedido);
               cartelPago = {
                 tipo: 'verde',
-                texto: esEntregado ? `COBRADO Y ENTREGADO${medioLabel} · $${Math.round(montoVal).toLocaleString('es-AR')}` : `COBRADO${medioLabel} · $${Math.round(montoVal).toLocaleString('es-AR')}`,
+                texto: esEntregado ? `COBRADO Y ENTREGADO${medioLabel} · ${formatearMonto(montoVal)}` : `COBRADO${medioLabel} · ${formatearMonto(montoVal)}`,
                 className: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-sm'
               };
             } else if (estadoPago === 'approved' || estadoPago === 'pagado') {
@@ -2716,11 +2736,11 @@ export default function AgendaEntregas({ rol, usuario, onNav, fechaCompartida, s
                 className: 'bg-blue-500/20 text-blue-300 border-blue-500/40 shadow-sm'
               };
             } else if (formaPago === 'entrega' || formaPago === 'link') {
-              const montoACobrar = totalExactoPedido;
+              const montoACobrar = parsearMonto(totalExactoPedido);
               const sufijo = infoCalculoPedido.esEstimado ? ' (estimado)' : '';
               cartelPago = {
                 tipo: 'naranja',
-                texto: `A COBRAR $${montoACobrar.toLocaleString('es-AR')}${sufijo}`,
+                texto: `A COBRAR ${formatearMonto(montoACobrar)}${sufijo}`,
                 className: 'bg-orange-500/20 text-orange-300 border-orange-500/40 shadow-sm'
               };
             } else {

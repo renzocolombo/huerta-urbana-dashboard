@@ -1,4 +1,90 @@
-import { estaPedidoArmado } from './remitoPrinter.js';
+import { estaPedidoArmado, parsearProductosPedido } from './remitoPrinter.js';
+
+/**
+ * Parsea un monto de forma ultra-robusta.
+ * Acepta: número, texto con $, puntos de miles, coma decimal, espacios.
+ * Si es vacío, undefined, null o NaN => devuelve 0.
+ * Si es texto que no representa un monto (ej: "2 UNIDADES...") => devuelve 0.
+ * NUNCA devuelve NaN.
+ *
+ * @param {*} val
+ * @returns {number}
+ */
+export function parsearMonto(val) {
+  if (val == null) return 0;
+  if (typeof val === 'number') {
+    return isNaN(val) || !isFinite(val) ? 0 : val;
+  }
+  let str = String(val).trim();
+  if (!str) return 0;
+
+  // Quitar signo $, espacios y caracteres no numéricos iniciales
+  str = str.replace(/[$]/g, '').trim();
+  if (!str) return 0;
+
+  // Si contiene letras (ej: "2 UNIDADES HARINA..."), no es un monto válido
+  if (/[a-zA-Z]/.test(str)) return 0;
+
+  // Manejar separadores de miles y decimales
+  if (str.includes('.') && str.includes(',')) {
+    if (str.lastIndexOf(',') > str.lastIndexOf('.')) {
+      // Formato es-AR: 20.400,50
+      str = str.replace(/\./g, '').replace(',', '.');
+    } else {
+      // Formato en-US: 20,400.50
+      str = str.replace(/,/g, '');
+    }
+  } else if (str.includes(',')) {
+    // Solo coma: decimal ej 20400,50 o 1,5
+    str = str.replace(',', '.');
+  } else if (str.includes('.')) {
+    const partes = str.split('.');
+    if (partes.length > 2) {
+      // Múltiples puntos: miles (ej 1.200.000)
+      str = str.replace(/\./g, '');
+    } else if (partes.length === 2) {
+      if (partes[1].length === 3 && partes[0].length >= 1 && partes[0] !== '0') {
+        // Un solo punto seguido de 3 dígitos: punto de miles argentino (ej: 20.400)
+        str = partes[0] + partes[1];
+      } else {
+        // Decimal (ej: 20.5, 0.5)
+        str = partes[0] + '.' + partes[1];
+      }
+    }
+  }
+
+  const n = parseFloat(str);
+  return isNaN(n) || !isFinite(n) ? 0 : n;
+}
+
+/**
+ * Formatea un monto de forma robusta. NUNCA devuelve NaN.
+ * Si es vacío/undefined/null/NaN => devuelve "$0".
+ * Formato entero en pesos argentinos (ej: "$20.400", "$0").
+ *
+ * @param {*} val
+ * @returns {string}
+ */
+export function formatearMonto(val) {
+  const num = Math.round(parsearMonto(val));
+  return `$${num.toLocaleString('es-AR')}`;
+}
+
+/**
+ * Parsea una cantidad (peso o unidades), aceptando coma decimal (ej: "1,5" => 1.5).
+ *
+ * @param {*} val
+ * @returns {number}
+ */
+export function parsearCantidad(val) {
+  if (val == null) return 0;
+  if (typeof val === 'number') {
+    return isNaN(val) || !isFinite(val) ? 0 : val;
+  }
+  const str = String(val).trim().replace(',', '.');
+  const n = parseFloat(str);
+  return isNaN(n) || !isFinite(n) ? 0 : n;
+}
 
 /**
  * Normaliza si un ítem de la preparación o del detalle está marcado como sin stock.
@@ -23,26 +109,26 @@ export function esItemSinStock(it) {
  */
 export function resolverPrecioUnitario(it, opciones = {}) {
   if (!it) return null;
-  const pDirecto = Number(
-    it.precio_unitario != null
-      ? it.precio_unitario
-      : it.precio_unit != null
-      ? it.precio_unit
-      : it.precio != null
-      ? it.precio
-      : null
-  );
-  if (!isNaN(pDirecto) && pDirecto > 0) return pDirecto;
+  const itemObj = typeof it === 'string' ? { nombre: it } : it;
+  const rawDirecto = itemObj.precio_unitario != null
+    ? itemObj.precio_unitario
+    : itemObj.precio_unit != null
+    ? itemObj.precio_unit
+    : itemObj.precio != null
+    ? itemObj.precio
+    : null;
+  const pDirecto = parsearMonto(rawDirecto);
+  if (pDirecto > 0) return pDirecto;
 
-  const nombre = String(it.nombre || it.producto || '').trim();
+  const nombre = String(itemObj.nombre || itemObj.producto || '').trim();
   if (!nombre) return null;
 
   if (typeof opciones.obtenerPrecioCongelado === 'function') {
-    const pr = opciones.obtenerPrecioCongelado(nombre);
-    if (typeof pr === 'number' && !isNaN(pr) && pr > 0) return pr;
+    const pr = parsearMonto(opciones.obtenerPrecioCongelado(nombre));
+    if (pr > 0) return pr;
   }
 
-  const catalogo = opciones.catalogoPrecios || [];
+  const catalogo = opciones.catalogoPrecios || opciones.catalogo || [];
   if (Array.isArray(catalogo) && catalogo.length > 0) {
     const norm = (s) =>
       String(s || '')
@@ -56,12 +142,14 @@ export function resolverPrecioUnitario(it, opciones = {}) {
       return cNorm === k || k.includes(cNorm) || cNorm.includes(k);
     });
     if (matched) {
-      const pr = Number(
+      const pr = parsearMonto(
         matched.precio != null
           ? matched.precio
-          : matched.precio_publicado || matched.precio_sugerido
+          : matched.precio_publicado != null
+          ? matched.precio_publicado
+          : matched.precio_sugerido
       );
-      if (!isNaN(pr) && pr > 0) return pr;
+      if (pr > 0) return pr;
     }
   }
 
@@ -99,7 +187,7 @@ export function extraerItemsParaCalculo(pedido, preparacion) {
  * Calcula el monto exacto a cobrar de un pedido, con la siguiente matriz:
  *
  * 1. Si el pedido NO está armado (estaPedidoArmado false):
- *    - monto = p.total de la hoja (neto de cupón y crédito)
+ *    - monto / total = p.total de la hoja (neto de cupón y crédito)
  *    - marcado como "Estimado, se ajusta al pesar"
  *
  * 2. Si está armado:
@@ -112,7 +200,7 @@ export function extraerItemsParaCalculo(pedido, preparacion) {
  *    - avisar "falta precio de [producto]"
  *    - usar el total de la hoja como respaldo marcado como estimado
  *
- * 4. Nunca mostrar 0 salvo que el total realmente sea 0 (descuentos cubren el 100%).
+ * 4. NUNCA devuelve NaN. Siempre devuelve ambos campos: monto y total.
  *
  * @param {Object} pedido - Pedido de la hoja o estado
  * @param {Object} [preparacion] - Preparación local en memoria
@@ -123,6 +211,7 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
   if (!pedido) {
     return {
       monto: 0,
+      total: 0,
       esEstimado: false,
       motivoEstimado: '',
       estaArmado: false,
@@ -136,24 +225,69 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
     };
   }
 
-  const totalHojaRaw = Number(pedido.total || 0);
-  const totalHoja = Math.max(0, Math.round(isNaN(totalHojaRaw) ? 0 : totalHojaRaw));
+  const totalHojaRaw = parsearMonto(pedido.total);
+  const totalHoja = Math.max(0, Math.round(totalHojaRaw));
 
   // ── CASO A: PEDIDO NO ARMADO ──────────────────────────────────────────────
   const armado = estaPedidoArmado(pedido, preparacion);
   if (!armado) {
+    if (totalHoja > 0) {
+      return {
+        monto: totalHoja,
+        total: totalHoja,
+        esEstimado: true,
+        motivoEstimado: 'Estimado, se ajusta al pesar',
+        estaArmado: false,
+        faltaPrecio: false,
+        productoSinPrecio: null,
+        avisoFaltaPrecio: null,
+        subtotalPesado: totalHoja,
+        descuentos: 0,
+        descuentosDetalle: [],
+        items: [],
+      };
+    }
+
+    // Si el total de la hoja viene vacío o 0, calcular estimado a partir de los productos y el catálogo si es posible
+    const itemsRaw = parsearProductosPedido(pedido.producto || pedido.productos || '', pedido.cantidades || '');
+    let sumaEstimada = 0;
+    const itemsEstimados = [];
+    let faltaPrecio = false;
+    let productoSinPrecio = null;
+
+    for (const it of itemsRaw) {
+      const nom = it.nombre || '';
+      const cant = parsearCantidad(it.pesoSolicitado ?? it.cantidad ?? 1);
+      const pr = resolverPrecioUnitario(it, opciones);
+      if (pr != null && pr > 0) {
+        const sub = Math.round(cant * pr);
+        sumaEstimada += sub;
+        itemsEstimados.push({
+          nombre: nom,
+          cantidad: cant,
+          precioUnitario: pr,
+          subtotal: sub
+        });
+      } else {
+        faltaPrecio = true;
+        if (!productoSinPrecio) productoSinPrecio = nom;
+      }
+    }
+
+    const montoEstimado = Math.round(parsearMonto(sumaEstimada));
     return {
-      monto: totalHoja,
+      monto: montoEstimado,
+      total: montoEstimado,
       esEstimado: true,
       motivoEstimado: 'Estimado, se ajusta al pesar',
       estaArmado: false,
-      faltaPrecio: false,
-      productoSinPrecio: null,
-      avisoFaltaPrecio: null,
-      subtotalPesado: totalHoja,
+      faltaPrecio,
+      productoSinPrecio,
+      avisoFaltaPrecio: faltaPrecio ? `Falta precio: ${productoSinPrecio}` : null,
+      subtotalPesado: montoEstimado,
       descuentos: 0,
       descuentosDetalle: [],
-      items: [],
+      items: itemsEstimados,
     };
   }
 
@@ -164,6 +298,7 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
   if (itemsFiltrados.length === 0) {
     return {
       monto: totalHoja,
+      total: totalHoja,
       esEstimado: true,
       motivoEstimado: 'Estimado, se ajusta al pesar',
       estaArmado: true,
@@ -191,20 +326,20 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
     const bolsas = Array.isArray(it.bolsasAsignadas) ? it.bolsasAsignadas : [];
 
     let cantReal = 0;
-    if (it.pesoCongelado != null && Number(it.pesoCongelado) > 0) {
-      cantReal = Number(it.pesoCongelado);
-    } else if (it.cantidadConfirmada != null && Number(it.cantidadConfirmada) > 0) {
-      cantReal = Number(it.cantidadConfirmada);
-    } else if (it.cantidad_real != null && Number(it.cantidad_real) > 0) {
-      cantReal = Number(it.cantidad_real);
-    } else if (it.cantidad != null && Number(it.cantidad) > 0) {
-      cantReal = Number(it.cantidad);
+    if (it.pesoCongelado != null && parsearCantidad(it.pesoCongelado) > 0) {
+      cantReal = parsearCantidad(it.pesoCongelado);
+    } else if (it.cantidadConfirmada != null && parsearCantidad(it.cantidadConfirmada) > 0) {
+      cantReal = parsearCantidad(it.cantidadConfirmada);
+    } else if (it.cantidad_real != null && parsearCantidad(it.cantidad_real) > 0) {
+      cantReal = parsearCantidad(it.cantidad_real);
+    } else if (it.cantidad != null && parsearCantidad(it.cantidad) > 0) {
+      cantReal = parsearCantidad(it.cantidad);
     } else if (bolsas.length > 0) {
       cantReal = esUnidad
         ? bolsas.length
-        : Number(bolsas.reduce((acc, b) => acc + (Number(b.peso) || 0), 0).toFixed(3));
-    } else if (it.pesoSolicitado != null && Number(it.pesoSolicitado) > 0) {
-      cantReal = Number(it.pesoSolicitado);
+        : Number(bolsas.reduce((acc, b) => acc + (parsearCantidad(b.peso) || 0), 0).toFixed(3));
+    } else if (it.pesoSolicitado != null && parsearCantidad(it.pesoSolicitado) > 0) {
+      cantReal = parsearCantidad(it.pesoSolicitado);
     } else {
       cantReal = 1;
     }
@@ -217,6 +352,7 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
       const aviso = `falta precio de ${nombre}`;
       return {
         monto: totalHoja,
+        total: totalHoja,
         esEstimado: true,
         motivoEstimado: aviso,
         faltaPrecio: true,
@@ -230,11 +366,12 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
       };
     }
 
-    const subtotalLinea = it.subtotal != null && Number(it.subtotal) > 0
-      ? Math.round(Number(it.subtotal))
+    const subtotalDirecto = it.subtotal != null ? parsearMonto(it.subtotal) : 0;
+    const subtotalLinea = subtotalDirecto > 0
+      ? Math.round(subtotalDirecto)
       : Math.round(cantReal * precioUnit);
 
-    sumaSubtotales += subtotalLinea;
+    sumaSubtotales += parsearMonto(subtotalLinea);
     itemsProcesados.push({
       producto: nombre,
       nombre,
@@ -255,8 +392,8 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
   }
 
   const rawCredito = String(pedido.credito_usado || '').trim();
-  const numCred = Number(rawCredito);
-  if (!isNaN(numCred) && numCred > 0) {
+  const numCred = parsearMonto(rawCredito);
+  if (numCred > 0) {
     descuentoCredito = Math.round(numCred);
   }
 
@@ -267,8 +404,8 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
       if (pct > 0 && pct <= 100) {
         descuentoCupon = Math.round(sumaSubtotales * (pct / 100));
       }
-    } else if (pedido.descuento_cupon != null && Number(pedido.descuento_cupon) > 0) {
-      descuentoCupon = Math.round(Number(pedido.descuento_cupon));
+    } else if (pedido.descuento_cupon != null && parsearMonto(pedido.descuento_cupon) > 0) {
+      descuentoCupon = Math.round(parsearMonto(pedido.descuento_cupon));
     } else if (sumaSubtotales > totalHoja && (sumaSubtotales - totalHoja - descuentoCredito) > 0) {
       descuentoCupon = Math.round(sumaSubtotales - totalHoja - descuentoCredito);
     }
@@ -290,7 +427,7 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
     });
   }
 
-  const promoMonto = Number(pedido.descuento_promocion || pedido.descuento_promo || 0);
+  const promoMonto = parsearMonto(pedido.descuento_promocion || pedido.descuento_promo || 0);
   if (promoMonto > 0) {
     descuentosDetalle.push({
       tipo: 'promocion',
@@ -301,7 +438,7 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
 
   if (Array.isArray(pedido.descuentos)) {
     pedido.descuentos.forEach((d) => {
-      const m = Number(d.monto || 0);
+      const m = parsearMonto(d?.monto);
       if (m > 0) {
         descuentosDetalle.push({
           tipo: 'descuento',
@@ -312,13 +449,13 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
     });
   }
 
-  const totalDescuentos = descuentosDetalle.reduce((sum, d) => sum + d.monto, 0);
+  const totalDescuentos = descuentosDetalle.reduce((sum, d) => sum + parsearMonto(d.monto), 0);
 
   // Piso en 0
   const totalNeto = Math.max(0, sumaSubtotales - totalDescuentos);
 
   // Regla: Nunca mostrar 0 salvo que el total realmente sea 0 (descuentos >= suma)
-  let montoFinal = Math.round(totalNeto);
+  let montoFinal = Math.round(parsearMonto(totalNeto));
   let esEstimado = false;
   let motivoEstimado = '';
 
@@ -331,6 +468,7 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
 
   return {
     monto: montoFinal,
+    total: montoFinal,
     esEstimado,
     motivoEstimado,
     estaArmado: true,
@@ -349,5 +487,6 @@ export function calcularTotalPedido(pedido, preparacion = null, opciones = {}) {
  */
 export function obtenerMontoACobrar(pedido, preparacion = null, opciones = {}) {
   const calc = calcularTotalPedido(pedido, preparacion, opciones);
-  return calc.monto;
+  return parsearMonto(calc?.monto ?? calc?.total);
 }
+

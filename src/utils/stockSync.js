@@ -119,7 +119,7 @@ export async function syncProductWithSheet(updatedProduct, options = {}) {
   // ── CASO 1: PRODUCTOS DE ALMACÉN ──────────────────────────────────────────
   if (isAlmacen) {
     let filaDestino =
-      updatedProduct.fila && Number(updatedProduct.fila) < 900
+      updatedProduct.fila && Number(updatedProduct.fila) > 1
         ? Number(updatedProduct.fila)
         : null;
 
@@ -134,12 +134,12 @@ export async function syncProductWithSheet(updatedProduct, options = {}) {
             (p.id && String(p.id).startsWith('alm_')));
         if (isAlmP) {
           const f = Number(p.fila);
-          if (f && f < 900 && f > maxFilaEncontrada) maxFilaEncontrada = f;
+          if (f && f > 1 && f > maxFilaEncontrada) maxFilaEncontrada = f;
           if (
             p.nombre &&
             p.nombre.trim().toLowerCase() === nombre.trim().toLowerCase() &&
             f &&
-            f < 900
+            f > 1
           ) {
             filaDestino = f;
           }
@@ -150,7 +150,7 @@ export async function syncProductWithSheet(updatedProduct, options = {}) {
       try {
         const cacheAlm = leerCacheAlmacen();
         const cachedItem = cacheAlm[norm(nombre)];
-        if (cachedItem?.fila && Number(cachedItem.fila) < 900) {
+        if (cachedItem?.fila && Number(cachedItem.fila) > 1) {
           filaDestino = Number(cachedItem.fila);
         }
       } catch (e) {}
@@ -161,12 +161,12 @@ export async function syncProductWithSheet(updatedProduct, options = {}) {
         );
         cs.forEach((p) => {
           const f = Number(p.fila);
-          if (f && f < 900 && f > maxFilaEncontrada) maxFilaEncontrada = f;
+          if (f && f > 1 && f > maxFilaEncontrada) maxFilaEncontrada = f;
           if (
             p.nombre &&
             p.nombre.trim().toLowerCase() === nombre.trim().toLowerCase() &&
             f &&
-            f < 900
+            f > 1
           ) {
             filaDestino = f;
           }
@@ -197,7 +197,7 @@ export async function syncProductWithSheet(updatedProduct, options = {}) {
               if (existingIdx !== -1) {
                 const fVal = Number(rows[existingIdx]?.c?.[8]?.v);
                 filaDestino =
-                  fVal && fVal < 900
+                  fVal && fVal > 1
                     ? fVal
                     : isHeader
                     ? existingIdx + 3
@@ -207,7 +207,7 @@ export async function syncProductWithSheet(updatedProduct, options = {}) {
                   const fVal =
                     Number(r.c?.[8]?.v) ||
                     (isHeader ? idx + 3 : idx + 2);
-                  if (fVal < 900 && fVal > maxFilaEncontrada)
+                  if (fVal > 1 && fVal > maxFilaEncontrada)
                     maxFilaEncontrada = fVal;
                 });
               }

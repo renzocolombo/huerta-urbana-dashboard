@@ -479,7 +479,7 @@ export default function ControlStock() {
           Object.values(current).forEach(p => {
             if ((p.categoriaPrincipal === 'Almacén' || (p.id && String(p.id).startsWith('alm_'))) && p.categoriaPrincipal !== 'Verduras' && p.categoriaPrincipal !== 'Frutas') {
               const f = Number(p.fila);
-              if (f && f < 900 && f > maxF) maxF = f;
+              if (f && f > 1 && f > maxF) maxF = f;
             }
           });
           assignedFila = maxF + 1;
@@ -1344,7 +1344,7 @@ export default function ControlStock() {
                   const nombreP = String(r.c?.[0]?.v || '').trim();
                   if (!nombreP) return;
                   const filaCol = Number(r.c?.[8]?.v);
-                  const filaP = (filaCol && filaCol < 900) ? filaCol : (isHeader ? (idx + 3) : (idx + 2));
+                  const filaP = (filaCol && filaCol > 1) ? filaCol : (isHeader ? (idx + 3) : (idx + 2));
                   const marcaP = String(r.c?.[1]?.v || '').trim();
                   const catP = String(r.c?.[2]?.v || 'Almacén').trim();
                   const subCatP = String(r.c?.[3]?.v || 'Almacén').trim();
@@ -1664,7 +1664,7 @@ export default function ControlStock() {
       : '';
 
     // Asignar o consultar número de fila real en la pestaña Almacen del Google Sheet de forma secuencial y sin colisiones
-    let filaAsignada = (prod?.fila && Number(prod.fila) < 900) ? Number(prod.fila) : null;
+    let filaAsignada = (prod?.fila && Number(prod.fila) > 1) ? Number(prod.fila) : null;
     if (!filaAsignada && (catPrincipal === 'Almacén' || esCreacionNueva)) {
       let maxFilaLocal = 1;
 
@@ -1673,8 +1673,8 @@ export default function ControlStock() {
         const isAlmP = (p.categoriaPrincipal === 'Almacén' || (p.id && String(p.id).startsWith('alm_'))) && p.categoriaPrincipal !== 'Verduras' && p.categoriaPrincipal !== 'Frutas';
         if (isAlmP) {
           const f = Number(p.fila);
-          if (f && f < 900 && f > maxFilaLocal) maxFilaLocal = f;
-          if (norm(p.nombre) === norm(nombre) && f && f < 900) filaAsignada = f;
+          if (f && f > 1 && f > maxFilaLocal) maxFilaLocal = f;
+          if (norm(p.nombre) === norm(nombre) && f && f > 1) filaAsignada = f;
         }
       });
 
@@ -1683,8 +1683,8 @@ export default function ControlStock() {
         const customSaved = JSON.parse(localStorage.getItem('huerta_custom_almacen_prods_v1') || '[]');
         customSaved.forEach(cp => {
           const f = Number(cp.fila);
-          if (f && f < 900 && f > maxFilaLocal) maxFilaLocal = f;
-          if (norm(cp.nombre) === norm(nombre) && f && f < 900) filaAsignada = f;
+          if (f && f > 1 && f > maxFilaLocal) maxFilaLocal = f;
+          if (norm(cp.nombre) === norm(nombre) && f && f > 1) filaAsignada = f;
         });
       } catch(e) {}
 
@@ -1703,11 +1703,11 @@ export default function ControlStock() {
               const existingIdx = rows.findIndex(r => String(r.c?.[0]?.v || '').trim().toLowerCase() === nombre.trim().toLowerCase());
               if (existingIdx !== -1) {
                 const fVal = Number(rows[existingIdx]?.c?.[8]?.v);
-                filaAsignada = (fVal && fVal < 900) ? fVal : (isHeader ? (existingIdx + 3) : (existingIdx + 2));
+                filaAsignada = (fVal && fVal > 1) ? fVal : (isHeader ? (existingIdx + 3) : (existingIdx + 2));
               } else {
                 rows.forEach((r, idx) => {
                   const fVal = Number(r.c?.[8]?.v) || (isHeader ? (idx + 3) : (idx + 2));
-                  if (fVal < 900 && fVal > maxFilaLocal) maxFilaLocal = fVal;
+                  if (fVal > 1 && fVal > maxFilaLocal) maxFilaLocal = fVal;
                 });
               }
             }

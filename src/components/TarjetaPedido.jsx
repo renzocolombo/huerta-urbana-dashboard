@@ -7,7 +7,7 @@ import { extraerHoraIngreso } from '../utils/fechasEntrega';
 import { resolverEntrega } from '../utils/agendaCalendario';
 import { turnoDePedido } from '../utils/entregaCalendario';
 import { parsearProductosPedido, estaPedidoArmado } from '../utils/remitoPrinter';
-import { calcularTotalPedido } from '../utils/totalesPedido';
+import { calcularTotalPedido, formatearMonto } from '../utils/totalesPedido';
 import { estadoEntregaPedido, estadoPagoPedido } from '../utils/estadosPedido';
 
 const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -52,7 +52,7 @@ export default function TarjetaPedido({
   const horaIngreso = extraerHoraIngreso(p.fecha);
 
   // Total y cálculo si es estimado
-  const { total, esEstimado } = useMemo(() => {
+  const { monto, total, esEstimado } = useMemo(() => {
     return calcularTotalPedido(p, prep);
   }, [p, prep]);
 
@@ -198,7 +198,7 @@ export default function TarjetaPedido({
               {esEstimado ? 'Total estimado' : 'Total real'}
             </div>
             <div className="text-xl sm:text-2xl font-black text-white tracking-tight">
-              ${Number(total || 0).toLocaleString('es-AR')}
+              {formatearMonto(monto ?? total)}
             </div>
           </div>
 

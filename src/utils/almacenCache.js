@@ -35,7 +35,7 @@ export function guardarCacheAlmacen(nombre, patch) {
   try {
     const cache = leerCacheAlmacen();
     const k = normNombre(nombre);
-    cache[k] = { ...(cache[k] || {}), ...patch };
+    cache[k] = { ...(cache[k] || {}), ...patch, updatedAt: Date.now() };
     localStorage.setItem(ALM_CACHE_KEY, JSON.stringify(cache));
   } catch (e) { /* storage lleno o bloqueado: no romper la UI */ }
 }
@@ -72,7 +72,15 @@ export function aplicarCacheAProducto(p, c, costoUnitSheet = 0) {
     p.precioCajon = Number(c.costoUnitario) * cantidad;
   }
 
-  if (c.stock !== undefined && c.stock !== null) p.stock_unidades = Number(c.stock) || 0;
+  // Si el Sheet trae stock fresco y el cache es viejo o no tiene timestamp reciente,
+  // preservar el stock del Sheet para no perder productos por caché vieja.
+  if (c.stock !== undefined && c.stock !== null) {
+    const ahora = Date.now();
+    const esReciente = c.updatedAt && (ahora - c.updatedAt < 2 * 60 * 60 * 1000);
+    if (esReciente || !(Number(p.stock_unidades) > 0)) {
+      p.stock_unidades = Number(c.stock) || 0;
+    }
+  }
   if (Number(c.margen) > 0) p.margen = Number(c.margen);
   if (Number(c.precioMaxManual) > 0) p.precioMaxManual = Number(c.precioMaxManual);
   else if (c.precioMaxManual === null) p.precioMaxManual = null;

@@ -5,15 +5,16 @@ import {
   Scale, ScanBarcode, CheckCircle2
 } from 'lucide-react';
 import { 
-  apiGetHogar, apiVerificarHogarPin, apiRegistrarSalidas, apiGetStockKg,
+  apiGetHogar, apiVerificarHogarPin, apiRegistrarSalidas, apiGetStockKg, apiGetAlmacen,
   getHogarPinSession, setHogarPinSession, clearHogarPinSession
 } from '../utils/mercaderiaApi';
 import { useBalanzaSystel } from '../utils/balanzaSystel';
-import { getEanMapping, esCodigoEan } from '../data/productUtils';
-import { determinarTipoCaptura, analizarTipoCaptura, TIPOS_CAPTURA, etiquetaUnidad } from '../utils/tipoCapturaProducto';
+import { getEanMapping, asociarEanAProducto } from '../data/productUtils';
+import { determinarTipoCaptura, analizarTipoCaptura, TIPOS_CAPTURA } from '../utils/tipoCapturaProducto';
+import { formatearMonto } from '../utils/totalesPedido';
 
 const norm = (s) => (s || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-const $$ = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`;
+const $$ = (n) => formatearMonto(n);
 
 export default function Hogar({ standalone = false, onVolverEleccion }) {
   // Estado de autenticación por PIN del hogar
@@ -75,24 +76,109 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
     }
   };
 
-  // 2. Cargar productos con stock > 0
+  // 2. Cargar productos con stock > 0 (Mercadería + Almacén fresco del servidor)
   const cargarProductosDisponibles = async () => {
     setCargandoProds(true);
     try {
-      const res = await apiGetStockKg();
-      if (res && res.ok && Array.isArray(res.productos)) {
-        // Filtrar productos con stock vendible o en depósito > 0
-        const conStock = res.productos
-          .filter(p => Number(p.en_deposito || 0) > 0 || Number(p.vendible || 0) > 0)
-          .map(p => ({
-            producto: p.producto,
-            categoria: p.categoria || 'Verduras',
-            unidad: p.unidad || 'kg',
-            costo_unitario: Number(p.costo_kg_ultimo || p.costo || 0),
-            stock_disponible: Number(p.en_deposito || p.vendible || 0),
-          }));
-        setProductos(conStock);
+      const [resStock, resAlmacen] = await Promise.all([
+        apiGetStockKg().catch(() => null),
+        apiGetAlmacen().catch(() => null),
+      ]);
+
+      const listaCombinada = [];
+      const mapaAgregados = new Set();
+
+      // A) Productos de Mercadería (Stock Kg)
+      if (resStock && resStock.ok && Array.isArray(resStock.productos)) {
+        resStock.productos.forEach(p => {
+          const nom = String(p.producto || p.nombre || '').trim();
+          if (!nom) return;
+          const stock = Number(p.en_deposito || 0) || Number(p.vendible || 0);
+          if (stock > 0) {
+            const k = norm(nom);
+            mapaAgregados.add(k);
+            listaCombinada.push({
+              producto: nom,
+              nombre: nom,
+              marca: p.marca || '',
+              categoria: p.categoria || 'Verduras',
+              unidad: p.unidad || 'kg',
+              costo_unitario: Number(p.costo_kg_ultimo || p.costo || 0),
+              stock_disponible: stock,
+              en_deposito: stock,
+              vendible: stock,
+              ean: p.ean || p.codigo_ean || p.barcode || '',
+              barcode: p.ean || p.codigo_ean || p.barcode || '',
+              fila: p.fila || null,
+            });
+          }
+        });
       }
+
+      // B) Productos de Almacén (getAlmacen fresco del servidor)
+      const itemsAlm = (resAlmacen && resAlmacen.ok && (
+        Array.isArray(resAlmacen.productos) ? resAlmacen.productos : 
+        (Array.isArray(resAlmacen.almacen) ? resAlmacen.almacen : [])
+      )) || (Array.isArray(resAlmacen) ? resAlmacen : []);
+
+      itemsAlm.forEach(p => {
+        const nom = String(p.nombre || p.producto || '').trim();
+        if (!nom) return; // descartar filas fantasma / sin nombre
+        const stockUds = Number(
+          p.stock_unidades !== undefined ? p.stock_unidades :
+          (p.unidades !== undefined ? p.unidades :
+          (p.stock !== undefined ? p.stock : 0))
+        ) || 0;
+
+        // Regla: Cualquier producto con nombre no vacío y stock mayor a 0, en cualquier fila
+        if (stockUds > 0) {
+          const marca = String(p.marca || '').trim();
+          const ean = String(p.codigo_ean || p.ean || p.barcode || '').trim().toUpperCase();
+          const costo = Number(p.costo_unitario !== undefined ? p.costo_unitario : (p.costo || 0)) || 0;
+          const precio = Number(p.precio_venta !== undefined ? p.precio_venta : (p.precio || 0)) || 0;
+          const cat = String(p.categoria || 'Almacén').trim();
+          const subcat = String(p.subcategoria || 'Almacén').trim();
+          const fila = p.fila || p.fila_val || null;
+
+          // Registrar en mapa EAN para lectura con pistola
+          if (ean) {
+            try {
+              asociarEanAProducto(ean, {
+                nombre: nom,
+                marca,
+                subcategoria: subcat,
+                unidad: 'un'
+              });
+            } catch (_) {}
+          }
+
+          const k = norm(nom) + (marca ? '__' + norm(marca) : '');
+          if (!mapaAgregados.has(k)) {
+            mapaAgregados.add(k);
+            listaCombinada.push({
+              producto: marca ? `${nom} (${marca})` : nom,
+              nombre: nom,
+              marca,
+              categoria: cat,
+              subcategoria: subcat,
+              unidad: 'un',
+              costo_unitario: costo,
+              precio_venta: precio,
+              stock_disponible: stockUds,
+              stock_unidades: stockUds,
+              en_deposito: stockUds,
+              vendible: stockUds,
+              ean: ean,
+              codigo_ean: ean,
+              barcode: ean,
+              fila,
+              es_almacen: true
+            });
+          }
+        }
+      });
+
+      setProductos(listaCombinada);
     } catch (e) {
       console.warn('[HOGAR] Error cargando productos disponibles:', e.message);
     } finally {
@@ -189,10 +275,17 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
       const eanInfo = eanMap[code.toUpperCase()];
       let prodMatch = null;
       if (eanInfo && eanInfo.nombre) {
-        prodMatch = productos.find(p => norm(p.producto) === norm(eanInfo.nombre));
+        prodMatch = productos.find(p => norm(p.producto) === norm(eanInfo.nombre) || norm(p.nombre) === norm(eanInfo.nombre));
       }
       if (!prodMatch) {
-        prodMatch = productos.find(p => p.ean === code || p.barcode === code || norm(p.producto) === norm(code) || norm(p.producto).includes(norm(code)));
+        prodMatch = productos.find(p => {
+          const eanStr = String(p.ean || p.barcode || p.codigo_ean || '').trim();
+          if (eanStr && eanStr === code) return true;
+          const nom = norm(p.producto || p.nombre || '');
+          const mar = norm(p.marca || '');
+          const cod = norm(code);
+          return nom === cod || nom.includes(cod) || mar.includes(cod);
+        });
       }
 
       if (prodMatch) {
@@ -326,7 +419,10 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
 
       if (busqueda.trim()) {
         const q = norm(busqueda);
-        return norm(p.producto).includes(q);
+        const prod = norm(p.producto || p.nombre || '');
+        const marca = norm(p.marca || '');
+        const ean = String(p.ean || p.codigo_ean || p.barcode || '').trim();
+        return prod.includes(q) || marca.includes(q) || ean.includes(q);
       }
       return true;
     });
@@ -459,6 +555,19 @@ export default function Hogar({ standalone = false, onVolverEleccion }) {
               Mis Movimientos
             </button>
           </div>
+
+          <button
+            onClick={() => {
+              cargarInfoHogar();
+              cargarProductosDisponibles();
+            }}
+            disabled={cargandoHogar || cargandoProds}
+            title="Actualizar stock y saldo desde el servidor"
+            className="px-3 py-1.5 rounded-xl bg-gray-900 border border-gray-800 hover:border-gray-700 text-gray-300 hover:text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={cargandoHogar || cargandoProds ? 'animate-spin' : ''} />
+            <span>Actualizar</span>
+          </button>
 
           {onVolverEleccion && (
             <button

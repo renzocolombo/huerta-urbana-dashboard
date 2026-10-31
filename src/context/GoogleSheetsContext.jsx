@@ -7,6 +7,7 @@ import {
   getCategoriaPrincipal, 
   getSubcategoriaAlmacen, 
   normalizeSubcategoriaAlmacen,
+  asociarEanAProducto,
   ALMACEN_PRESETS 
 } from '../data/productUtils';
 import { normNombre, leerCacheAlmacen, aplicarCacheAProducto, aplicarPendientes } from '../utils/almacenCache';
@@ -258,11 +259,16 @@ export function GoogleSheetsProvider({ children }) {
                   const nombreP = String(r.c?.[0]?.v || '').trim();
                   if (!nombreP) return;
                   const filaCol = Number(r.c?.[8]?.v);
-                  const filaP = (filaCol && filaCol < 900) ? filaCol : (isHeader ? (idx + 3) : (idx + 2));
+                  const filaP = (filaCol && filaCol > 1) ? filaCol : (isHeader ? (idx + 3) : (idx + 2));
                   const marcaP = String(r.c?.[1]?.v || '').trim();
                   const catP = String(r.c?.[2]?.v || 'Almacén').trim();
                   const subCatP = String(r.c?.[3]?.v || getSubcategoriaAlmacen(nombreP)).trim();
                   const eanP = String(r.c?.[4]?.v || '').trim();
+                  if (eanP) {
+                    try {
+                      asociarEanAProducto(eanP, { nombre: nombreP, marca: marcaP, subcategoria: subCatP, unidad: 'un' });
+                    } catch (_) {}
+                  }
                   // costo_unitario del Sheet = costo POR UNIDAD; precio_venta es derivado y NO se importa como tope
                   const costoP = Number(r.c?.[5]?.v) || 0;
                   const stockUdsP = Number(r.c?.[7]?.v) || 0;
@@ -389,11 +395,16 @@ export function GoogleSheetsProvider({ children }) {
             const nombreP = String(r[0] || '').trim();
             if (!nombreP) return;
             const filaCol = Number(r[8]);
-            const filaP = (filaCol && filaCol < 900) ? filaCol : (isHeader ? (idx + 3) : (idx + 2));
+            const filaP = (filaCol && filaCol > 1) ? filaCol : (isHeader ? (idx + 3) : (idx + 2));
             const marcaP = String(r[1] || '').trim();
             const catP = String(r[2] || 'Almacén').trim();
             const subCatP = String(r[3] || 'Almacén').trim();
             const eanP = String(r[4] || '').trim();
+            if (eanP) {
+              try {
+                asociarEanAProducto(eanP, { nombre: nombreP, marca: marcaP, subcategoria: subCatP, unidad: 'un' });
+              } catch (_) {}
+            }
             const costoP = Number(r[5]) || 0;
             const precioVentaP = Number(r[6]) || 0;
             const stockUdsP = Number(r[7]) || 0;

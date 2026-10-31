@@ -2,7 +2,7 @@
 // Cálculo puro de detalle y totales por turno y del día para el Calendario de Entregas.
 
 import { turnoDePedido, esPedidoElegibleReparto, resolverEntrega, esPedidoCancelado } from './agendaCalendario.js';
-import { calcularTotalPedido } from './totalesPedido.js';
+import { calcularTotalPedido, parsearMonto } from './totalesPedido.js';
 import { estadoEntregaPedido, estadoPagoPedido, esPedidoCobrado } from './estadosPedido.js';
 
 /**
@@ -102,7 +102,7 @@ export function calcularDetalleYTotalesDia(pedidos, ymd, preparaciones = {}, opc
 
     const prep = preparaciones?.[p.numero_pedido] || null;
     const calc = calcularTotalPedido(p, prep, opciones);
-    const monto = Number(calc?.monto || 0);
+    const monto = parsearMonto(calc?.monto ?? calc?.total);
     const esEstimado = Boolean(calc?.esEstimado);
 
     const estEnt = estadoEntregaPedido(p, prep);

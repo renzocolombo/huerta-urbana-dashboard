@@ -9,7 +9,7 @@ import { sumarDias, dowDeYmd } from '../utils/entregaCalendario';
 import { resolverEntrega, esPedidoCancelado } from '../utils/agendaCalendario';
 import { imprimirRemitoIndividual, imprimirRemitosEnLote, estaPedidoArmado } from '../utils/remitoPrinter';
 import { estadoEntregaPedido } from '../utils/estadosPedido';
-import { calcularTotalPedido } from '../utils/totalesPedido';
+import { calcularTotalPedido, formatearMonto, parsearMonto } from '../utils/totalesPedido';
 import TarjetaPedido from './TarjetaPedido';
 import ModalArmadoPedido from './ModalArmadoPedido';
 
@@ -86,10 +86,11 @@ export default function PedidosDelDia({ _rol, _usuario, _onNav, fechaCompartida,
 
     pedidosIngresados.forEach(p => {
       const prep = preparaciones[p.numero_pedido];
-      const { total, esEstimado } = calcularTotalPedido(p, prep);
-      montoTotal += total;
-      if (esEstimado) montoEstimado += total;
-      else montoArmado += total;
+      const { monto, total, esEstimado } = calcularTotalPedido(p, prep);
+      const montoPedido = parsearMonto(monto ?? total);
+      montoTotal += montoPedido;
+      if (esEstimado) montoEstimado += montoPedido;
+      else montoArmado += montoPedido;
 
       const est = estadoEntregaPedido(p, prep);
       const clave = est.clave;
@@ -318,21 +319,21 @@ export default function PedidosDelDia({ _rol, _usuario, _onNav, fechaCompartida,
           <div className="bg-black/30 border border-white/5 rounded-xl p-3">
             <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Monto del Día</span>
             <div className="text-xl font-black text-emerald-400 mt-0.5">
-              ${metricasDia.montoTotal.toLocaleString('es-AR')}
+              {formatearMonto(metricasDia.montoTotal)}
             </div>
           </div>
 
           <div className="bg-black/30 border border-white/5 rounded-xl p-3">
             <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Monto Armado</span>
             <div className="text-xl font-black text-cyan-400 mt-0.5">
-              ${metricasDia.montoArmado.toLocaleString('es-AR')}
+              {formatearMonto(metricasDia.montoArmado)}
             </div>
           </div>
 
           <div className="bg-black/30 border border-white/5 rounded-xl p-3">
             <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Monto Estimado</span>
             <div className="text-xl font-black text-amber-400 mt-0.5">
-              ${metricasDia.montoEstimado.toLocaleString('es-AR')}
+              {formatearMonto(metricasDia.montoEstimado)}
             </div>
           </div>
         </div>

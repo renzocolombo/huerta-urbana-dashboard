@@ -284,7 +284,8 @@ export default function ModalArmadoPedido({ pedido, onClose, onPedidoArmado }) {
 
     // 1. Verificar si coincide con un producto pesable, almacén o EAN
     const eanMap = getEanMapping();
-    const nombrePorEan = eanMap[code] || null;
+    const mappedInfo = eanMap[code] || eanMap[code.toUpperCase()] || eanMap[code.replace(/^0+/, '')] || eanMap['0' + code];
+    const nombrePorEan = mappedInfo?.nombre || (typeof mappedInfo === 'string' ? mappedInfo : null);
 
     // Buscar en los items del pedido
     let matchIdx = -1;
@@ -294,12 +295,13 @@ export default function ModalArmadoPedido({ pedido, onClose, onPedidoArmado }) {
       const itNorm = norm(it.nombre);
 
       // Match directo por EAN asociado al item
-      if (it.ean && String(it.ean).trim() === code) {
+      const itemEan = String(it.ean || it.codigo_ean || it.barcode || '').trim().toUpperCase();
+      if (itemEan && itemEan === code.toUpperCase()) {
         matchIdx = i;
         break;
       }
       // Match si el EAN apunta a este nombre
-      if (nombrePorEan && norm(nombrePorEan) === itNorm) {
+      if (nombrePorEan && (norm(nombrePorEan) === itNorm || itNorm.includes(norm(nombrePorEan)) || norm(nombrePorEan).includes(itNorm))) {
         matchIdx = i;
         break;
       }

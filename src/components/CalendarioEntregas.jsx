@@ -9,7 +9,7 @@ import {
   metricasDia, metricasMes, resolverEntrega, esPedidoCancelado
 } from '../utils/agendaCalendario';
 import { calcularDetalleYTotalesDia } from '../utils/calendarioTotales';
-import { calcularTotalPedido } from '../utils/totalesPedido';
+import { calcularTotalPedido, formatearMonto, parsearMonto } from '../utils/totalesPedido';
 import { useGoogleSheets } from '../context/GoogleSheetsContext';
 import ModalArmadoPedido from './ModalArmadoPedido';
 
@@ -31,8 +31,9 @@ function fmtLargo(ymd) {
 }
 
 export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedidos: pedidosProp, preparaciones = {} }) {
-  const [anio, setAnio] = useState(() => Number(hoyYMD.slice(0, 4)));
-  const [mes, setMes] = useState(() => Number(hoyYMD.slice(5, 7)));
+  const fechaHoy = hoyYMD || new Date().toISOString().slice(0, 10);
+  const [anio, setAnio] = useState(() => Number(fechaHoy.slice(0, 4)));
+  const [mes, setMes] = useState(() => Number(fechaHoy.slice(5, 7)));
   const [dias, setDias] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState(null);
@@ -77,10 +78,11 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
       }
       if (!esPedidoCancelado(p)) {
         mapa[res].cantidad++;
-        const { total } = calcularTotalPedido(p, preparaciones[p.numero_pedido]);
-        mapa[res].monto += total;
+        const { monto, total } = calcularTotalPedido(p, preparaciones[p.numero_pedido]);
+        const valMonto = parsearMonto(monto ?? total);
+        mapa[res].monto += valMonto;
         if (res.startsWith(mesStr)) {
-          sumaMes += total;
+          sumaMes += valMonto;
         }
       }
     });
@@ -307,7 +309,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
             </span>
             <div className="mt-1 flex items-baseline justify-between">
               <span className="text-xl font-black text-emerald-300">
-                ${Math.round(totalesPorDia.sumaMes).toLocaleString('es-AR')}
+                {formatearMonto(totalesPorDia.sumaMes)}
               </span>
               <span className="text-[10px] text-emerald-500 font-medium">total</span>
             </div>
@@ -401,7 +403,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                             </span>
                             {monto > 0 && (
                               <span className="block text-[9px] font-mono font-bold text-emerald-400 truncate">
-                                ${Math.round(monto).toLocaleString('es-AR')}
+                                {formatearMonto(monto)}
                               </span>
                             )}
                           </div>
@@ -540,7 +542,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                     <div className="flex items-center gap-2 shrink-0">
                       <div className="text-right">
                         <span className="text-xs font-bold text-amber-300 block">
-                          ${(diaTotales?.turnos.Mañana.total || 0).toLocaleString('es-AR')}
+                          {formatearMonto(diaTotales?.turnos.Mañana.total)}
                           {diaTotales?.turnos.Mañana.tieneEstimados && (
                             <span className="text-[10px] text-amber-400 font-semibold ml-1">est.</span>
                           )}
@@ -572,7 +574,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                                 </span>
                                 <div className="text-right">
                                   <span className="font-bold text-xs text-emerald-400">
-                                    ${it.monto.toLocaleString('es-AR')}
+                                    {formatearMonto(it.monto)}
                                   </span>
                                   {it.esEstimado && (
                                     <span
@@ -634,7 +636,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                         <div className="text-right font-bold text-white">
                           <span>Total Mañana: </span>
                           <span className="text-emerald-300 font-black">
-                            ${(diaTotales?.turnos.Mañana.total || 0).toLocaleString('es-AR')}
+                            {formatearMonto(diaTotales?.turnos.Mañana.total)}
                           </span>
                           {diaTotales?.turnos.Mañana.tieneEstimados && (
                             <span className="text-[10px] text-amber-400 font-medium block sm:inline sm:ml-1">
@@ -668,7 +670,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                     <div className="flex items-center gap-2 shrink-0">
                       <div className="text-right">
                         <span className="text-xs font-bold text-indigo-300 block">
-                          ${(diaTotales?.turnos.Tarde.total || 0).toLocaleString('es-AR')}
+                          {formatearMonto(diaTotales?.turnos.Tarde.total)}
                           {diaTotales?.turnos.Tarde.tieneEstimados && (
                             <span className="text-[10px] text-amber-400 font-semibold ml-1">est.</span>
                           )}
@@ -700,7 +702,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                                 </span>
                                 <div className="text-right">
                                   <span className="font-bold text-xs text-emerald-400">
-                                    ${it.monto.toLocaleString('es-AR')}
+                                    {formatearMonto(it.monto)}
                                   </span>
                                   {it.esEstimado && (
                                     <span
@@ -762,7 +764,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                         <div className="text-right font-bold text-white">
                           <span>Total Tarde: </span>
                           <span className="text-emerald-300 font-black">
-                            ${(diaTotales?.turnos.Tarde.total || 0).toLocaleString('es-AR')}
+                            {formatearMonto(diaTotales?.turnos.Tarde.total)}
                           </span>
                           {diaTotales?.turnos.Tarde.tieneEstimados && (
                             <span className="text-[10px] text-amber-400 font-medium block sm:inline sm:ml-1">
@@ -797,7 +799,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                       <div className="flex items-center gap-2 shrink-0">
                         <div className="text-right">
                           <span className="text-xs font-bold text-gray-300 block">
-                            ${(diaTotales?.turnos['Sin turno'].total || 0).toLocaleString('es-AR')}
+                            {formatearMonto(diaTotales?.turnos['Sin turno'].total)}
                             {diaTotales?.turnos['Sin turno'].tieneEstimados && (
                               <span className="text-[10px] text-amber-400 font-semibold ml-1">est.</span>
                             )}
@@ -829,7 +831,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                                   </span>
                                   <div className="text-right">
                                     <span className="font-bold text-xs text-emerald-400">
-                                      ${it.monto.toLocaleString('es-AR')}
+                                      {formatearMonto(it.monto)}
                                     </span>
                                     {it.esEstimado && (
                                       <span
@@ -891,7 +893,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                           <div className="text-right font-bold text-white">
                             <span>Total Sin turno: </span>
                             <span className="text-emerald-300 font-black">
-                              ${(diaTotales?.turnos['Sin turno'].total || 0).toLocaleString('es-AR')}
+                              {formatearMonto(diaTotales?.turnos['Sin turno'].total)}
                             </span>
                             {diaTotales?.turnos['Sin turno'].tieneEstimados && (
                               <span className="text-[10px] text-amber-400 font-medium block sm:inline sm:ml-1">
@@ -926,7 +928,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                   </div>
                   <div className="text-right">
                     <span id="cal-total-dia-monto" className="text-base sm:text-lg font-black text-emerald-400 block leading-tight">
-                      ${(diaTotales?.totalMonto || 0).toLocaleString('es-AR')}
+                      {formatearMonto(diaTotales?.totalMonto)}
                       {diaTotales?.tieneEstimados && (
                         <span className="text-[10px] text-amber-400 font-semibold ml-1">est.</span>
                       )}
@@ -948,7 +950,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                       <CheckCircle size={11} className="shrink-0" /> Ya cobrado ({diaTotales?.desglose.cobrado.cantidad || 0})
                     </span>
                     <span className="text-sm font-black text-emerald-300 mt-1 block">
-                      ${(diaTotales?.desglose.cobrado.monto || 0).toLocaleString('es-AR')}
+                      {formatearMonto(diaTotales?.desglose.cobrado.monto)}
                       {diaTotales?.desglose.cobrado.tieneEstimados && (
                         <span className="text-[9px] text-amber-400 font-semibold ml-1">est.</span>
                       )}
@@ -966,7 +968,7 @@ export default function CalendarioEntregas({ conteo = {}, hoyYMD, onCambio, pedi
                       <Clock size={11} className="shrink-0" /> Pendiente ({diaTotales?.desglose.pendiente.cantidad || 0})
                     </span>
                     <span className="text-sm font-black text-amber-300 mt-1 block">
-                      ${(diaTotales?.desglose.pendiente.monto || 0).toLocaleString('es-AR')}
+                      {formatearMonto(diaTotales?.desglose.pendiente.monto)}
                       {diaTotales?.desglose.pendiente.tieneEstimados && (
                         <span className="text-[9px] text-amber-400 font-semibold ml-1">est.</span>
                       )}
